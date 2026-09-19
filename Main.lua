@@ -1,4 +1,4 @@
-# --[[
+--[[
     Premium Hub V1
     Original modular foundation for Roblox/Luau
 
