@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.5.0
+    Version: 2.5.1
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -28,7 +28,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.5.0",
+    Version = "2.5.1",
 
     Width = 920,
     Height = 590,
@@ -1109,7 +1109,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.5.0 Advanced Test Build",
+    Text = "2.5.1 Main Farm Test Build",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1403,28 +1403,584 @@ local FarmPage = PageService:Create("Main Farm")
 Section(
     FarmPage,
     "Main Farm",
-    "Test interface"
+    "Modular farm engine • target selection • movement • combat hooks"
+)
+
+--==================================================
+-- FARM STATE / CONFIG
+--==================================================
+
+local FarmState = {
+    Enabled = false,
+    AutoMastery = false,
+    AutoTarget = true,
+    BringMobs = false,
+    FastAttack = false,
+    NoClip = false,
+    UseTool = true,
+    Distance = 8,
+    ScanRadius = 350,
+    AttackCooldown = 0.12,
+    TargetName = "Auto",
+    CurrentTarget = nil,
+    CurrentTool = nil,
+    LastAttack = 0,
+    Status = "Idle",
+    StartedAt = 0
+}
+
+local FarmConnections = {}
+
+local function FarmConnect(signal, callback)
+    local connection = signal:Connect(callback)
+    table.insert(FarmConnections, connection)
+    return connection
+end
+
+local function GetCharacterRoot()
+    local character = LocalPlayer.Character
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetCharacterHumanoid()
+    local character = LocalPlayer.Character
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function IsAlive(model)
+    if not model or not model:IsA("Model") then
+        return false
+    end
+
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    local root = model:FindFirstChild("HumanoidRootPart")
+
+    return humanoid ~= nil
+        and humanoid.Health > 0
+        and root ~= nil
+end
+
+local function IsPlayerCharacter(model)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Character == model then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function FindEnemyContainers()
+    local containers = {}
+
+    for _, name in ipairs({
+        "Enemies",
+        "Mobs",
+        "NPCs",
+        "Npcs",
+        "Enemy",
+        "Mob",
+        "NPC"
+    }) do
+        local folder = workspace:FindFirstChild(name)
+
+        if folder then
+            table.insert(containers, folder)
+        end
+    end
+
+    return containers
+end
+
+local function IsValidFarmTarget(model)
+    if not IsAlive(model) then
+        return false
+    end
+
+    if model == LocalPlayer.Character or IsPlayerCharacter(model) then
+        return false
+    end
+
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+
+    if not humanoid or humanoid.Health <= 0 then
+        return false
+    end
+
+    if FarmState.TargetName ~= "Auto" then
+        local modelName = string.lower(model.Name)
+        local requested = string.lower(FarmState.TargetName)
+
+        if not string.find(modelName, requested, 1, true) then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function GetTargetRoot(model)
+    return model and model:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetNearestTarget()
+    local root = GetCharacterRoot()
+
+    if not root then
+        return nil
+    end
+
+    local bestTarget = nil
+    local bestDistance = FarmState.ScanRadius
+
+    local containers = FindEnemyContainers()
+
+    for _, container in ipairs(containers) do
+        for _, child in ipairs(container:GetChildren()) do
+            if IsValidFarmTarget(child) then
+                local targetRoot = GetTargetRoot(child)
+
+                if targetRoot then
+                    local distance = (targetRoot.Position - root.Position).Magnitude
+
+                    if distance < bestDistance then
+                        bestDistance = distance
+                        bestTarget = child
+                    end
+                end
+            end
+        end
+    end
+
+    -- Fallback: scan direct workspace models when the game does not
+    -- use a conventional enemy folder.
+    if not bestTarget then
+        for _, child in ipairs(workspace:GetChildren()) do
+            if IsValidFarmTarget(child) then
+                local targetRoot = GetTargetRoot(child)
+
+                if targetRoot then
+                    local distance = (targetRoot.Position - root.Position).Magnitude
+
+                    if distance < bestDistance then
+                        bestDistance = distance
+                        bestTarget = child
+                    end
+                end
+            end
+        end
+    end
+
+    return bestTarget
+end
+
+local function GetEquippedTool()
+    local character = LocalPlayer.Character
+
+    if not character then
+        return nil
+    end
+
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("Tool") then
+            return child
+        end
+    end
+
+    return nil
+end
+
+local function EquipFirstTool()
+    local humanoid = GetCharacterHumanoid()
+
+    if not humanoid then
+        return nil
+    end
+
+    local equipped = GetEquippedTool()
+
+    if equipped then
+        FarmState.CurrentTool = equipped
+        return equipped
+    end
+
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+
+    if not backpack then
+        return nil
+    end
+
+    for _, tool in ipairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") then
+            pcall(function()
+                humanoid:EquipTool(tool)
+            end)
+
+            FarmState.CurrentTool = tool
+            return tool
+        end
+    end
+
+    return nil
+end
+
+local function AttackTarget(target)
+    if not IsValidFarmTarget(target) then
+        return false
+    end
+
+    local tool = FarmState.CurrentTool
+
+    if not tool or not tool.Parent then
+        tool = EquipFirstTool()
+    end
+
+    if not tool then
+        return false
+    end
+
+    local now = os.clock()
+
+    if now - FarmState.LastAttack < FarmState.AttackCooldown then
+        return true
+    end
+
+    FarmState.LastAttack = now
+
+    -- Generic tool-based attack hook.
+    -- For a custom game, replace this block with the game's
+    -- server-authoritative attack RemoteEvent/function.
+    pcall(function()
+        tool:Activate()
+    end)
+
+    return true
+end
+
+local function MoveToTarget(target)
+    local root = GetCharacterRoot()
+    local targetRoot = GetTargetRoot(target)
+
+    if not root or not targetRoot then
+        return false
+    end
+
+    local offset = CFrame.new(0, 0, FarmState.Distance)
+
+    if FarmState.BringMobs then
+        -- Local positioning only. A server-authoritative implementation
+        -- should perform the actual mob positioning on the server.
+        pcall(function()
+            targetRoot.CFrame = root.CFrame * CFrame.new(0, 0, -FarmState.Distance)
+        end)
+    end
+
+    pcall(function()
+        root.CFrame = targetRoot.CFrame * offset
+    end)
+
+    return true
+end
+
+local function ApplyNoClip(enabled)
+    local character = LocalPlayer.Character
+
+    if not character then
+        return
+    end
+
+    for _, object in ipairs(character:GetDescendants()) do
+        if object:IsA("BasePart") then
+            object.CanCollide = not enabled
+        end
+    end
+end
+
+local function StopFarm()
+    FarmState.Enabled = false
+    FarmState.CurrentTarget = nil
+    FarmState.Status = "Stopped"
+
+    ApplyNoClip(false)
+end
+
+local function FarmStep()
+    if not FarmState.Enabled then
+        return
+    end
+
+    local humanoid = GetCharacterHumanoid()
+    local root = GetCharacterRoot()
+
+    if not humanoid or not root or humanoid.Health <= 0 then
+        FarmState.Status = "Waiting for character"
+        return
+    end
+
+    if FarmState.NoClip then
+        ApplyNoClip(true)
+    end
+
+    if not FarmState.CurrentTarget or not IsValidFarmTarget(FarmState.CurrentTarget) then
+        FarmState.CurrentTarget = GetNearestTarget()
+    end
+
+    local target = FarmState.CurrentTarget
+
+    if not target then
+        FarmState.Status = "Searching for target"
+        return
+    end
+
+    FarmState.Status = "Farming: " .. target.Name
+
+    if FarmState.AutoTarget then
+        MoveToTarget(target)
+    end
+
+    if FarmState.UseTool then
+        AttackTarget(target)
+    end
+end
+
+--==================================================
+-- FARM UI
+--==================================================
+
+local FarmStatusCard, FarmStatusValue = Card(
+    FarmPage,
+    "FARM STATUS",
+    "Idle"
+)
+
+local FarmTargetCard, FarmTargetValue = Card(
+    FarmPage,
+    "CURRENT TARGET",
+    "None"
+)
+
+local FarmDistanceCard, FarmDistanceValue = Card(
+    FarmPage,
+    "DISTANCE",
+    tostring(FarmState.Distance)
 )
 
 Toggle(
     FarmPage,
     "Auto Farm",
-    "Test toggle — interface only",
+    "Find the nearest valid NPC and continuously process the farm loop.",
     false,
     function(enabled)
-        Notify("Auto Farm", enabled and "Enabled" or "Disabled")
+        FarmState.Enabled = enabled
+        FarmState.StartedAt = enabled and os.clock() or 0
+
+        if enabled then
+            FarmState.Status = "Starting"
+            FarmState.CurrentTarget = nil
+            EquipFirstTool()
+            Notify("Auto Farm", "Farm engine iniciado.")
+        else
+            StopFarm()
+            Notify("Auto Farm", "Farm engine parado.")
+        end
     end
 )
 
 Toggle(
     FarmPage,
     "Auto Mastery",
-    "Test toggle — interface only",
+    "Keeps the mastery mode available for the game's custom attack hook.",
     false,
     function(enabled)
+        FarmState.AutoMastery = enabled
         Notify("Auto Mastery", enabled and "Enabled" or "Disabled")
     end
 )
+
+Toggle(
+    FarmPage,
+    "Auto Equip Tool",
+    "Automatically equips the first Tool found in the Backpack.",
+    true,
+    function(enabled)
+        FarmState.UseTool = enabled
+
+        if enabled then
+            EquipFirstTool()
+        end
+    end
+)
+
+Toggle(
+    FarmPage,
+    "Auto Target",
+    "Moves the character toward the selected target.",
+    true,
+    function(enabled)
+        FarmState.AutoTarget = enabled
+    end
+)
+
+Toggle(
+    FarmPage,
+    "Bring Mobs",
+    "Experimental local target positioning for testing your own NPC system.",
+    false,
+    function(enabled)
+        FarmState.BringMobs = enabled
+        Notify(
+            "Bring Mobs",
+            enabled
+                and "Experimental mode enabled."
+                or "Experimental mode disabled."
+        )
+    end
+)
+
+Toggle(
+    FarmPage,
+    "NoClip",
+    "Disables character collisions while the farm is running.",
+    false,
+    function(enabled)
+        FarmState.NoClip = enabled
+        ApplyNoClip(enabled)
+    end
+)
+
+ValueBox(
+    FarmPage,
+    "Target Distance",
+    FarmState.Distance,
+    function(value)
+        FarmState.Distance = math.clamp(value, 2, 30)
+        FarmDistanceValue.Text = tostring(FarmState.Distance)
+    end
+)
+
+ValueBox(
+    FarmPage,
+    "Scan Radius",
+    FarmState.ScanRadius,
+    function(value)
+        FarmState.ScanRadius = math.clamp(value, 25, 2000)
+        Notify("Main Farm", "Scan radius: " .. tostring(FarmState.ScanRadius))
+    end
+)
+
+ValueBox(
+    FarmPage,
+    "Attack Cooldown",
+    FarmState.AttackCooldown,
+    function(value)
+        FarmState.AttackCooldown = math.clamp(value, 0.03, 2)
+        Notify(
+            "Main Farm",
+            "Attack cooldown: " .. string.format("%.2f", FarmState.AttackCooldown)
+        )
+    end
+)
+
+ActionButton(
+    FarmPage,
+    "Find Nearest Target",
+    function()
+        local target = GetNearestTarget()
+
+        if target then
+            FarmState.CurrentTarget = target
+            FarmTargetValue.Text = target.Name
+            FarmStatusValue.Text = "Target found"
+            Notify("Main Farm", "Target encontrado: " .. target.Name)
+        else
+            FarmTargetValue.Text = "None"
+            FarmStatusValue.Text = "No target"
+            Notify("Main Farm", "Nenhum alvo válido encontrado.")
+        end
+    end
+)
+
+ActionButton(
+    FarmPage,
+    "Equip First Tool",
+    function()
+        local tool = EquipFirstTool()
+
+        if tool then
+            Notify("Main Farm", "Tool equipada: " .. tool.Name)
+        else
+            Notify("Main Farm", "Nenhuma Tool encontrada.")
+        end
+    end
+)
+
+ActionButton(
+    FarmPage,
+    "Stop Farm",
+    function()
+        StopFarm()
+        Notify("Main Farm", "Farm parado manualmente.")
+    end
+)
+
+--==================================================
+-- FARM LOOP
+--==================================================
+
+FarmConnect(RunService.Heartbeat, function()
+    if State.Destroyed then
+        return
+    end
+
+    if not FarmState.Enabled then
+        FarmStatusValue.Text = FarmState.Status
+        FarmTargetValue.Text = FarmState.CurrentTarget
+            and FarmState.CurrentTarget.Name
+            or "None"
+        return
+    end
+
+    FarmStep()
+
+    FarmStatusValue.Text = FarmState.Status
+
+    if FarmState.CurrentTarget
+        and FarmState.CurrentTarget.Parent
+        and IsValidFarmTarget(FarmState.CurrentTarget)
+    then
+        FarmTargetValue.Text = FarmState.CurrentTarget.Name
+    else
+        FarmTargetValue.Text = "None"
+    end
+end)
+
+FarmConnect(LocalPlayer.CharacterAdded, function()
+    task.wait(0.5)
+
+    FarmState.CurrentTarget = nil
+
+    if FarmState.Enabled and FarmState.UseTool then
+        EquipFirstTool()
+    end
+
+    if FarmState.NoClip then
+        ApplyNoClip(true)
+    end
+end)
+
+FarmConnect(RunService.Stepped, function()
+    if FarmState.Enabled and FarmState.NoClip then
+        ApplyNoClip(true)
+    end
+end)
 
 --==================================================
 -- QUEST
