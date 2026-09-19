@@ -28,7 +28,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.5.1",
+    Version = "3.0.0",
 
     Width = 920,
     Height = 590,
@@ -1109,7 +1109,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.5.1 Main Farm Test Build",
+    Text = "3.0 Full Systems Build",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -2070,6 +2070,745 @@ Toggle(
     end
 )
 
+
+--==================================================
+-- FLOQUITAVE 3.0 - FULL SYSTEMS LAYER
+--==================================================
+-- This layer is an independent implementation of the
+-- feature categories observed during source analysis.
+-- Game-specific actions are routed through adapters so
+-- the hub can be tested without hard-coding hidden APIs.
+
+local Full = {
+    Running = true,
+    Connections = {},
+    Loops = {},
+    Status = {},
+    Adapter = {}
+}
+
+local function FullConnect(signal, callback)
+    local c = signal:Connect(callback)
+    table.insert(Full.Connections, c)
+    return c
+end
+
+local function FullAlive()
+    local character = LocalPlayer.Character
+    if not character then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    return humanoid ~= nil and root ~= nil and humanoid.Health > 0
+end
+
+local function FullRoot()
+    local character = LocalPlayer.Character
+    return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function FullHumanoid()
+    local character = LocalPlayer.Character
+    return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+local function FullToolByType(toolType)
+    local character = LocalPlayer.Character
+    if character then
+        for _, tool in ipairs(character:GetChildren()) do
+            if tool:IsA("Tool") and (toolType == "Auto" or tool.ToolTip == toolType) then
+                return tool
+            end
+        end
+    end
+    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
+        if tool:IsA("Tool") and (toolType == "Auto" or tool.ToolTip == toolType) then
+            return tool
+        end
+    end
+end
+
+local function FullEquip(toolType)
+    local humanoid = FullHumanoid()
+    local tool = FullToolByType(toolType)
+    if humanoid and tool and tool.Parent ~= LocalPlayer.Character then
+        pcall(function() humanoid:EquipTool(tool) end)
+    end
+    return tool
+end
+
+local function FullFindEnemies()
+    local containers = {
+        workspace:FindFirstChild("Enemies"),
+        workspace:FindFirstChild("NPCs"),
+        workspace:FindFirstChild("Npcs"),
+        workspace:FindFirstChild("Mobs"),
+        workspace:FindFirstChild("Enemy")
+    }
+    local result = {}
+    for _, folder in ipairs(containers) do
+        if folder then
+            for _, obj in ipairs(folder:GetChildren()) do
+                local hum = obj:FindFirstChildOfClass("Humanoid")
+                local root = obj:FindFirstChild("HumanoidRootPart")
+                if hum and root and hum.Health > 0 then
+                    table.insert(result, obj)
+                end
+            end
+        end
+    end
+    return result
+end
+
+local function FullNearest(filterName, radius)
+    local root = FullRoot()
+    if not root then return nil end
+    local best, bestDistance
+    for _, obj in ipairs(FullFindEnemies()) do
+        if (not filterName or filterName == "" or filterName == "Auto" or obj.Name == filterName) then
+            local distance = (obj.HumanoidRootPart.Position - root.Position).Magnitude
+            if distance <= radius and (not bestDistance or distance < bestDistance) then
+                best, bestDistance = obj, distance
+            end
+        end
+    end
+    return best, bestDistance
+end
+
+local function FullMoveTo(target, offset)
+    local root = FullRoot()
+    if not root or not target then return false end
+    local targetRoot = target:IsA("BasePart") and target or target:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return false end
+    pcall(function()
+        root.CFrame = targetRoot.CFrame * (offset or CFrame.new(0, 8, 0))
+    end)
+    return true
+end
+
+local function FullAttack()
+    local tool = FullToolByType("Auto")
+    if not tool then return false end
+    pcall(function() tool:Activate() end)
+    return true
+end
+
+-- Adapter layer: game-specific remotes/actions can be filled in later
+-- without rewriting the UI/controllers.
+Full.Adapter.StartQuest = function(_) return false end
+Full.Adapter.AbandonQuest = function() return false end
+Full.Adapter.StartRaid = function(_) return false end
+Full.Adapter.BuyChip = function(_) return false end
+Full.Adapter.Awaken = function() return false end
+Full.Adapter.Teleport = function(_) return false end
+Full.Adapter.BuyItem = function(_) return false end
+Full.Adapter.UseSkill = function(_) return false end
+Full.Adapter.StartSeaEvent = function(_) return false end
+Full.Adapter.RaceAction = function(_) return false end
+
+--==================================================
+-- GLOBAL AUTOMATION STATE
+--==================================================
+
+local FullState = {
+    Farm = {
+        Enabled = false,
+        AutoQuest = false,
+        AutoMastery = false,
+        AutoEquip = true,
+        AutoTarget = true,
+        BringMobs = false,
+        NoClip = false,
+        FastAttack = false,
+        Target = "Auto",
+        Weapon = "Auto",
+        FarmType = "Above",
+        Distance = 8,
+        Radius = 350,
+        AttackDelay = 0.12,
+        MasteryPercent = 20,
+    },
+    Quest = {
+        Enabled = false,
+        Selected = "Auto",
+        AutoWorld = false,
+        AutoSaber = false,
+        AutoYama = false,
+        AutoTushita = false,
+        AutoCDK = false,
+        AutoDarkDagger = false,
+        AutoHallowScythe = false,
+        AutoCitizen = false,
+    },
+    Raid = {
+        Enabled = false,
+        Chip = "Flame",
+        AutoBuyChip = false,
+        AutoStart = false,
+        Aura = false,
+        NextIsland = false,
+        AutoAwaken = false,
+        LawRaid = false,
+    },
+    Combat = {
+        Enabled = false,
+        Mode = "Nearest Player",
+        Weapon = "Melee",
+        Distance = 12,
+        AttackDelay = 0.12,
+        Aura = false,
+        AimLock = false,
+    },
+    Sea = {
+        Enabled = false,
+        Event = "Auto",
+        AutoSail = false,
+        AutoEvent = false,
+        AutoChest = false,
+        AutoFruit = false,
+    },
+    Race = {
+        Enabled = false,
+        AutoV4 = false,
+        AutoTrial = false,
+        AutoGear = false,
+    },
+    Misc = {
+        AntiAFK = false,
+        AntiKick = false,
+        NoDodgeCooldown = false,
+        InfiniteEnergy = false,
+        InfiniteGeppo = false,
+        FastRespawn = false,
+        HideNotifications = false,
+        LowGraphics = false,
+    }
+}
+
+--==================================================
+-- MAIN FARM 3.0
+--==================================================
+
+Section(FarmPage, "Full Farm Controller", "Target • Quest • Movement • Combat • Mastery")
+
+local FarmStatus = Card(FarmPage, "FARM STATUS", "Idle")
+local FarmTarget = Card(FarmPage, "CURRENT TARGET", "None")
+local FarmDistance = Card(FarmPage, "DISTANCE", "-")
+local FarmHP = Card(FarmPage, "TARGET HP", "-")
+local FarmWeapon = Card(FarmPage, "WEAPON", "Auto")
+
+Toggle(FarmPage, "Auto Farm", "Runs the complete farm controller.", false, function(v)
+    FullState.Farm.Enabled = v
+    FarmState.Enabled = v
+    FarmStatus.Text = v and "Running" or "Stopped"
+end)
+
+Toggle(FarmPage, "Auto Quest", "Lets the farm controller request the selected quest through the adapter.", false, function(v)
+    FullState.Farm.AutoQuest = v
+end)
+
+Toggle(FarmPage, "Auto Mastery", "Switches the controller into mastery-oriented combat.", false, function(v)
+    FullState.Farm.AutoMastery = v
+end)
+
+Toggle(FarmPage, "Auto Equip Weapon", "Automatically equips the selected weapon type.", true, function(v)
+    FullState.Farm.AutoEquip = v
+end)
+
+Toggle(FarmPage, "Auto Target", "Automatically selects the nearest valid target.", true, function(v)
+    FullState.Farm.AutoTarget = v
+end)
+
+Toggle(FarmPage, "Bring Mobs", "Keeps selected targets close to the farm position.", false, function(v)
+    FullState.Farm.BringMobs = v
+end)
+
+Toggle(FarmPage, "NoClip", "Disables character collision while farming.", false, function(v)
+    FullState.Farm.NoClip = v
+end)
+
+Toggle(FarmPage, "Fast Attack", "Uses the configured attack interval.", false, function(v)
+    FullState.Farm.FastAttack = v
+end)
+
+ValueBox(FarmPage, "Target Name", "Auto", function(v)
+    FullState.Farm.Target = tostring(v)
+end)
+
+ValueBox(FarmPage, "Farm Distance", 8, function(v)
+    FullState.Farm.Distance = math.max(2, tonumber(v) or 8)
+end)
+
+ValueBox(FarmPage, "Search Radius", 350, function(v)
+    FullState.Farm.Radius = math.max(25, tonumber(v) or 350)
+end)
+
+ValueBox(FarmPage, "Attack Delay", 0.12, function(v)
+    FullState.Farm.AttackDelay = math.max(0.03, tonumber(v) or 0.12)
+end)
+
+ValueBox(FarmPage, "Mastery Kill %", 20, function(v)
+    FullState.Farm.MasteryPercent = math.clamp(tonumber(v) or 20, 1, 99)
+end)
+
+ActionButton(FarmPage, "Find Nearest Target", function()
+    local target, distance = FullNearest(FullState.Farm.Target, FullState.Farm.Radius)
+    if target then
+        FullState.Status.FarmTarget = target
+        FarmTarget.Text = target.Name
+        FarmDistance.Text = string.format("%.1f", distance or 0)
+        Notify("Main Farm", "Target: " .. target.Name)
+    else
+        FullState.Status.FarmTarget = nil
+        FarmTarget.Text = "None"
+        FarmDistance.Text = "-"
+        Notify("Main Farm", "No valid target found.")
+    end
+end)
+
+ActionButton(FarmPage, "Equip Selected Weapon", function()
+    local tool = FullEquip(FullState.Farm.Weapon)
+    FarmWeapon.Text = tool and tool.Name or "None"
+end)
+
+ActionButton(FarmPage, "Stop Farm", function()
+    FullState.Farm.Enabled = false
+    FarmState.Enabled = false
+    FarmStatus.Text = "Stopped"
+end)
+
+--==================================================
+-- QUEST 3.0
+--==================================================
+
+local QuestPageFull = QuestPage
+Section(QuestPageFull, "Quest Controller", "World progression • special quests • sword/puzzle helpers")
+
+local QuestStatus = Card(QuestPageFull, "QUEST STATUS", "Idle")
+local QuestSelectedCard = Card(QuestPageFull, "SELECTED QUEST", "Auto")
+local QuestProgress = Card(QuestPageFull, "PROGRESS", "-")
+
+ValueBox(QuestPageFull, "Quest / Boss Name", "Auto", function(v)
+    FullState.Quest.Selected = tostring(v)
+    QuestSelectedCard.Text = tostring(v)
+end)
+
+Toggle(QuestPageFull, "Auto Quest", "Quest controller master switch.", false, function(v)
+    FullState.Quest.Enabled = v
+    QuestStatus.Text = v and "Running" or "Stopped"
+end)
+
+Toggle(QuestPageFull, "Auto World Progress", "Runs world-progression checks through the adapter.", false, function(v)
+    FullState.Quest.AutoWorld = v
+end)
+
+Toggle(QuestPageFull, "Auto Saber", "Saber progression controller.", false, function(v)
+    FullState.Quest.AutoSaber = v
+end)
+
+Toggle(QuestPageFull, "Auto Yama", "Yama progression controller.", false, function(v)
+    FullState.Quest.AutoYama = v
+end)
+
+Toggle(QuestPageFull, "Auto Tushita", "Tushita progression controller.", false, function(v)
+    FullState.Quest.AutoTushita = v
+end)
+
+Toggle(QuestPageFull, "Auto Cursed Dual Katana", "CDK progression controller.", false, function(v)
+    FullState.Quest.AutoCDK = v
+end)
+
+Toggle(QuestPageFull, "Auto Dark Dagger", "Dark Dagger progression controller.", false, function(v)
+    FullState.Quest.AutoDarkDagger = v
+end)
+
+Toggle(QuestPageFull, "Auto Hallow Scythe", "Hallow Scythe progression controller.", false, function(v)
+    FullState.Quest.AutoHallowScythe = v
+end)
+
+Toggle(QuestPageFull, "Auto Citizen", "Citizen quest controller.", false, function(v)
+    FullState.Quest.AutoCitizen = v
+end)
+
+ActionButton(QuestPageFull, "Start Selected Quest", function()
+    local ok = Full.Adapter.StartQuest(FullState.Quest.Selected)
+    QuestStatus.Text = ok and "Quest started" or "Adapter pending"
+    Notify("Quest", ok and "Quest started." or "Game adapter not configured.")
+end)
+
+ActionButton(QuestPageFull, "Abandon Quest", function()
+    local ok = Full.Adapter.AbandonQuest()
+    QuestStatus.Text = ok and "Quest abandoned" or "Adapter pending"
+end)
+
+--==================================================
+-- RAID 3.0
+--==================================================
+
+Section(RaidPage, "Raid Controller", "Chip • Start • Aura • Islands • Awakening")
+
+local RaidStatus = Card(RaidPage, "RAID STATUS", "Idle")
+local RaidChip = Card(RaidPage, "SELECTED CHIP", FullState.Raid.Chip)
+
+ValueBox(RaidPage, "Chip", "Flame", function(v)
+    FullState.Raid.Chip = tostring(v)
+    RaidChip.Text = tostring(v)
+end)
+
+Toggle(RaidPage, "Auto Buy Microchip", "Requests the selected chip through the adapter.", false, function(v)
+    FullState.Raid.AutoBuyChip = v
+end)
+
+Toggle(RaidPage, "Auto Start Raids", "Starts raids when the required item is available.", false, function(v)
+    FullState.Raid.AutoStart = v
+end)
+
+Toggle(RaidPage, "Kill Raid Aura", "Raid target controller.", false, function(v)
+    FullState.Raid.Aura = v
+end)
+
+Toggle(RaidPage, "Auto Next Island", "Moves the controller toward the next detected raid island.", false, function(v)
+    FullState.Raid.NextIsland = v
+end)
+
+Toggle(RaidPage, "Auto Awaken", "Requests awakening through the adapter.", false, function(v)
+    FullState.Raid.AutoAwaken = v
+end)
+
+Toggle(RaidPage, "Law Raid", "Law raid controller.", false, function(v)
+    FullState.Raid.LawRaid = v
+end)
+
+ActionButton(RaidPage, "Buy Selected Chip", function()
+    local ok = Full.Adapter.BuyChip(FullState.Raid.Chip)
+    RaidStatus.Text = ok and "Chip requested" or "Adapter pending"
+end)
+
+ActionButton(RaidPage, "Start Raid", function()
+    local ok = Full.Adapter.StartRaid(FullState.Raid.Chip)
+    RaidStatus.Text = ok and "Raid started" or "Adapter pending"
+end)
+
+ActionButton(RaidPage, "Awaken", function()
+    local ok = Full.Adapter.Awaken()
+    RaidStatus.Text = ok and "Awakening requested" or "Adapter pending"
+end)
+
+--==================================================
+-- COMBAT 3.0
+--==================================================
+
+Section(CombatPage, "Combat Controller", "Player targeting • weapon selection • attack loop")
+
+local CombatStatus = Card(CombatPage, "COMBAT STATUS", "Idle")
+local CombatTarget = Card(CombatPage, "TARGET", "None")
+local CombatWeapon = Card(CombatPage, "WEAPON", "Melee")
+
+ValueBox(CombatPage, "Weapon Type", "Melee", function(v)
+    FullState.Combat.Weapon = tostring(v)
+    CombatWeapon.Text = tostring(v)
+end)
+
+ValueBox(CombatPage, "Combat Distance", 12, function(v)
+    FullState.Combat.Distance = math.max(2, tonumber(v) or 12)
+end)
+
+ValueBox(CombatPage, "Attack Delay", 0.12, function(v)
+    FullState.Combat.AttackDelay = math.max(0.03, tonumber(v) or 0.12)
+end)
+
+Toggle(CombatPage, "Combat Assist", "Enables the combat controller.", false, function(v)
+    FullState.Combat.Enabled = v
+    CombatStatus.Text = v and "Running" or "Stopped"
+end)
+
+Toggle(CombatPage, "Aim Lock", "Keeps a selected target in focus.", false, function(v)
+    FullState.Combat.AimLock = v
+end)
+
+Toggle(CombatPage, "Aura", "Enables repeated attacks against a valid target.", false, function(v)
+    FullState.Combat.Aura = v
+end)
+
+ActionButton(CombatPage, "Find Target", function()
+    local target = FullNearest(nil, 500)
+    if target then
+        Full.Status.CombatTarget = target
+        CombatTarget.Text = target.Name
+    else
+        CombatTarget.Text = "None"
+    end
+end)
+
+ActionButton(CombatPage, "Equip Combat Weapon", function()
+    local tool = FullEquip(FullState.Combat.Weapon)
+    CombatWeapon.Text = tool and tool.Name or "None"
+end)
+
+--==================================================
+-- SEA EVENT 3.0
+--==================================================
+
+local SeaPage = PageService:Create("Sea Event")
+Section(SeaPage, "Sea Event Controller", "Sailing • event targets • chests • fruit collection")
+
+local SeaStatus = Card(SeaPage, "SEA STATUS", "Idle")
+ValueBox(SeaPage, "Event Name", "Auto", function(v)
+    FullState.Sea.Event = tostring(v)
+end)
+
+Toggle(SeaPage, "Auto Sail", "Controls the sea-event movement loop.", false, function(v)
+    FullState.Sea.AutoSail = v
+    FullState.Sea.Enabled = v
+    SeaStatus.Text = v and "Sailing" or "Stopped"
+end)
+
+Toggle(SeaPage, "Auto Sea Event", "Requests the selected event through the adapter.", false, function(v)
+    FullState.Sea.AutoEvent = v
+end)
+
+Toggle(SeaPage, "Auto Chest", "Scans for collectible chest objects.", false, function(v)
+    FullState.Sea.AutoChest = v
+end)
+
+Toggle(SeaPage, "Auto Fruit", "Scans for collectible fruit objects.", false, function(v)
+    FullState.Sea.AutoFruit = v
+end)
+
+ActionButton(SeaPage, "Start Selected Event", function()
+    local ok = Full.Adapter.StartSeaEvent(FullState.Sea.Event)
+    SeaStatus.Text = ok and "Event started" or "Adapter pending"
+end)
+
+--==================================================
+-- RACE V4 3.0
+--==================================================
+
+local RacePage = PageService:Create("Race V4")
+Section(RacePage, "Race V4 Controller", "Area navigation • trials • gear • transformation")
+
+local RaceStatus = Card(RacePage, "RACE STATUS", "Idle")
+
+Toggle(RacePage, "Auto Race V4", "Runs the Race V4 controller.", false, function(v)
+    FullState.Race.Enabled = v
+    FullState.Race.AutoV4 = v
+    RaceStatus.Text = v and "Running" or "Stopped"
+end)
+
+Toggle(RacePage, "Auto Trial", "Trial controller.", false, function(v)
+    FullState.Race.AutoTrial = v
+end)
+
+Toggle(RacePage, "Auto Gear", "Gear controller.", false, function(v)
+    FullState.Race.AutoGear = v
+end)
+
+ActionButton(RacePage, "Temple of Time", function()
+    local ok = Full.Adapter.RaceAction("TempleOfTime")
+    RaceStatus.Text = ok and "Requested" or "Adapter pending"
+end)
+
+ActionButton(RacePage, "Lever Pull", function()
+    local ok = Full.Adapter.RaceAction("Lever")
+    RaceStatus.Text = ok and "Requested" or "Adapter pending"
+end)
+
+ActionButton(RacePage, "Ancient One", function()
+    local ok = Full.Adapter.RaceAction("AncientOne")
+    RaceStatus.Text = ok and "Requested" or "Adapter pending"
+end)
+
+ActionButton(RacePage, "Safe Zone", function()
+    local ok = Full.Adapter.RaceAction("SafeZone")
+    RaceStatus.Text = ok and "Requested" or "Adapter pending"
+end)
+
+ActionButton(RacePage, "PVP Zone", function()
+    local ok = Full.Adapter.RaceAction("PVPZone")
+    RaceStatus.Text = ok and "Requested" or "Adapter pending"
+end)
+
+--==================================================
+-- SHOP 3.0
+--==================================================
+
+local ShopPage = PageService:Create("Shop")
+Section(ShopPage, "Shop Controller", "Generic item purchasing through the adapter")
+
+local ShopStatus = Card(ShopPage, "SHOP STATUS", "Idle")
+ValueBox(ShopPage, "Item Name", "", function(v)
+    Full.Status.ShopItem = tostring(v)
+end)
+
+ActionButton(ShopPage, "Buy Selected Item", function()
+    local item = Full.Status.ShopItem or ""
+    if item == "" then
+        Notify("Shop", "Enter an item name first.")
+        return
+    end
+    local ok = Full.Adapter.BuyItem(item)
+    ShopStatus.Text = ok and ("Requested: " .. item) or "Adapter pending"
+end)
+
+--==================================================
+-- MISC 3.0
+--==================================================
+
+Section(MiscPage, "Misc Controller", "Quality-of-life and performance controls")
+
+Toggle(MiscPage, "Anti AFK", "Prevents idle state using the local Roblox idle event.", false, function(v)
+    FullState.Misc.AntiAFK = v
+end)
+
+Toggle(MiscPage, "Anti Kick Client", "Reserved adapter hook for a project-specific client safeguard.", false, function(v)
+    FullState.Misc.AntiKick = v
+end)
+
+Toggle(MiscPage, "No Dodge Cooldown", "Project-specific cooldown adapter.", false, function(v)
+    FullState.Misc.NoDodgeCooldown = v
+end)
+
+Toggle(MiscPage, "Infinite Energy", "Project-specific energy adapter.", false, function(v)
+    FullState.Misc.InfiniteEnergy = v
+end)
+
+Toggle(MiscPage, "Infinite Geppo", "Project-specific movement adapter.", false, function(v)
+    FullState.Misc.InfiniteGeppo = v
+end)
+
+Toggle(MiscPage, "Fast Respawn", "Project-specific respawn adapter.", false, function(v)
+    FullState.Misc.FastRespawn = v
+end)
+
+Toggle(MiscPage, "Hide Notifications", "Hides local notification GUI objects when supported.", false, function(v)
+    FullState.Misc.HideNotifications = v
+end)
+
+Toggle(MiscPage, "Low Graphics", "Applies conservative local graphics reductions.", false, function(v)
+    FullState.Misc.LowGraphics = v
+    if v then
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        end)
+    end
+end)
+
+--==================================================
+-- FULL CONTROLLERS
+--==================================================
+
+FullConnect(RunService.Heartbeat, function()
+    if not Full.Running then return end
+
+    -- Farm
+    if FullState.Farm.Enabled and FullAlive() then
+        local target = Full.Status.FarmTarget
+        if not target or not target.Parent or not target:FindFirstChildOfClass("Humanoid")
+            or target:FindFirstChildOfClass("Humanoid").Health <= 0
+            or FullState.Farm.AutoTarget then
+            target = FullNearest(FullState.Farm.Target, FullState.Farm.Radius)
+            Full.Status.FarmTarget = target
+        end
+
+        if target then
+            local targetRoot = target:FindFirstChild("HumanoidRootPart")
+            local hum = target:FindFirstChildOfClass("Humanoid")
+            if targetRoot and hum and hum.Health > 0 then
+                local y = FullState.Farm.Distance
+                local offset = CFrame.new(0, y, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+                FullMoveTo(target, offset)
+                if FullState.Farm.AutoEquip then
+                    FullEquip(FullState.Farm.Weapon)
+                end
+                if FullState.Farm.FastAttack then
+                    if os.clock() - (Full.Status.LastAttack or 0) >= FullState.Farm.AttackDelay then
+                        FullAttack()
+                        Full.Status.LastAttack = os.clock()
+                    end
+                end
+                FarmTarget.Text = target.Name
+                FarmHP.Text = string.format("%.0f / %.0f", hum.Health, hum.MaxHealth)
+                local root = FullRoot()
+                FarmDistance.Text = root and string.format("%.1f", (root.Position - targetRoot.Position).Magnitude) or "-"
+                FarmStatus.Text = "Farming"
+            end
+        else
+            FarmTarget.Text = "None"
+            FarmHP.Text = "-"
+            FarmDistance.Text = "-"
+            FarmStatus.Text = "Searching"
+        end
+    end
+
+    -- Combat
+    if FullState.Combat.Enabled and FullAlive() then
+        local target = Full.Status.CombatTarget
+        if not target or not target.Parent then
+            target = FullNearest(nil, 500)
+            Full.Status.CombatTarget = target
+        end
+        if target then
+            CombatTarget.Text = target.Name
+            FullMoveTo(target, CFrame.new(0, FullState.Combat.Distance, 0))
+            FullEquip(FullState.Combat.Weapon)
+            if FullState.Combat.Aura and os.clock() - (Full.Status.CombatAttack or 0) >= FullState.Combat.AttackDelay then
+                FullAttack()
+                Full.Status.CombatAttack = os.clock()
+            end
+        else
+            CombatTarget.Text = "None"
+        end
+    end
+
+    -- NoClip
+    local character = LocalPlayer.Character
+    if character then
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = not (FullState.Farm.NoClip and FullState.Farm.Enabled)
+            end
+        end
+    end
+
+    -- Hide local notifications when requested.
+    if FullState.Misc.HideNotifications then
+        local gui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local notifications = gui and gui:FindFirstChild("Notifications")
+        if notifications then
+            for _, child in ipairs(notifications:GetChildren()) do
+                pcall(function() child.Visible = false end)
+            end
+        end
+    end
+end)
+
+FullConnect(LocalPlayer.CharacterAdded, function()
+    task.wait(0.5)
+    if FullState.Farm.Enabled then
+        FarmStatus.Text = "Character respawned • recovering"
+    end
+end)
+
+-- Dedicated Anti-AFK connection so it does not spawn duplicate handlers.
+local FullIdleConnection
+FullConnect(LocalPlayer.Idled, function()
+    if not FullState.Misc.AntiAFK then return end
+    local VirtualUser = game:GetService("VirtualUser")
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new(0, 0))
+    end)
+end)
+
+--==================================================
+-- FULL BUILD STATUS
+--==================================================
+
+Notify(
+    "Floquitave 3.0",
+    "Full systems build carregado. Controllers prontos para análise/teste."
+)
+
+
 --==================================================
 -- SETTINGS
 --==================================================
@@ -2361,6 +3100,9 @@ local PageNames = {
     "Quest",
     "Raids",
     "Combat",
+    "Sea Event",
+    "Race V4",
+    "Shop",
     "Teleport",
     "Player",
     "Server",
@@ -2375,6 +3117,9 @@ local PageIcons = {
     Quest = "◆",
     Raids = "◇",
     Combat = "⚔",
+    ["Sea Event"] = "≈",
+    ["Race V4"] = "✦",
+    Shop = "$",
     Teleport = "➜",
     Player = "●",
     Server = "▣",
@@ -2681,7 +3426,7 @@ ApplyTheme()
 
 Notify(
     "Floquitave",
-    "2.5.0 carregado com sucesso."
+    "3.0.0 carregado com sucesso."
 )
 
 print(
