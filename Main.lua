@@ -1,11 +1,9 @@
 --[[
     Floquitave Hub
-    Version: 2.3.0
+    Version: 2.4.0
 
     UI / Diagnostics Foundation
-    No credential collection
-    No cookie/token collection
-    No external data logging
+    No automation / bypass functionality included.
 ]]
 
 --==================================================
@@ -14,9 +12,10 @@
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Stats = game:GetService("Stats")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -25,15 +24,13 @@ local LocalPlayer = Players.LocalPlayer
 --==================================================
 
 local Config = {
+
     Name = "Floquitave",
-    Version = "2.3.0",
+    Version = "2.4.0",
 
     UI = {
         Width = 920,
         Height = 590,
-
-        MinWidth = 760,
-        MinHeight = 500,
 
         Animations = true,
         Scale = 1,
@@ -42,13 +39,13 @@ local Config = {
 
         Accent = Color3.fromRGB(115, 90, 255),
 
-        Background = Color3.fromRGB(15, 15, 20),
-        Secondary = Color3.fromRGB(20, 20, 27),
-        Card = Color3.fromRGB(25, 25, 34),
-        Sidebar = Color3.fromRGB(18, 18, 24),
+        Background = Color3.fromRGB(18, 18, 24),
+        Secondary = Color3.fromRGB(23, 23, 31),
+        Card = Color3.fromRGB(28, 28, 38),
+        Sidebar = Color3.fromRGB(21, 21, 29),
 
-        Text = Color3.fromRGB(240, 240, 245),
-        SubText = Color3.fromRGB(150, 150, 165),
+        Text = Color3.fromRGB(245, 245, 250),
+        SubText = Color3.fromRGB(155, 155, 170),
     },
 
     Notifications = {
@@ -58,7 +55,7 @@ local Config = {
 
     Performance = {
         UpdateInterval = 0.5,
-    }
+    },
 }
 
 --==================================================
@@ -66,6 +63,7 @@ local Config = {
 --==================================================
 
 local State = {
+
     CurrentPage = "Home",
 
     Minimized = false,
@@ -85,17 +83,14 @@ local State = {
     Dragging = false,
 }
 
---==================================================
--- SESSION
---==================================================
-
 local StartTime = os.clock()
 
 --==================================================
--- CONNECTION SYSTEM
+-- CONNECTION MANAGER
 --==================================================
 
 local function Connect(signal, callback)
+
     local connection = signal:Connect(callback)
 
     table.insert(State.Connections, connection)
@@ -104,47 +99,59 @@ local function Connect(signal, callback)
 end
 
 local function Cleanup()
-    if State.Destroyed then
-        return
-    end
 
     State.Destroyed = true
 
     for _, connection in ipairs(State.Connections) do
-        pcall(function()
+
+        if connection and connection.Connected then
             connection:Disconnect()
-        end)
+        end
+
     end
 
-    table.clear(State.Connections)
+    State.Connections = {}
+
 end
 
 --==================================================
--- UTILITY
+-- UTILITIES
 --==================================================
 
-local function Tween(instance, properties, duration)
+local function Tween(
+    instance,
+    properties,
+    duration,
+    style,
+    direction
+)
+
     if not instance then
         return
     end
 
     if not Config.UI.Animations then
+
         for property, value in pairs(properties) do
-            pcall(function()
-                instance[property] = value
-            end)
+            instance[property] = value
         end
 
         return
     end
 
+    local tweenInfo = TweenInfo.new(
+
+        duration or 0.25,
+
+        style or Enum.EasingStyle.Quint,
+
+        direction or Enum.EasingDirection.Out
+
+    )
+
     local tween = TweenService:Create(
         instance,
-        TweenInfo.new(
-            duration or 0.2,
-            Enum.EasingStyle.Quart,
-            Enum.EasingDirection.Out
-        ),
+        tweenInfo,
         properties
     )
 
@@ -154,67 +161,88 @@ local function Tween(instance, properties, duration)
 end
 
 local function Create(className, properties)
-    local instance = Instance.new(className)
+
+    local object = Instance.new(className)
 
     for property, value in pairs(properties or {}) do
-        pcall(function()
-            instance[property] = value
-        end)
+        object[property] = value
     end
 
-    return instance
+    return object
 end
 
 local function Corner(parent, radius)
-    return Create("UICorner", {
-        Parent = parent,
-        CornerRadius = UDim.new(0, radius or 8)
-    })
+
+    local corner = Instance.new("UICorner")
+
+    corner.CornerRadius = UDim.new(
+        0,
+        radius or 8
+    )
+
+    corner.Parent = parent
+
+    return corner
 end
 
-local function Stroke(parent, color, thickness)
-    return Create("UIStroke", {
-        Parent = parent,
-        Color = color or Color3.fromRGB(50, 50, 65),
-        Thickness = thickness or 1,
-        Transparency = 0,
-    })
+local function Stroke(parent, color, transparency)
+
+    local stroke = Instance.new("UIStroke")
+
+    stroke.Color = color or Config.UI.Accent
+    stroke.Transparency = transparency or 0.5
+    stroke.Thickness = 1
+
+    stroke.Parent = parent
+
+    return stroke
 end
 
-local function Padding(parent, left, right, top, bottom)
-    return Create("UIPadding", {
-        Parent = parent,
+local function Padding(parent, value)
 
-        PaddingLeft = UDim.new(0, left or 0),
-        PaddingRight = UDim.new(0, right or 0),
-        PaddingTop = UDim.new(0, top or 0),
-        PaddingBottom = UDim.new(0, bottom or 0),
-    })
+    local padding = Instance.new("UIPadding")
+
+    padding.PaddingTop = UDim.new(0, value)
+    padding.PaddingBottom = UDim.new(0, value)
+    padding.PaddingLeft = UDim.new(0, value)
+    padding.PaddingRight = UDim.new(0, value)
+
+    padding.Parent = parent
+
+    return padding
 end
 
 local function FormatNumber(number)
+
     number = tonumber(number) or 0
 
-    local formatted = tostring(math.floor(number))
+    if number >= 1000000000 then
+        return string.format("%.1fB", number / 1000000000)
 
-    while true do
-        local result, count = formatted:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+    elseif number >= 1000000 then
+        return string.format("%.1fM", number / 1000000)
 
-        formatted = result
+    elseif number >= 1000 then
+        return string.format("%.1fK", number / 1000)
 
-        if count == 0 then
-            break
-        end
     end
 
-    return formatted
+    return tostring(math.floor(number))
 end
 
 local function FormatTime(seconds)
-    seconds = math.max(0, math.floor(seconds))
+
+    seconds = math.max(
+        0,
+        math.floor(seconds)
+    )
 
     local hours = math.floor(seconds / 3600)
-    local minutes = math.floor((seconds % 3600) / 60)
+
+    local minutes = math.floor(
+        (seconds % 3600) / 60
+    )
+
     local secs = seconds % 60
 
     return string.format(
@@ -226,27 +254,140 @@ local function FormatTime(seconds)
 end
 
 --==================================================
+-- UI EFFECTS
+--==================================================
+
+local function AddHoverEffect(object, scaleAmount)
+
+    if not object then
+        return
+    end
+
+    local scale = object:FindFirstChild(
+        "HoverScale"
+    )
+
+    if not scale then
+
+        scale = Instance.new("UIScale")
+
+        scale.Name = "HoverScale"
+        scale.Scale = 1
+        scale.Parent = object
+
+    end
+
+    scaleAmount = scaleAmount or 1.02
+
+    if object:IsA("GuiButton") then
+
+        Connect(object.MouseEnter, function()
+
+            Tween(
+                scale,
+                {
+                    Scale = scaleAmount
+                },
+                0.18,
+                Enum.EasingStyle.Sine
+            )
+
+        end)
+
+        Connect(object.MouseLeave, function()
+
+            Tween(
+                scale,
+                {
+                    Scale = 1
+                },
+                0.22,
+                Enum.EasingStyle.Sine
+            )
+
+        end)
+
+        Connect(object.MouseButton1Down, function()
+
+            Tween(
+                scale,
+                {
+                    Scale = 0.97
+                },
+                0.08,
+                Enum.EasingStyle.Sine
+            )
+
+        end)
+
+        Connect(object.MouseButton1Up, function()
+
+            Tween(
+                scale,
+                {
+                    Scale = scaleAmount
+                },
+                0.12,
+                Enum.EasingStyle.Sine
+            )
+
+        end)
+
+    else
+
+        Connect(object.MouseEnter, function()
+
+            Tween(
+                scale,
+                {
+                    Scale = scaleAmount
+                },
+                0.18,
+                Enum.EasingStyle.Sine
+            )
+
+        end)
+
+        Connect(object.MouseLeave, function()
+
+            Tween(
+                scale,
+                {
+                    Scale = 1
+                },
+                0.22,
+                Enum.EasingStyle.Sine
+            )
+
+        end)
+
+    end
+
+end
+
+--==================================================
 -- WORLD SERVICE
 --==================================================
 
 local WorldService = {}
 
 function WorldService:GetSea()
+
     local placeId = game.PlaceId
 
     if placeId == 2753915549 then
         return "First Sea"
+
     elseif placeId == 4442272183 then
         return "Second Sea"
+
     elseif placeId == 7449423635 then
         return "Third Sea"
+
     end
 
     return "Unknown"
-end
 
-function WorldService:GetPlaceId()
-    return tostring(game.PlaceId)
 end
 
 --==================================================
@@ -255,50 +396,80 @@ end
 
 local PlayerService = {}
 
-function PlayerService:GetDataFolder()
-    return LocalPlayer:FindFirstChild("Data")
-end
+function PlayerService:GetData()
 
-function PlayerService:GetValue(name)
-    local data = self:GetDataFolder()
+    local data = LocalPlayer:FindFirstChild("Data")
 
     if not data then
         return nil
     end
 
-    local value = data:FindFirstChild(name)
-
-    if value then
-        return value.Value
-    end
-
-    return nil
+    return data
 end
 
 function PlayerService:GetLevel()
-    return tonumber(self:GetValue("Level")) or 0
+
+    local data = self:GetData()
+
+    if not data then
+        return 0
+    end
+
+    local level = data:FindFirstChild("Level")
+
+    return level and level.Value or 0
 end
 
 function PlayerService:GetBeli()
-    return tonumber(self:GetValue("Beli")) or 0
+
+    local data = self:GetData()
+
+    if not data then
+        return 0
+    end
+
+    local beli = data:FindFirstChild("Beli")
+
+    return beli and beli.Value or 0
 end
 
 function PlayerService:GetFragments()
-    return tonumber(self:GetValue("Fragments")) or 0
+
+    local data = self:GetData()
+
+    if not data then
+        return 0
+    end
+
+    local fragments = data:FindFirstChild("Fragments")
+
+    return fragments and fragments.Value or 0
 end
 
 function PlayerService:GetRace()
-    return tostring(self:GetValue("Race") or "Unknown")
+
+    local data = self:GetData()
+
+    if not data then
+        return "Unknown"
+    end
+
+    local race = data:FindFirstChild("Race")
+
+    return race and tostring(race.Value) or "Unknown"
 end
 
 function PlayerService:GetHealth()
+
     local character = LocalPlayer.Character
 
     if not character then
         return 0, 0
     end
 
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local humanoid = character:FindFirstChildOfClass(
+        "Humanoid"
+    )
 
     if not humanoid then
         return 0, 0
@@ -308,25 +479,22 @@ function PlayerService:GetHealth()
 end
 
 function PlayerService:GetEnergy()
+
     local character = LocalPlayer.Character
 
     if not character then
         return 0, 0
     end
 
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local humanoid = character:FindFirstChildOfClass(
+        "Humanoid"
+    )
 
     if not humanoid then
         return 0, 0
     end
 
-    local energy = character:FindFirstChild("Energy")
-
-    if energy then
-        return energy.Value, 100
-    end
-
-    return 0, 0
+    return humanoid.Health, humanoid.MaxHealth
 end
 
 --==================================================
@@ -336,36 +504,35 @@ end
 local PerformanceService = {}
 
 function PerformanceService:GetPing()
+
     local success, result = pcall(function()
-        local network = Stats:FindFirstChild("Network")
 
-        if not network then
-            return 0
-        end
+        local network = Stats.Network
 
-        local serverStats = network:FindFirstChild("ServerStatsItem")
+        local serverStats =
+            network:FindFirstChild(
+                "ServerStatsItem"
+            )
 
         if not serverStats then
             return 0
         end
 
-        local dataPing = serverStats:FindFirstChild("Data Ping")
+        local ping =
+            serverStats:FindFirstChild(
+                "Data Ping"
+            )
 
-        if not dataPing then
+        if not ping then
             return 0
         end
 
-        local value = dataPing:GetValueString()
+        return ping:GetValue()
 
-        local number = tonumber(
-            string.match(value, "%d+")
-        )
-
-        return number or 0
     end)
 
     if success then
-        return result
+        return math.floor(result or 0)
     end
 
     return 0
@@ -379,7 +546,11 @@ local NotificationService = {}
 
 local NotificationHolder
 
-function NotificationService:Notify(title, message)
+function NotificationService:Notify(
+    title,
+    message
+)
+
     if not Config.Notifications.Enabled then
         return
     end
@@ -389,920 +560,33 @@ function NotificationService:Notify(title, message)
     end
 
     local notification = Create("Frame", {
+
         Parent = NotificationHolder,
 
-        Size = UDim2.new(1, 0, 0, 70),
+        Size = UDim2.new(
+            1,
+            0,
+            0,
+            70
+        ),
 
-        BackgroundColor3 = Config.UI.Card,
+        BackgroundColor3 =
+            Config.UI.Card,
 
-        BackgroundTransparency = 0.03,
+        BackgroundTransparency = 1,
+
     })
 
     Corner(notification, 10)
 
-    Stroke(
-        notification,
-        Config.UI.Accent,
-        1
-    )
+    local scale = Instance.new("UIScale")
 
-    local accent = Create("Frame", {
-        Parent = notification,
-
-        Size = UDim2.new(0, 4, 1, 0),
-
-        BackgroundColor3 = Config.UI.Accent,
-    })
-
-    Corner(accent, 5)
+    scale.Scale = 0.92
+    scale.Parent = notification
 
     local titleLabel = Create("TextLabel", {
+
         Parent = notification,
-
-        BackgroundTransparency = 1,
-
-        Position = UDim2.new(0, 16, 0, 9),
-
-        Size = UDim2.new(1, -25, 0, 22),
-
-        Font = Enum.Font.GothamBold,
-
-        Text = tostring(title),
-
-        TextColor3 = Config.UI.Text,
-
-        TextSize = 14,
-
-        TextXAlignment = Enum.TextXAlignment.Left,
-    })
-
-    local messageLabel = Create("TextLabel", {
-        Parent = notification,
-
-        BackgroundTransparency = 1,
-
-        Position = UDim2.new(0, 16, 0, 31),
-
-        Size = UDim2.new(1, -25, 0, 28),
-
-        Font = Enum.Font.Gotham,
-
-        Text = tostring(message),
-
-        TextColor3 = Config.UI.SubText,
-
-        TextSize = 12,
-
-        TextWrapped = true,
-
-        TextXAlignment = Enum.TextXAlignment.Left,
-
-        TextYAlignment = Enum.TextYAlignment.Top,
-    })
-
-    notification.Position = UDim2.new(
-        1,
-        20,
-        0,
-        0
-    )
-
-    Tween(
-        notification,
-        {
-            Position = UDim2.new(
-                0,
-                0,
-                0,
-                0
-            )
-        },
-        0.3
-    )
-
-    task.delay(Config.Notifications.Duration, function()
-        if State.Destroyed then
-            return
-        end
-
-        if notification and notification.Parent then
-            Tween(
-                notification,
-                {
-                    Position = UDim2.new(
-                        1,
-                        20,
-                        0,
-                        0
-                    )
-                },
-                0.25
-            )
-
-            task.delay(0.3, function()
-                pcall(function()
-                    notification:Destroy()
-                end)
-            end)
-        end
-    end)
-end
-
---==================================================
--- SCREEN GUI
---==================================================
-
-local ScreenGui = Create("ScreenGui", {
-    Name = "FloquitaveUI",
-
-    ResetOnSpawn = false,
-
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-})
-
-pcall(function()
-    if syn and syn.protect_gui then
-        syn.protect_gui(ScreenGui)
-    end
-end)
-
-ScreenGui.Parent = game:GetService("CoreGui")
-
---==================================================
--- MAIN WINDOW
---==================================================
-
-local Main = Create("Frame", {
-    Parent = ScreenGui,
-
-    Size = UDim2.new(
-        0,
-        Config.UI.Width,
-        0,
-        Config.UI.Height
-    ),
-
-    Position = UDim2.new(
-        0.5,
-        -Config.UI.Width / 2,
-        0.5,
-        -Config.UI.Height / 2
-    ),
-
-    BackgroundColor3 = Config.UI.Background,
-
-    BorderSizePixel = 0,
-})
-
-Corner(Main, 12)
-
-Stroke(
-    Main,
-    Color3.fromRGB(45, 45, 60),
-    1
-)
-
---==================================================
--- TOPBAR
---==================================================
-
-local Topbar = Create("Frame", {
-    Parent = Main,
-
-    Size = UDim2.new(1, 0, 0, 60),
-
-    BackgroundColor3 = Config.UI.Secondary,
-
-    BorderSizePixel = 0,
-})
-
-Corner(Topbar, 12)
-
-local TopbarCover = Create("Frame", {
-    Parent = Topbar,
-
-    Position = UDim2.new(0, 0, 0.5, 0),
-
-    Size = UDim2.new(1, 0, 0.5, 0),
-
-    BackgroundColor3 = Config.UI.Secondary,
-
-    BorderSizePixel = 0,
-})
-
---==================================================
--- LOGO
---==================================================
-
-local Logo = Create("Frame", {
-    Parent = Topbar,
-
-    Position = UDim2.new(
-        0,
-        15,
-        0.5,
-        -18
-    ),
-
-    Size = UDim2.new(0, 36, 0, 36),
-
-    BackgroundColor3 = Config.UI.Accent,
-})
-
-Corner(Logo, 10)
-
-local LogoText = Create("TextLabel", {
-    Parent = Logo,
-
-    BackgroundTransparency = 1,
-
-    Size = UDim2.new(1, 0, 1, 0),
-
-    Text = "F",
-
-    Font = Enum.Font.GothamBold,
-
-    TextSize = 18,
-
-    TextColor3 = Color3.fromRGB(255, 255, 255),
-})
-
---==================================================
--- TITLE
---==================================================
-
-local Title = Create("TextLabel", {
-    Parent = Topbar,
-
-    BackgroundTransparency = 1,
-
-    Position = UDim2.new(
-        0,
-        62,
-        0,
-        10
-    ),
-
-    Size = UDim2.new(
-        0,
-        250,
-        0,
-        23
-    ),
-
-    Text = Config.Name,
-
-    Font = Enum.Font.GothamBold,
-
-    TextSize = 17,
-
-    TextColor3 = Config.UI.Text,
-
-    TextXAlignment = Enum.TextXAlignment.Left,
-})
-
-local Version = Create("TextLabel", {
-    Parent = Topbar,
-
-    BackgroundTransparency = 1,
-
-    Position = UDim2.new(
-        0,
-        62,
-        0,
-        32
-    ),
-
-    Size = UDim2.new(
-        0,
-        250,
-        0,
-        18
-    ),
-
-    Text = "Version " .. Config.Version,
-
-    Font = Enum.Font.Gotham,
-
-    TextSize = 11,
-
-    TextColor3 = Config.UI.SubText,
-
-    TextXAlignment = Enum.TextXAlignment.Left,
-})
-
---==================================================
--- TOPBAR BUTTONS
---==================================================
-
-local MinimizeButton = Create("TextButton", {
-    Parent = Topbar,
-
-    Position = UDim2.new(
-        1,
-        -82,
-        0.5,
-        -17
-    ),
-
-    Size = UDim2.new(0, 34, 0, 34),
-
-    BackgroundColor3 = Config.UI.Card,
-
-    Text = "—",
-
-    Font = Enum.Font.GothamBold,
-
-    TextSize = 17,
-
-    TextColor3 = Config.UI.Text,
-
-    AutoButtonColor = false,
-})
-
-Corner(MinimizeButton, 8)
-
-local CloseButton = Create("TextButton", {
-    Parent = Topbar,
-
-    Position = UDim2.new(
-        1,
-        -42,
-        0.5,
-        -17
-    ),
-
-    Size = UDim2.new(0, 34, 0, 34),
-
-    BackgroundColor3 = Config.UI.Card,
-
-    Text = "×",
-
-    Font = Enum.Font.GothamBold,
-
-    TextSize = 20,
-
-    TextColor3 = Config.UI.Text,
-
-    AutoButtonColor = false,
-})
-
-Corner(CloseButton, 8)
-
---==================================================
--- DRAG MAIN WINDOW
---==================================================
-
-local draggingMain = false
-local dragStart
-local startPosition
-
-Connect(Topbar.InputBegan, function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-
-        draggingMain = true
-
-        dragStart = input.Position
-
-        startPosition = Main.Position
-    end
-end)
-
-Connect(UserInputService.InputChanged, function(input)
-    if not draggingMain then
-        return
-    end
-
-    if input.UserInputType ~= Enum.UserInputType.MouseMovement
-        and input.UserInputType ~= Enum.UserInputType.Touch then
-        return
-    end
-
-    local delta = input.Position - dragStart
-
-    Main.Position = UDim2.new(
-        startPosition.X.Scale,
-        startPosition.X.Offset + delta.X,
-
-        startPosition.Y.Scale,
-        startPosition.Y.Offset + delta.Y
-    )
-end)
-
-Connect(UserInputService.InputEnded, function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-
-        draggingMain = false
-    end
-end)
-
---==================================================
--- SIDEBAR
---==================================================
-
-local Sidebar = Create("Frame", {
-    Parent = Main,
-
-    Position = UDim2.new(
-        0,
-        0,
-        0,
-        60
-    ),
-
-    Size = UDim2.new(
-        0,
-        195,
-        1,
-        -60
-    ),
-
-    BackgroundColor3 = Config.UI.Sidebar,
-
-    BorderSizePixel = 0,
-})
-
---==================================================
--- SEARCH
---==================================================
-
-local SearchBox = Create("TextBox", {
-    Parent = Sidebar,
-
-    Position = UDim2.new(
-        0,
-        12,
-        0,
-        15
-    ),
-
-    Size = UDim2.new(
-        1,
-        -24,
-        0,
-        36
-    ),
-
-    BackgroundColor3 = Config.UI.Card,
-
-    PlaceholderText = "Search...",
-
-    PlaceholderColor3 = Config.UI.SubText,
-
-    Text = "",
-
-    TextColor3 = Config.UI.Text,
-
-    Font = Enum.Font.Gotham,
-
-    TextSize = 12,
-
-    ClearTextOnFocus = false,
-})
-
-Corner(SearchBox, 8)
-
-Padding(
-    SearchBox,
-    12,
-    8,
-    0,
-    0
-)
-
---==================================================
--- SIDEBAR SCROLL
---==================================================
-
-local SidebarScroll = Create("ScrollingFrame", {
-    Parent = Sidebar,
-
-    Position = UDim2.new(
-        0,
-        0,
-        0,
-        65
-    ),
-
-    Size = UDim2.new(
-        1,
-        0,
-        1,
-        -65
-    ),
-
-    BackgroundTransparency = 1,
-
-    BorderSizePixel = 0,
-
-    ScrollBarThickness = 2,
-
-    ScrollBarImageColor3 = Config.UI.Accent,
-
-    CanvasSize = UDim2.new(0, 0, 0, 0),
-
-    AutomaticCanvasSize = Enum.AutomaticSize.Y,
-})
-
-Padding(
-    SidebarScroll,
-    10,
-    10,
-    8,
-    8
-)
-
-local SidebarLayout = Create("UIListLayout", {
-    Parent = SidebarScroll,
-
-    Padding = UDim.new(0, 5),
-
-    SortOrder = Enum.SortOrder.LayoutOrder,
-})
-
---==================================================
--- CONTENT
---==================================================
-
-local Content = Create("Frame", {
-    Parent = Main,
-
-    Position = UDim2.new(
-        0,
-        195,
-        0,
-        60
-    ),
-
-    Size = UDim2.new(
-        1,
-        -195,
-        1,
-        -60
-    ),
-
-    BackgroundTransparency = 1,
-})
-
-local ContentScroll = Create("ScrollingFrame", {
-    Parent = Content,
-
-    Position = UDim2.new(
-        0,
-        0,
-        0,
-        0
-    ),
-
-    Size = UDim2.new(
-        1,
-        0,
-        1,
-        0
-    ),
-
-    BackgroundTransparency = 1,
-
-    BorderSizePixel = 0,
-
-    ScrollBarThickness = 3,
-
-    ScrollBarImageColor3 = Config.UI.Accent,
-
-    CanvasSize = UDim2.new(0, 0, 0, 0),
-
-    AutomaticCanvasSize = Enum.AutomaticSize.Y,
-})
-
-Padding(
-    ContentScroll,
-    20,
-    20,
-    18,
-    20
-)
-
-local ContentLayout = Create("UIListLayout", {
-    Parent = ContentScroll,
-
-    Padding = UDim.new(0, 12),
-
-    SortOrder = Enum.SortOrder.LayoutOrder,
-})
-
---==================================================
--- NOTIFICATION HOLDER
---==================================================
-
-NotificationHolder = Create("Frame", {
-    Parent = ScreenGui,
-
-    Position = UDim2.new(
-        1,
-        -320,
-        0,
-        20
-    ),
-
-    Size = UDim2.new(
-        0,
-        300,
-        0,
-        400
-    ),
-
-    BackgroundTransparency = 1,
-
-    ZIndex = 200,
-})
-
-Create("UIListLayout", {
-    Parent = NotificationHolder,
-
-    Padding = UDim.new(0, 8),
-
-    VerticalAlignment = Enum.VerticalAlignment.Top,
-
-    HorizontalAlignment = Enum.HorizontalAlignment.Right,
-})
-
---==================================================
--- PAGE SERVICE
---==================================================
-
-local PageService = {}
-
-function PageService:Create(name)
-    local page = Create("Frame", {
-        Parent = ContentScroll,
-
-        Size = UDim2.new(
-            1,
-            0,
-            0,
-            0
-        ),
-
-        AutomaticSize = Enum.AutomaticSize.Y,
-
-        BackgroundTransparency = 1,
-
-        Visible = false,
-    })
-
-    local layout = Create("UIListLayout", {
-        Parent = page,
-
-        Padding = UDim.new(0, 12),
-
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    })
-
-    State.Pages[name] = page
-
-    return page
-end
-
-function PageService:Show(name)
-    if State.Destroyed then
-        return
-    end
-
-    local page = State.Pages[name]
-
-    if not page then
-        return
-    end
-
-    State.CurrentPage = name
-
-    for pageName, frame in pairs(State.Pages) do
-        frame.Visible = pageName == name
-    end
-
-    for pageName, button in pairs(State.Buttons) do
-        local active = pageName == name
-
-        if active then
-            Tween(button, {
-                BackgroundColor3 = Config.UI.Accent,
-            }, 0.15)
-        else
-            Tween(button, {
-                BackgroundColor3 = Config.UI.Sidebar,
-            }, 0.15)
-        end
-    end
-
-    ContentScroll.CanvasPosition = Vector2.new(0, 0)
-end
-
---==================================================
--- COMPONENTS
---==================================================
-
-local Components = {}
-
-function Components:Section(parent, title, subtitle)
-    local section = Create("Frame", {
-        Parent = parent,
-
-        Size = UDim2.new(
-            1,
-            0,
-            0,
-            58
-        ),
-
-        BackgroundColor3 = Config.UI.Secondary,
-    })
-
-    Corner(section, 10)
-
-    Stroke(
-        section,
-        Color3.fromRGB(40, 40, 55),
-        1
-    )
-
-    local titleLabel = Create("TextLabel", {
-        Parent = section,
-
-        BackgroundTransparency = 1,
-
-        Position = UDim2.new(
-            0,
-            15,
-            0,
-            9
-        ),
-
-        Size = UDim2.new(
-            1,
-            -30,
-            0,
-            20
-        ),
-
-        Text = title,
-
-        Font = Enum.Font.GothamBold,
-
-        TextSize = 14,
-
-        TextColor3 = Config.UI.Text,
-
-        TextXAlignment = Enum.TextXAlignment.Left,
-    })
-
-    if subtitle then
-        Create("TextLabel", {
-            Parent = section,
-
-            BackgroundTransparency = 1,
-
-            Position = UDim2.new(
-                0,
-                15,
-                0,
-                29
-            ),
-
-            Size = UDim2.new(
-                1,
-                -30,
-                0,
-                18
-            ),
-
-            Text = subtitle,
-
-            Font = Enum.Font.Gotham,
-
-            TextSize = 11,
-
-            TextColor3 = Config.UI.SubText,
-
-            TextXAlignment = Enum.TextXAlignment.Left,
-        })
-    end
-
-    return section
-end
-
-function Components:Card(parent, title, value)
-    local card = Create("Frame", {
-        Parent = parent,
-
-        Size = UDim2.new(
-            0.5,
-            -6,
-            0,
-            85
-        ),
-
-        BackgroundColor3 = Config.UI.Card,
-    })
-
-    Corner(card, 10)
-
-    Stroke(
-        card,
-        Color3.fromRGB(42, 42, 57),
-        1
-    )
-
-    Create("TextLabel", {
-        Parent = card,
-
-        BackgroundTransparency = 1,
-
-        Position = UDim2.new(
-            0,
-            14,
-            0,
-            12
-        ),
-
-        Size = UDim2.new(
-            1,
-            -28,
-            0,
-            18
-        ),
-
-        Text = title,
-
-        Font = Enum.Font.GothamMedium,
-
-        TextSize = 10,
-
-        TextColor3 = Config.UI.SubText,
-
-        TextXAlignment = Enum.TextXAlignment.Left,
-    })
-
-    local valueLabel = Create("TextLabel", {
-        Parent = card,
-
-        BackgroundTransparency = 1,
-
-        Position = UDim2.new(
-            0,
-            14,
-            0,
-            33
-        ),
-
-        Size = UDim2.new(
-            1,
-            -28,
-            0,
-            35
-        ),
-
-        Text = tostring(value),
-
-        Font = Enum.Font.GothamBold,
-
-        TextSize = 20,
-
-        TextColor3 = Config.UI.Text,
-
-        TextXAlignment = Enum.TextXAlignment.Left,
-    })
-
-    State.Cards[title] = valueLabel
-
-    return card, valueLabel
-end
-
-function Components:Toggle(parent, title, description, default, callback)
-    local row = Create("Frame", {
-        Parent = parent,
-
-        Size = UDim2.new(
-            1,
-            0,
-            0,
-            64
-        ),
-
-        BackgroundColor3 = Config.UI.Card,
-    })
-
-    Corner(row, 9)
-
-    Stroke(
-        row,
-        Color3.fromRGB(42, 42, 57),
-        1
-    )
-
-    local titleLabel = Create("TextLabel", {
-        Parent = row,
 
         BackgroundTransparency = 1,
 
@@ -1315,155 +599,1146 @@ function Components:Toggle(parent, title, description, default, callback)
 
         Size = UDim2.new(
             1,
-            -85,
+            -28,
             0,
-            20
+            18
         ),
 
         Text = title,
 
-        Font = Enum.Font.GothamMedium,
+        Font = Enum.Font.GothamBold,
 
         TextSize = 13,
 
-        TextColor3 = Config.UI.Text,
+        TextColor3 =
+            Config.UI.Text,
 
-        TextXAlignment = Enum.TextXAlignment.Left,
+        TextXAlignment =
+            Enum.TextXAlignment.Left,
+
     })
 
-    if description then
-        Create("TextLabel", {
-            Parent = row,
+    local messageLabel = Create("TextLabel", {
+
+        Parent = notification,
+
+        BackgroundTransparency = 1,
+
+        Position = UDim2.new(
+            0,
+            14,
+            0,
+            32
+        ),
+
+        Size = UDim2.new(
+            1,
+            -28,
+            0,
+            25
+        ),
+
+        Text = message,
+
+        Font = Enum.Font.Gotham,
+
+        TextSize = 11,
+
+        TextColor3 =
+            Config.UI.SubText,
+
+        TextXAlignment =
+            Enum.TextXAlignment.Left,
+
+    })
+
+    Tween(
+        notification,
+        {
+            BackgroundTransparency = 0
+        },
+        0.25,
+        Enum.EasingStyle.Quint
+    )
+
+    Tween(
+        scale,
+        {
+            Scale = 1
+        },
+        0.35,
+        Enum.EasingStyle.Back
+    )
+
+    task.delay(
+        Config.Notifications.Duration,
+        function()
+
+            if not notification.Parent then
+                return
+            end
+
+            Tween(
+                scale,
+                {
+                    Scale = 0.94
+                },
+                0.2
+            )
+
+            Tween(
+                notification,
+                {
+                    BackgroundTransparency = 1
+                },
+                0.25
+            )
+
+            task.wait(0.3)
+
+            if notification then
+                notification:Destroy()
+            end
+
+        end
+    )
+end
+
+--==================================================
+-- SCREEN GUI
+--==================================================
+
+local ScreenGui = Create("ScreenGui", {
+
+    Name = "FloquitaveUI",
+
+    ResetOnSpawn = false,
+
+    ZIndexBehavior =
+        Enum.ZIndexBehavior.Sibling,
+
+})
+
+pcall(function()
+
+    if syn and syn.protect_gui then
+        syn.protect_gui(ScreenGui)
+    end
+
+end)
+
+ScreenGui.Parent = CoreGui
+
+--==================================================
+-- MAIN CONTAINER
+--==================================================
+
+local Main = Create("Frame", {
+
+    Parent = ScreenGui,
+
+    AnchorPoint = Vector2.new(
+        0.5,
+        0.5
+    ),
+
+    Position = UDim2.new(
+        0.5,
+        0,
+        0.5,
+        0
+    ),
+
+    Size = UDim2.new(
+        0,
+        Config.UI.Width,
+        0,
+        Config.UI.Height
+    ),
+
+    BackgroundColor3 =
+        Config.UI.Background,
+
+    BorderSizePixel = 0,
+
+})
+
+Corner(Main, 14)
+
+local MainStroke = Stroke(
+    Main,
+    Config.UI.Accent,
+    0.75
+)
+
+local MainScale = Instance.new("UIScale")
+
+MainScale.Scale = 0.94
+MainScale.Parent = Main
+
+--==================================================
+-- OPEN ANIMATION
+--==================================================
+
+task.defer(function()
+
+    Tween(
+        MainScale,
+        {
+            Scale = Config.UI.Scale
+        },
+        0.45,
+        Enum.EasingStyle.Quint,
+        Enum.EasingDirection.Out
+    )
+
+end)
+
+--==================================================
+-- TOP BAR
+--==================================================
+
+local Topbar = Create("Frame", {
+
+    Parent = Main,
+
+    Size = UDim2.new(
+        1,
+        0,
+        0,
+        58
+    ),
+
+    BackgroundColor3 =
+        Config.UI.Secondary,
+
+    BorderSizePixel = 0,
+
+})
+
+Corner(Topbar, 14)
+
+local TopbarLine = Create("Frame", {
+
+    Parent = Topbar,
+
+    Position = UDim2.new(
+        0,
+        0,
+        1,
+        -1
+    ),
+
+    Size = UDim2.new(
+        1,
+        0,
+        0,
+        1
+    ),
+
+    BackgroundColor3 =
+        Config.UI.Accent,
+
+    BackgroundTransparency = 0.75,
+
+    BorderSizePixel = 0,
+
+})
+
+--==================================================
+-- LOGO
+--==================================================
+
+local Logo = Create("TextLabel", {
+
+    Parent = Topbar,
+
+    Position = UDim2.new(
+        0,
+        18,
+        0.5,
+        -18
+    ),
+
+    Size = UDim2.new(
+        0,
+        36,
+        0,
+        36
+    ),
+
+    BackgroundColor3 =
+        Config.UI.Accent,
+
+    Text = "F",
+
+    Font = Enum.Font.GothamBold,
+
+    TextSize = 20,
+
+    TextColor3 =
+        Color3.fromRGB(
+            255,
+            255,
+            255
+        ),
+
+})
+
+Corner(Logo, 10)
+
+--==================================================
+-- TITLE
+--==================================================
+
+local Title = Create("TextLabel", {
+
+    Parent = Topbar,
+
+    Position = UDim2.new(
+        0,
+        68,
+        0,
+        10
+    ),
+
+    Size = UDim2.new(
+        0,
+        300,
+        0,
+        22
+    ),
+
+    BackgroundTransparency = 1,
+
+    Text = Config.Name,
+
+    Font = Enum.Font.GothamBold,
+
+    TextSize = 16,
+
+    TextColor3 =
+        Config.UI.Text,
+
+    TextXAlignment =
+        Enum.TextXAlignment.Left,
+
+})
+
+local VersionLabel = Create("TextLabel", {
+
+    Parent = Topbar,
+
+    Position = UDim2.new(
+        0,
+        68,
+        0,
+        31
+    ),
+
+    Size = UDim2.new(
+        0,
+        200,
+        0,
+        16
+    ),
+
+    BackgroundTransparency = 1,
+
+    Text = "Version " .. Config.Version,
+
+    Font = Enum.Font.Gotham,
+
+    TextSize = 10,
+
+    TextColor3 =
+        Config.UI.SubText,
+
+    TextXAlignment =
+        Enum.TextXAlignment.Left,
+
+})
+
+--==================================================
+-- TOPBAR BUTTONS
+--==================================================
+
+local MinimizeButton = Create("TextButton", {
+
+    Parent = Topbar,
+
+    Position = UDim2.new(
+        1,
+        -92,
+        0.5,
+        -16
+    ),
+
+    Size = UDim2.new(
+        0,
+        32,
+        0,
+        32
+    ),
+
+    BackgroundColor3 =
+        Config.UI.Card,
+
+    Text = "—",
+
+    Font = Enum.Font.GothamBold,
+
+    TextSize = 16,
+
+    TextColor3 =
+        Config.UI.Text,
+
+    AutoButtonColor = false,
+
+})
+
+Corner(MinimizeButton, 8)
+
+local CloseButton = Create("TextButton", {
+
+    Parent = Topbar,
+
+    Position = UDim2.new(
+        1,
+        -52,
+        0.5,
+        -16
+    ),
+
+    Size = UDim2.new(
+        0,
+        32,
+        0,
+        32
+    ),
+
+    BackgroundColor3 =
+        Color3.fromRGB(
+            60,
+            35,
+            45
+        ),
+
+    Text = "×",
+
+    Font = Enum.Font.GothamBold,
+
+    TextSize = 18,
+
+    TextColor3 =
+        Color3.fromRGB(
+            255,
+            255,
+            255
+        ),
+
+    AutoButtonColor = false,
+
+})
+
+Corner(CloseButton, 8)
+
+AddHoverEffect(
+    MinimizeButton,
+    1.06
+)
+
+AddHoverEffect(
+    CloseButton,
+    1.06
+)
+
+--==================================================
+-- BODY
+--==================================================
+
+local Body = Create("Frame", {
+
+    Parent = Main,
+
+    Position = UDim2.new(
+        0,
+        0,
+        0,
+        58
+    ),
+
+    Size = UDim2.new(
+        1,
+        0,
+        1,
+        -58
+    ),
+
+    BackgroundTransparency = 1,
+
+})
+
+--==================================================
+-- SIDEBAR
+--==================================================
+
+local Sidebar = Create("Frame", {
+
+    Parent = Body,
+
+    Size = UDim2.new(
+        0,
+        190,
+        1,
+        0
+    ),
+
+    BackgroundColor3 =
+        Config.UI.Sidebar,
+
+    BorderSizePixel = 0,
+
+})
+
+local SidebarPadding = Padding(
+    Sidebar,
+    12
+)
+
+--==================================================
+-- SEARCH
+--==================================================
+
+local SearchBox = Create("TextBox", {
+
+    Parent = Sidebar,
+
+    Size = UDim2.new(
+        1,
+        0,
+        0,
+        38
+    ),
+
+    BackgroundColor3 =
+        Config.UI.Card,
+
+    PlaceholderText =
+        "Search pages...",
+
+    PlaceholderColor3 =
+        Config.UI.SubText,
+
+    Text = "",
+
+    Font = Enum.Font.Gotham,
+
+    TextSize = 11,
+
+    TextColor3 =
+        Config.UI.Text,
+
+    ClearTextOnFocus = false,
+
+})
+
+Corner(SearchBox, 9)
+
+--==================================================
+-- PAGE LIST
+--==================================================
+
+local PageList = Create("ScrollingFrame", {
+
+    Parent = Sidebar,
+
+    Position = UDim2.new(
+        0,
+        0,
+        0,
+        52
+    ),
+
+    Size = UDim2.new(
+        1,
+        0,
+        1,
+        -52
+    ),
+
+    BackgroundTransparency = 1,
+
+    BorderSizePixel = 0,
+
+    ScrollBarThickness = 2,
+
+    ScrollBarImageColor3 =
+        Config.UI.Accent,
+
+    CanvasSize = UDim2.new(
+        0,
+        0,
+        0,
+        0
+    ),
+
+})
+
+local PageLayout = Instance.new(
+    "UIListLayout"
+)
+
+PageLayout.Padding = UDim.new(
+    0,
+    6
+)
+
+PageLayout.Parent = PageList
+
+--==================================================
+-- CONTENT
+--==================================================
+
+local Content = Create("ScrollingFrame", {
+
+    Parent = Body,
+
+    Position = UDim2.new(
+        0,
+        190,
+        0,
+        0
+    ),
+
+    Size = UDim2.new(
+        1,
+        -190,
+        1,
+        0
+    ),
+
+    BackgroundColor3 =
+        Config.UI.Background,
+
+    BorderSizePixel = 0,
+
+    ScrollBarThickness = 3,
+
+    ScrollBarImageColor3 =
+        Config.UI.Accent,
+
+    CanvasSize = UDim2.new(
+        0,
+        0,
+        0,
+        0
+    ),
+
+})
+
+Padding(Content, 18)
+
+local ContentLayout = Instance.new(
+    "UIListLayout"
+)
+
+ContentLayout.Padding = UDim.new(
+    0,
+    12
+)
+
+ContentLayout.SortOrder =
+    Enum.SortOrder.LayoutOrder
+
+ContentLayout.Parent = Content
+
+--==================================================
+-- NOTIFICATION HOLDER
+--==================================================
+
+NotificationHolder = Create(
+    "Frame",
+    {
+
+        Parent = ScreenGui,
+
+        AnchorPoint =
+            Vector2.new(1, 0),
+
+        Position = UDim2.new(
+            1,
+            -18,
+            0,
+            18
+        ),
+
+        Size = UDim2.new(
+            0,
+            290,
+            0,
+            0
+        ),
+
+        BackgroundTransparency = 1,
+
+    }
+)
+
+local NotificationLayout =
+    Instance.new("UIListLayout")
+
+NotificationLayout.Padding =
+    UDim.new(0, 8)
+
+NotificationLayout.VerticalAlignment =
+    Enum.VerticalAlignment.Top
+
+NotificationLayout.Parent =
+    NotificationHolder
+
+--==================================================
+-- COMPONENTS
+--==================================================
+
+local Components = {}
+
+function Components:Section(
+    parent,
+    title,
+    description
+)
+
+    local section = Create(
+        "Frame",
+        {
+
+            Parent = parent,
+
+            Size = UDim2.new(
+                1,
+                0,
+                0,
+                44
+            ),
 
             BackgroundTransparency = 1,
+
+        }
+    )
+
+    local titleLabel = Create(
+        "TextLabel",
+        {
+
+            Parent = section,
+
+            Size = UDim2.new(
+                1,
+                0,
+                0,
+                22
+            ),
+
+            BackgroundTransparency = 1,
+
+            Text = title,
+
+            Font = Enum.Font.GothamBold,
+
+            TextSize = 14,
+
+            TextColor3 =
+                Config.UI.Text,
+
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
+
+        }
+    )
+
+    local descriptionLabel =
+        Create(
+            "TextLabel",
+            {
+
+                Parent = section,
+
+                Position = UDim2.new(
+                    0,
+                    0,
+                    0,
+                    22
+                ),
+
+                Size = UDim2.new(
+                    1,
+                    0,
+                    0,
+                    18
+                ),
+
+                BackgroundTransparency = 1,
+
+                Text = description or "",
+
+                Font = Enum.Font.Gotham,
+
+                TextSize = 10,
+
+                TextColor3 =
+                    Config.UI.SubText,
+
+                TextXAlignment =
+                    Enum.TextXAlignment.Left,
+
+            }
+        )
+
+    return section
+end
+
+function Components:Card(
+    parent,
+    title,
+    value
+)
+
+    local card = Create(
+        "Frame",
+        {
+
+            Parent = parent,
+
+            BackgroundColor3 =
+                Config.UI.Card,
+
+            BorderSizePixel = 0,
+
+        }
+    )
+
+    Corner(card, 10)
+
+    AddHoverEffect(
+        card,
+        1.015
+    )
+
+    local titleLabel =
+        Create(
+            "TextLabel",
+            {
+
+                Parent = card,
+
+                Position = UDim2.new(
+                    0,
+                    12,
+                    0,
+                    10
+                ),
+
+                Size = UDim2.new(
+                    1,
+                    -24,
+                    0,
+                    16
+                ),
+
+                BackgroundTransparency = 1,
+
+                Text = title,
+
+                Font = Enum.Font.GothamMedium,
+
+                TextSize = 9,
+
+                TextColor3 =
+                    Config.UI.SubText,
+
+                TextXAlignment =
+                    Enum.TextXAlignment.Left,
+
+            }
+        )
+
+    local valueLabel =
+        Create(
+            "TextLabel",
+            {
+
+                Parent = card,
+
+                Position = UDim2.new(
+                    0,
+                    12,
+                    0,
+                    30
+                ),
+
+                Size = UDim2.new(
+                    1,
+                    -24,
+                    0,
+                    28
+                ),
+
+                BackgroundTransparency = 1,
+
+                Text = tostring(value),
+
+                Font = Enum.Font.GothamBold,
+
+                TextSize = 17,
+
+                TextColor3 =
+                    Config.UI.Text,
+
+                TextXAlignment =
+                    Enum.TextXAlignment.Left,
+
+            }
+        )
+
+    State.Cards[title] = {
+        Frame = card,
+        Value = valueLabel,
+    }
+
+    return card
+end
+
+function Components:Toggle(
+    parent,
+    title,
+    default,
+    callback
+)
+
+    local holder = Create(
+        "Frame",
+        {
+
+            Parent = parent,
+
+            Size = UDim2.new(
+                1,
+                0,
+                0,
+                48
+            ),
+
+            BackgroundColor3 =
+                Config.UI.Card,
+
+            BorderSizePixel = 0,
+
+        }
+    )
+
+    Corner(holder, 10)
+
+    local label = Create(
+        "TextLabel",
+        {
+
+            Parent = holder,
 
             Position = UDim2.new(
                 0,
                 14,
                 0,
-                31
+                0
             ),
 
             Size = UDim2.new(
                 1,
-                -85,
-                0,
-                18
+                -80,
+                1,
+                0
             ),
 
-            Text = description,
+            BackgroundTransparency = 1,
 
-            Font = Enum.Font.Gotham,
+            Text = title,
 
-            TextSize = 10,
+            Font = Enum.Font.GothamMedium,
 
-            TextColor3 = Config.UI.SubText,
+            TextSize = 11,
 
-            TextXAlignment = Enum.TextXAlignment.Left,
-        })
-    end
+            TextColor3 =
+                Config.UI.Text,
 
-    local button = Create("TextButton", {
-        Parent = row,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-        Position = UDim2.new(
-            1,
-            -58,
-            0.5,
-            -13
-        ),
+        }
+    )
 
-        Size = UDim2.new(
-            0,
-            44,
-            0,
-            26
-        ),
+    local button = Create(
+        "TextButton",
+        {
 
-        BackgroundColor3 = Color3.fromRGB(
-            45,
-            45,
-            55
-        ),
+            Parent = holder,
 
-        Text = "",
+            AnchorPoint =
+                Vector2.new(1, 0.5),
 
-        AutoButtonColor = false,
-    })
+            Position = UDim2.new(
+                1,
+                -12,
+                0.5,
+                0
+            ),
 
-    Corner(button, 13)
+            Size = UDim2.new(
+                0,
+                42,
+                0,
+                22
+            ),
 
-    local knob = Create("Frame", {
-        Parent = button,
+            BackgroundColor3 =
+                Color3.fromRGB(
+                    50,
+                    50,
+                    60
+                ),
 
-        Position = UDim2.new(
-            0,
-            3,
-            0.5,
-            -9
-        ),
+            Text = "",
 
-        Size = UDim2.new(
-            0,
-            18,
-            0,
-            18
-        ),
+            AutoButtonColor = false,
 
-        BackgroundColor3 = Color3.fromRGB(
-            190,
-            190,
-            200
-        ),
-    })
+        }
+    )
 
-    Corner(knob, 100)
+    Corner(button, 11)
+
+    local knob = Create(
+        "Frame",
+        {
+
+            Parent = button,
+
+            Position = UDim2.new(
+                0,
+                3,
+                0.5,
+                -8
+            ),
+
+            Size = UDim2.new(
+                0,
+                16,
+                0,
+                16
+            ),
+
+            BackgroundColor3 =
+                Color3.fromRGB(
+                    230,
+                    230,
+                    235
+                ),
+
+        }
+    )
+
+    Corner(knob, 8)
 
     local enabled = default == true
 
-    local function Update()
+    local function UpdateToggle(
+        animate
+    )
+
+        local duration =
+            animate and 0.25 or 0
+
         if enabled then
-            Tween(button, {
-                BackgroundColor3 = Config.UI.Accent
-            }, 0.15)
 
-            Tween(knob, {
-                Position = UDim2.new(
-                    1,
-                    -21,
-                    0.5,
-                    -9
-                )
-            }, 0.15)
+            Tween(
+                button,
+                {
+                    BackgroundColor3 =
+                        Config.UI.Accent
+                },
+                duration,
+                Enum.EasingStyle.Sine
+            )
+
+            Tween(
+                knob,
+                {
+                    Position =
+                        UDim2.new(
+                            1,
+                            -19,
+                            0.5,
+                            -8
+                        )
+                },
+                duration,
+                Enum.EasingStyle.Back
+            )
+
         else
-            Tween(button, {
-                BackgroundColor3 = Color3.fromRGB(
-                    45,
-                    45,
-                    55
-                )
-            }, 0.15)
 
-            Tween(knob, {
-                Position = UDim2.new(
-                    0,
-                    3,
-                    0.5,
-                    -9
-                )
-            }, 0.15)
+            Tween(
+                button,
+                {
+                    BackgroundColor3 =
+                        Color3.fromRGB(
+                            50,
+                            50,
+                            60
+                        )
+                },
+                duration,
+                Enum.EasingStyle.Sine
+            )
+
+            Tween(
+                knob,
+                {
+                    Position =
+                        UDim2.new(
+                            0,
+                            3,
+                            0.5,
+                            -8
+                        )
+                },
+                duration,
+                Enum.EasingStyle.Back
+            )
+
         end
+
     end
 
-    Connect(button.MouseButton1Click, function()
-        enabled = not enabled
+    Connect(
+        button.MouseButton1Click,
+        function()
 
-        Update()
+            enabled = not enabled
 
-        if callback then
-            callback(enabled)
+            UpdateToggle(true)
+
+            if callback then
+                callback(enabled)
+            end
+
         end
-    end)
+    )
+
+    AddHoverEffect(
+        button,
+        1.05
+    )
+
+    UpdateToggle(false)
 
     State.Toggles[title] = {
         Get = function()
@@ -1471,34 +1746,153 @@ function Components:Toggle(parent, title, description, default, callback)
         end,
 
         Set = function(value)
+
             enabled = value == true
 
-            Update()
+            UpdateToggle(true)
 
             if callback then
                 callback(enabled)
             end
+
         end,
     }
 
-    Update()
-
-    return row
+    return holder
 end
 
 --==================================================
--- PAGE CREATION
+-- PAGE SERVICE
 --==================================================
 
-local HomePage = PageService:Create("Home")
-local FarmPage = PageService:Create("Main Farm")
-local QuestPage = PageService:Create("Quest")
-local RaidsPage = PageService:Create("Raids")
-local CombatPage = PageService:Create("Combat")
-local TeleportPage = PageService:Create("Teleport")
-local PlayerPage = PageService:Create("Player")
-local MiscPage = PageService:Create("Misc")
-local SettingsPage = PageService:Create("Settings")
+local PageService = {}
+
+function PageService:Create(
+    name
+)
+
+    local page = Create(
+        "Frame",
+        {
+
+            Parent = Content,
+
+            Size = UDim2.new(
+                1,
+                -4,
+                0,
+                0
+            ),
+
+            AutomaticSize =
+                Enum.AutomaticSize.Y,
+
+            BackgroundTransparency = 1,
+
+            Visible = false,
+
+        }
+    )
+
+    local layout =
+        Instance.new("UIListLayout")
+
+    layout.Padding =
+        UDim.new(0, 12)
+
+    layout.SortOrder =
+        Enum.SortOrder.LayoutOrder
+
+    layout.Parent = page
+
+    State.Pages[name] = page
+
+    return page
+end
+
+function PageService:Show(name)
+
+    for pageName, page in pairs(
+        State.Pages
+    ) do
+
+        page.Visible =
+            pageName == name
+
+    end
+
+    State.CurrentPage = name
+
+    for _, buttonData in pairs(
+        State.Buttons
+    ) do
+
+        local button =
+            buttonData.Button
+
+        if buttonData.Name == name then
+
+            Tween(
+                button,
+                {
+                    BackgroundColor3 =
+                        Config.UI.Accent
+                },
+                0.22,
+                Enum.EasingStyle.Sine
+            )
+
+        else
+
+            Tween(
+                button,
+                {
+                    BackgroundColor3 =
+                        Config.UI.Card
+                },
+                0.22,
+                Enum.EasingStyle.Sine
+            )
+
+        end
+
+    end
+
+    Content.CanvasPosition =
+        Vector2.new(0, 0)
+
+end
+
+--==================================================
+-- PAGES
+--==================================================
+
+local HomePage =
+    PageService:Create("Home")
+
+local FarmPage =
+    PageService:Create("Main Farm")
+
+local QuestPage =
+    PageService:Create("Quest")
+
+local RaidPage =
+    PageService:Create("Raids")
+
+local CombatPage =
+    PageService:Create("Combat")
+
+local TeleportPage =
+    PageService:Create("Teleport")
+
+local PlayerPage =
+    PageService:Create("Player")
+
+local MiscPage =
+    PageService:Create("Misc")
+
+local SettingsPage =
+    PageService:Create("Settings")
 
 --==================================================
 -- HOME
@@ -1507,130 +1901,155 @@ local SettingsPage = PageService:Create("Settings")
 Components:Section(
     HomePage,
     "Welcome to Floquitave",
-    "Control center and session information"
+    "Interface and live session information"
 )
 
-local WelcomeCard = Create("Frame", {
-    Parent = HomePage,
+local Welcome = Create(
+    "Frame",
+    {
 
-    Size = UDim2.new(
-        1,
-        0,
-        0,
-        110
-    ),
+        Parent = HomePage,
 
-    BackgroundColor3 = Config.UI.Secondary,
-})
+        Size = UDim2.new(
+            1,
+            0,
+            0,
+            92
+        ),
 
-Corner(WelcomeCard, 10)
+        BackgroundColor3 =
+            Config.UI.Secondary,
 
-Stroke(
-    WelcomeCard,
-    Config.UI.Accent,
-    1
+    }
 )
 
-Create("TextLabel", {
-    Parent = WelcomeCard,
+Corner(Welcome, 12)
 
-    BackgroundTransparency = 1,
+local WelcomeTitle = Create(
+    "TextLabel",
+    {
 
-    Position = UDim2.new(
-        0,
-        18,
-        0,
-        15
-    ),
+        Parent = Welcome,
 
-    Size = UDim2.new(
-        1,
-        -36,
-        0,
-        25
-    ),
+        Position = UDim2.new(
+            0,
+            18,
+            0,
+            15
+        ),
 
-    Text = "Floquitave",
+        Size = UDim2.new(
+            1,
+            -36,
+            0,
+            24
+        ),
 
-    Font = Enum.Font.GothamBold,
+        BackgroundTransparency = 1,
 
-    TextSize = 21,
+        Text = "Welcome back, "
+            .. LocalPlayer.DisplayName,
 
-    TextColor3 = Config.UI.Text,
+        Font = Enum.Font.GothamBold,
 
-    TextXAlignment = Enum.TextXAlignment.Left,
-})
+        TextSize = 17,
 
-local WelcomeDescription = Create("TextLabel", {
-    Parent = WelcomeCard,
+        TextColor3 =
+            Config.UI.Text,
 
-    BackgroundTransparency = 1,
+        TextXAlignment =
+            Enum.TextXAlignment.Left,
 
-    Position = UDim2.new(
-        0,
-        18,
-        0,
-        45
-    ),
+    }
+)
 
-    Size = UDim2.new(
-        1,
-        -36,
-        0,
-        45
-    ),
+local WelcomeSub = Create(
+    "TextLabel",
+    {
 
-    Text = "Your session dashboard is ready. Monitor player, server and interface information from one place.",
+        Parent = Welcome,
 
-    Font = Enum.Font.Gotham,
+        Position = UDim2.new(
+            0,
+            18,
+            0,
+            43
+        ),
 
-    TextSize = 11,
+        Size = UDim2.new(
+            1,
+            -36,
+            0,
+            32
+        ),
 
-    TextColor3 = Config.UI.SubText,
+        BackgroundTransparency = 1,
 
-    TextWrapped = true,
+        Text =
+            "Floquitave is running correctly. "
+            .. "Use the sidebar to explore the interface.",
 
-    TextXAlignment = Enum.TextXAlignment.Left,
+        Font = Enum.Font.Gotham,
 
-    TextYAlignment = Enum.TextYAlignment.Top,
-})
+        TextSize = 11,
+
+        TextColor3 =
+            Config.UI.SubText,
+
+        TextWrapped = true,
+
+        TextXAlignment =
+            Enum.TextXAlignment.Left,
+
+    }
+)
 
 --==================================================
 -- HOME CARDS
 --==================================================
 
-local CardsContainer = Create("Frame", {
-    Parent = HomePage,
+local CardsContainer = Create(
+    "Frame",
+    {
 
-    Size = UDim2.new(
-        1,
-        0,
-        0,
-        184
-    ),
+        Parent = HomePage,
 
-    BackgroundTransparency = 1,
-})
+        Size = UDim2.new(
+            1,
+            0,
+            0,
+            174
+        ),
 
-local CardsGrid = Create("UIGridLayout", {
-    Parent = CardsContainer,
+        BackgroundTransparency = 1,
 
-    CellSize = UDim2.new(
+    }
+)
+
+local CardsGrid =
+    Instance.new("UIGridLayout")
+
+CardsGrid.CellSize =
+    UDim2.new(
         0.25,
         -9,
         0,
-        85
-    ),
+        78
+    )
 
-    CellPadding = UDim2.new(
+CardsGrid.CellPadding =
+    UDim2.new(
         0,
         10,
         0,
         10
-    ),
+    )
 
-    SortOrder = Enum.SortOrder.LayoutOrder,
-})
+CardsGrid.SortOrder =
+    Enum.SortOrder.LayoutOrder
+
+CardsGrid.Parent =
+    CardsContainer
 
 Components:Card(
     CardsContainer,
@@ -1681,270 +2100,241 @@ Components:Card(
 )
 
 --==================================================
--- LEVEL PROGRESS
+-- SESSION STATUS
 --==================================================
 
-local ProgressSection = Components:Section(
-    HomePage,
-    "Level Progress",
-    "Current character progression"
+local StatusSection =
+    Components:Section(
+        HomePage,
+        "Session",
+        "Current script session status"
+    )
+
+local StatusCard = Create(
+    "Frame",
+    {
+
+        Parent = HomePage,
+
+        Size = UDim2.new(
+            1,
+            0,
+            0,
+            64
+        ),
+
+        BackgroundColor3 =
+            Config.UI.Card,
+
+    }
 )
-
-local ProgressContainer = Create("Frame", {
-    Parent = HomePage,
-
-    Size = UDim2.new(
-        1,
-        0,
-        0,
-        70
-    ),
-
-    BackgroundColor3 = Config.UI.Card,
-})
-
-Corner(ProgressContainer, 10)
-
-local ProgressBackground = Create("Frame", {
-    Parent = ProgressContainer,
-
-    Position = UDim2.new(
-        0,
-        15,
-        0.5,
-        -5
-    ),
-
-    Size = UDim2.new(
-        1,
-        -30,
-        0,
-        10
-    ),
-
-    BackgroundColor3 = Color3.fromRGB(
-        45,
-        45,
-        55
-    ),
-})
-
-Corner(ProgressBackground, 10)
-
-local ProgressBar = Create("Frame", {
-    Parent = ProgressBackground,
-
-    Size = UDim2.new(
-        0,
-        0,
-        1,
-        0
-    ),
-
-    BackgroundColor3 = Config.UI.Accent,
-})
-
-Corner(ProgressBar, 10)
-
-local ProgressText = Create("TextLabel", {
-    Parent = ProgressContainer,
-
-    BackgroundTransparency = 1,
-
-    Position = UDim2.new(
-        0,
-        15,
-        0,
-        8
-    ),
-
-    Size = UDim2.new(
-        1,
-        -30,
-        0,
-        18
-    ),
-
-    Text = "Level progress",
-
-    Font = Enum.Font.GothamMedium,
-
-    TextSize = 10,
-
-    TextColor3 = Config.UI.SubText,
-
-    TextXAlignment = Enum.TextXAlignment.Right,
-})
-
---==================================================
--- STATUS
---==================================================
-
-local StatusCard = Create("Frame", {
-    Parent = HomePage,
-
-    Size = UDim2.new(
-        1,
-        0,
-        0,
-        72
-    ),
-
-    BackgroundColor3 = Config.UI.Secondary,
-})
 
 Corner(StatusCard, 10)
 
-Stroke(
-    StatusCard,
-    Color3.fromRGB(42, 42, 57),
-    1
+local StatusDot = Create(
+    "Frame",
+    {
+
+        Parent = StatusCard,
+
+        Position = UDim2.new(
+            0,
+            16,
+            0.5,
+            -6
+        ),
+
+        Size = UDim2.new(
+            0,
+            12,
+            0,
+            12
+        ),
+
+        BackgroundColor3 =
+            Color3.fromRGB(
+                90,
+                220,
+                130
+            ),
+
+    }
 )
 
-Create("TextLabel", {
-    Parent = StatusCard,
+Corner(StatusDot, 6)
 
-    BackgroundTransparency = 1,
+local StatusText = Create(
+    "TextLabel",
+    {
 
-    Position = UDim2.new(
-        0,
-        15,
-        0,
-        10
-    ),
+        Parent = StatusCard,
 
-    Size = UDim2.new(
-        0,
-        100,
-        0,
-        20
-    ),
+        Position = UDim2.new(
+            0,
+            38,
+            0,
+            14
+        ),
 
-    Text = "SESSION",
+        Size = UDim2.new(
+            1,
+            -50,
+            0,
+            18
+        ),
 
-    Font = Enum.Font.GothamBold,
+        BackgroundTransparency = 1,
 
-    TextSize = 11,
+        Text =
+            "Floquitave is active",
 
-    TextColor3 = Config.UI.SubText,
+        Font = Enum.Font.GothamMedium,
 
-    TextXAlignment = Enum.TextXAlignment.Left,
-})
+        TextSize = 11,
 
-local StatusText = Create("TextLabel", {
-    Parent = StatusCard,
+        TextColor3 =
+            Config.UI.Text,
 
-    BackgroundTransparency = 1,
+        TextXAlignment =
+            Enum.TextXAlignment.Left,
 
-    Position = UDim2.new(
-        0,
-        15,
-        0,
-        30
-    ),
+    }
+)
 
-    Size = UDim2.new(
-        1,
-        -30,
-        0,
-        25
-    ),
+local StatusSub = Create(
+    "TextLabel",
+    {
 
-    Text = "Online",
+        Parent = StatusCard,
 
-    Font = Enum.Font.GothamMedium,
+        Position = UDim2.new(
+            0,
+            38,
+            0,
+            33
+        ),
 
-    TextSize = 12,
+        Size = UDim2.new(
+            1,
+            -50,
+            0,
+            16
+        ),
 
-    TextColor3 = Config.UI.Text,
+        BackgroundTransparency = 1,
 
-    TextXAlignment = Enum.TextXAlignment.Left,
-})
+        Text =
+            "Live diagnostics are updating.",
+
+        Font = Enum.Font.Gotham,
+
+        TextSize = 9,
+
+        TextColor3 =
+            Config.UI.SubText,
+
+        TextXAlignment =
+            Enum.TextXAlignment.Left,
+
+    }
+)
 
 --==================================================
--- MAIN FARM PAGE
+-- MAIN FARM
 --==================================================
 
 Components:Section(
     FarmPage,
     "Main Farm",
-    "Automation interface foundation"
+    "Interface controls reserved for future modules"
 )
 
 Components:Toggle(
     FarmPage,
     "Auto Farm",
-    "Test interface — module not connected.",
     false,
     function(enabled)
+
         NotificationService:Notify(
             "Auto Farm",
-            enabled and "Enabled" or "Disabled"
+            enabled
+                and "Test toggle enabled."
+                or "Test toggle disabled."
         )
+
     end
 )
 
 Components:Toggle(
     FarmPage,
     "Auto Mastery",
-    "Test interface — module not connected.",
     false,
     function(enabled)
+
         NotificationService:Notify(
             "Auto Mastery",
-            enabled and "Enabled" or "Disabled"
+            enabled
+                and "Test toggle enabled."
+                or "Test toggle disabled."
         )
+
     end
 )
 
 --==================================================
--- QUEST PAGE
+-- QUEST
 --==================================================
 
 Components:Section(
     QuestPage,
     "Quest",
-    "Quest management interface"
+    "Quest interface foundation"
 )
 
 Components:Toggle(
     QuestPage,
     "Auto Quest",
-    "Test interface — module not connected.",
     false,
     function(enabled)
+
         NotificationService:Notify(
             "Auto Quest",
-            enabled and "Enabled" or "Disabled"
+            enabled
+                and "Test toggle enabled."
+                or "Test toggle disabled."
         )
+
     end
 )
 
 --==================================================
--- RAIDS PAGE
+-- RAIDS
 --==================================================
 
 Components:Section(
-    RaidsPage,
+    RaidPage,
     "Raids",
-    "Raid management interface"
+    "Raid interface foundation"
 )
 
 Components:Toggle(
-    RaidsPage,
+    RaidPage,
     "Auto Raid",
-    "Test interface — module not connected.",
     false,
     function(enabled)
+
         NotificationService:Notify(
             "Auto Raid",
-            enabled and "Enabled" or "Disabled"
+            enabled
+                and "Test toggle enabled."
+                or "Test toggle disabled."
         )
+
     end
 )
 
 --==================================================
--- COMBAT PAGE
+-- COMBAT
 --==================================================
 
 Components:Section(
@@ -1956,606 +2346,583 @@ Components:Section(
 Components:Toggle(
     CombatPage,
     "Combat Assist",
-    "Test interface — module not connected.",
     false,
     function(enabled)
+
         NotificationService:Notify(
             "Combat Assist",
-            enabled and "Enabled" or "Disabled"
+            enabled
+                and "Test toggle enabled."
+                or "Test toggle disabled."
         )
+
     end
 )
 
 --==================================================
--- TELEPORT PAGE
+-- TELEPORT
 --==================================================
 
 Components:Section(
     TeleportPage,
     "Teleport",
-    "Location management interface"
+    "Teleport interface foundation"
 )
 
 Components:Toggle(
     TeleportPage,
     "Teleport Interface",
-    "Teleport module foundation.",
     false,
     function(enabled)
+
         NotificationService:Notify(
             "Teleport",
-            enabled and "Interface enabled" or "Interface disabled"
+            enabled
+                and "Interface enabled."
+                or "Interface disabled."
         )
+
     end
 )
 
 --==================================================
--- PLAYER PAGE
+-- PLAYER
 --==================================================
 
 Components:Section(
     PlayerPage,
     "Player",
-    "Character information and utilities"
+    "Local player information"
 )
 
-Components:Toggle(
-    PlayerPage,
-    "Anti AFK",
-    "Keeps the session active.",
-    false,
-    function(enabled)
-        NotificationService:Notify(
-            "Anti AFK",
-            enabled and "Enabled" or "Disabled"
-        )
-    end
+local PlayerInfo = Create(
+    "Frame",
+    {
+
+        Parent = PlayerPage,
+
+        Size = UDim2.new(
+            1,
+            0,
+            0,
+            105
+        ),
+
+        BackgroundColor3 =
+            Config.UI.Card,
+
+    }
+)
+
+Corner(PlayerInfo, 10)
+
+local PlayerInfoText = Create(
+    "TextLabel",
+    {
+
+        Parent = PlayerInfo,
+
+        Position = UDim2.new(
+            0,
+            15,
+            0,
+            12
+        ),
+
+        Size = UDim2.new(
+            1,
+            -30,
+            1,
+            -24
+        ),
+
+        BackgroundTransparency = 1,
+
+        Text = "",
+
+        Font = Enum.Font.Gotham,
+
+        TextSize = 11,
+
+        TextColor3 =
+            Config.UI.Text,
+
+        TextWrapped = true,
+
+        TextXAlignment =
+            Enum.TextXAlignment.Left,
+
+        TextYAlignment =
+            Enum.TextYAlignment.Top,
+
+    }
 )
 
 --==================================================
--- MISC PAGE
+-- MISC
 --==================================================
 
 Components:Section(
     MiscPage,
     "Misc",
-    "Additional interface utilities"
+    "Additional interface options"
+)
+
+Components:Toggle(
+    MiscPage,
+    "Anti AFK",
+    false,
+    function(enabled)
+
+        NotificationService:Notify(
+            "Anti AFK",
+            enabled
+                and "Test toggle enabled."
+                or "Test toggle disabled."
+        )
+
+    end
 )
 
 Components:Toggle(
     MiscPage,
     "Notifications",
-    "Enable or disable Floquitave notifications.",
-    Config.Notifications.Enabled,
+    true,
     function(enabled)
-        Config.Notifications.Enabled = enabled
 
-        if enabled then
-            NotificationService:Notify(
-                "Notifications",
-                "Notifications enabled."
-            )
-        end
+        Config.Notifications.Enabled =
+            enabled
+
     end
 )
 
 --==================================================
--- SETTINGS PAGE
+-- SETTINGS
 --==================================================
 
 Components:Section(
     SettingsPage,
-    "Interface",
+    "Interface Settings",
     "Customize the Floquitave interface"
 )
 
 Components:Toggle(
     SettingsPage,
     "Animations",
-    "Enable interface transitions and animations.",
-    Config.UI.Animations,
+    true,
     function(enabled)
-        Config.UI.Animations = enabled
 
-        if enabled then
-            NotificationService:Notify(
-                "Animations",
-                "Animations enabled."
-            )
-        end
+        Config.UI.Animations =
+            enabled
+
+        NotificationService:Notify(
+            "Animations",
+            enabled
+                and "Animations enabled."
+                or "Animations disabled."
+        )
+
     end
 )
 
 Components:Toggle(
     SettingsPage,
     "Notifications",
-    "Show Floquitave notification messages.",
-    Config.Notifications.Enabled,
+    true,
     function(enabled)
-        Config.Notifications.Enabled = enabled
+
+        Config.Notifications.Enabled =
+            enabled
+
+    end
+)
+
+Components:Toggle(
+    SettingsPage,
+    "Dark Theme",
+    true,
+    function(enabled)
 
         if enabled then
-            NotificationService:Notify(
-                "Notifications",
-                "Notifications enabled."
-            )
+
+            Config.UI.Theme = "Dark"
+
+            Config.UI.Background =
+                Color3.fromRGB(
+                    18,
+                    18,
+                    24
+                )
+
+            Config.UI.Secondary =
+                Color3.fromRGB(
+                    23,
+                    23,
+                    31
+                )
+
+            Config.UI.Card =
+                Color3.fromRGB(
+                    28,
+                    28,
+                    38
+                )
+
+            Config.UI.Sidebar =
+                Color3.fromRGB(
+                    21,
+                    21,
+                    29
+                )
+
+            Config.UI.Text =
+                Color3.fromRGB(
+                    245,
+                    245,
+                    250
+                )
+
+            Config.UI.SubText =
+                Color3.fromRGB(
+                    155,
+                    155,
+                    170
+                )
+
+        else
+
+            Config.UI.Theme = "Light"
+
+            Config.UI.Background =
+                Color3.fromRGB(
+                    235,
+                    235,
+                    242
+                )
+
+            Config.UI.Secondary =
+                Color3.fromRGB(
+                    245,
+                    245,
+                    250
+                )
+
+            Config.UI.Card =
+                Color3.fromRGB(
+                    255,
+                    255,
+                    255
+                )
+
+            Config.UI.Sidebar =
+                Color3.fromRGB(
+                    242,
+                    242,
+                    248
+                )
+
+            Config.UI.Text =
+                Color3.fromRGB(
+                    30,
+                    30,
+                    40
+                )
+
+            Config.UI.SubText =
+                Color3.fromRGB(
+                    100,
+                    100,
+                    115
+                )
+
         end
+
+        Main.BackgroundColor3 =
+            Config.UI.Background
+
+        Body.BackgroundColor3 =
+            Config.UI.Background
+
+        Sidebar.BackgroundColor3 =
+            Config.UI.Sidebar
+
+        Content.BackgroundColor3 =
+            Config.UI.Background
+
     end
 )
 
---==================================================
--- THEME SELECTOR
---==================================================
-
-local ThemeRow = Create("Frame", {
-    Parent = SettingsPage,
-
-    Size = UDim2.new(
-        1,
-        0,
-        0,
-        64
-    ),
-
-    BackgroundColor3 = Config.UI.Card,
-})
-
-Corner(ThemeRow, 9)
-
-Stroke(
-    ThemeRow,
-    Color3.fromRGB(42, 42, 57),
-    1
+Components:Section(
+    SettingsPage,
+    "UI Scale",
+    "Adjust the interface size"
 )
 
-Create("TextLabel", {
-    Parent = ThemeRow,
+local ScaleHolder = Create(
+    "Frame",
+    {
 
-    BackgroundTransparency = 1,
+        Parent = SettingsPage,
 
-    Position = UDim2.new(
-        0,
-        14,
-        0,
-        10
-    ),
+        Size = UDim2.new(
+            1,
+            0,
+            0,
+            52
+        ),
 
-    Size = UDim2.new(
-        0,
-        200,
-        0,
-        20
-    ),
+        BackgroundColor3 =
+            Config.UI.Card,
 
-    Text = "Theme",
+    }
+)
 
-    Font = Enum.Font.GothamMedium,
+Corner(ScaleHolder, 10)
 
-    TextSize = 13,
+local ScaleText = Create(
+    "TextLabel",
+    {
 
-    TextColor3 = Config.UI.Text,
+        Parent = ScaleHolder,
 
-    TextXAlignment = Enum.TextXAlignment.Left,
-})
+        Position = UDim2.new(
+            0,
+            14,
+            0,
+            0
+        ),
 
-local ThemeButton = Create("TextButton", {
-    Parent = ThemeRow,
+        Size = UDim2.new(
+            0,
+            180,
+            1,
+            0
+        ),
 
-    Position = UDim2.new(
-        1,
-        -150,
-        0.5,
-        -15
-    ),
+        BackgroundTransparency = 1,
 
-    Size = UDim2.new(
-        0,
-        135,
-        0,
-        30
-    ),
+        Text = "Scale: 100%",
 
-    BackgroundColor3 = Config.UI.Secondary,
+        Font = Enum.Font.GothamMedium,
 
-    Text = "Dark",
+        TextSize = 11,
 
-    Font = Enum.Font.GothamMedium,
+        TextColor3 =
+            Config.UI.Text,
 
-    TextSize = 11,
+        TextXAlignment =
+            Enum.TextXAlignment.Left,
 
-    TextColor3 = Config.UI.Text,
+    }
+)
 
-    AutoButtonColor = false,
-})
+local MinusButton = Create(
+    "TextButton",
+    {
 
-Corner(ThemeButton, 7)
+        Parent = ScaleHolder,
 
-Connect(ThemeButton.MouseButton1Click, function()
-    if Config.UI.Theme == "Dark" then
-        Config.UI.Theme = "Light"
+        Position = UDim2.new(
+            1,
+            -105,
+            0.5,
+            -15
+        ),
 
-        ThemeButton.Text = "Light"
-
-        Config.UI.Background = Color3.fromRGB(
-            235,
-            235,
-            240
-        )
-
-        Config.UI.Secondary = Color3.fromRGB(
-            245,
-            245,
-            248
-        )
-
-        Config.UI.Card = Color3.fromRGB(
-            250,
-            250,
-            252
-        )
-
-        Config.UI.Sidebar = Color3.fromRGB(
-            225,
-            225,
-            232
-        )
-
-        Config.UI.Text = Color3.fromRGB(
-            25,
-            25,
+        Size = UDim2.new(
+            0,
+            30,
+            0,
             30
-        )
+        ),
 
-        Config.UI.SubText = Color3.fromRGB(
-            90,
-            90,
-            105
-        )
+        BackgroundColor3 =
+            Config.UI.Secondary,
 
-        Main.BackgroundColor3 = Config.UI.Background
-        Topbar.BackgroundColor3 = Config.UI.Secondary
-        TopbarCover.BackgroundColor3 = Config.UI.Secondary
-        Sidebar.BackgroundColor3 = Config.UI.Sidebar
+        Text = "−",
 
-        NotificationService:Notify(
-            "Theme",
-            "Light theme selected."
-        )
-    else
-        Config.UI.Theme = "Dark"
+        Font = Enum.Font.GothamBold,
 
-        ThemeButton.Text = "Dark"
+        TextSize = 16,
 
-        Config.UI.Background = Color3.fromRGB(
-            15,
-            15,
-            20
-        )
+        TextColor3 =
+            Config.UI.Text,
 
-        Config.UI.Secondary = Color3.fromRGB(
-            20,
-            20,
-            27
-        )
+        AutoButtonColor = false,
 
-        Config.UI.Card = Color3.fromRGB(
-            25,
-            25,
-            34
-        )
-
-        Config.UI.Sidebar = Color3.fromRGB(
-            18,
-            18,
-            24
-        )
-
-        Config.UI.Text = Color3.fromRGB(
-            240,
-            240,
-            245
-        )
-
-        Config.UI.SubText = Color3.fromRGB(
-            150,
-            150,
-            165
-        )
-
-        Main.BackgroundColor3 = Config.UI.Background
-        Topbar.BackgroundColor3 = Config.UI.Secondary
-        TopbarCover.BackgroundColor3 = Config.UI.Secondary
-        Sidebar.BackgroundColor3 = Config.UI.Sidebar
-
-        NotificationService:Notify(
-            "Theme",
-            "Dark theme selected."
-        )
-    end
-end)
-
---==================================================
--- UI SCALE
---==================================================
-
-local ScaleRow = Create("Frame", {
-    Parent = SettingsPage,
-
-    Size = UDim2.new(
-        1,
-        0,
-        0,
-        64
-    ),
-
-    BackgroundColor3 = Config.UI.Card,
-})
-
-Corner(ScaleRow, 9)
-
-Stroke(
-    ScaleRow,
-    Color3.fromRGB(42, 42, 57),
-    1
+    }
 )
 
-Create("TextLabel", {
-    Parent = ScaleRow,
+Corner(MinusButton, 8)
 
-    BackgroundTransparency = 1,
+local PlusButton = Create(
+    "TextButton",
+    {
 
-    Position = UDim2.new(
-        0,
-        14,
-        0,
-        10
-    ),
+        Parent = ScaleHolder,
 
-    Size = UDim2.new(
-        0,
-        150,
-        0,
-        20
-    ),
+        Position = UDim2.new(
+            1,
+            -45,
+            0.5,
+            -15
+        ),
 
-    Text = "UI Scale",
+        Size = UDim2.new(
+            0,
+            30,
+            0,
+            30
+        ),
 
-    Font = Enum.Font.GothamMedium,
+        BackgroundColor3 =
+            Config.UI.Secondary,
 
-    TextSize = 13,
+        Text = "+",
 
-    TextColor3 = Config.UI.Text,
+        Font = Enum.Font.GothamBold,
 
-    TextXAlignment = Enum.TextXAlignment.Left,
-})
+        TextSize = 16,
 
-local ScaleValue = Create("TextLabel", {
-    Parent = ScaleRow,
+        TextColor3 =
+            Config.UI.Text,
 
-    BackgroundTransparency = 1,
+        AutoButtonColor = false,
 
-    Position = UDim2.new(
-        1,
-        -120,
-        0,
-        10
-    ),
+    }
+)
 
-    Size = UDim2.new(
-        0,
-        100,
-        0,
-        20
-    ),
+Corner(PlusButton, 8)
 
-    Text = "100%",
+AddHoverEffect(
+    MinusButton,
+    1.08
+)
 
-    Font = Enum.Font.GothamBold,
-
-    TextSize = 12,
-
-    TextColor3 = Config.UI.Accent,
-
-    TextXAlignment = Enum.TextXAlignment.Right,
-})
-
-local ScaleMinus = Create("TextButton", {
-    Parent = ScaleRow,
-
-    Position = UDim2.new(
-        1,
-        -110,
-        0.5,
-        -13
-    ),
-
-    Size = UDim2.new(
-        0,
-        28,
-        0,
-        26
-    ),
-
-    BackgroundColor3 = Config.UI.Secondary,
-
-    Text = "-",
-
-    Font = Enum.Font.GothamBold,
-
-    TextSize = 15,
-
-    TextColor3 = Config.UI.Text,
-
-    AutoButtonColor = false,
-})
-
-Corner(ScaleMinus, 6)
-
-local ScalePlus = Create("TextButton", {
-    Parent = ScaleRow,
-
-    Position = UDim2.new(
-        1,
-        -40,
-        0.5,
-        -13
-    ),
-
-    Size = UDim2.new(
-        0,
-        28,
-        0,
-        26
-    ),
-
-    BackgroundColor3 = Config.UI.Secondary,
-
-    Text = "+",
-
-    Font = Enum.Font.GothamBold,
-
-    TextSize = 15,
-
-    TextColor3 = Config.UI.Text,
-
-    AutoButtonColor = false,
-})
-
-Corner(ScalePlus, 6)
-
-local UIScale = Create("UIScale", {
-    Parent = Main,
-
-    Scale = Config.UI.Scale,
-})
+AddHoverEffect(
+    PlusButton,
+    1.08
+)
 
 local function UpdateScale()
-    Config.UI.Scale = math.clamp(
-        Config.UI.Scale,
-        0.8,
-        1.2
+
+    Config.UI.Scale =
+        math.clamp(
+            Config.UI.Scale,
+            0.8,
+            1.2
+        )
+
+    ScaleText.Text =
+        string.format(
+            "Scale: %d%%",
+            math.floor(
+                Config.UI.Scale * 100
+            )
+        )
+
+    Tween(
+        MainScale,
+        {
+            Scale = Config.UI.Scale
+        },
+        0.3,
+        Enum.EasingStyle.Quint
     )
 
-    UIScale.Scale = Config.UI.Scale
-
-    ScaleValue.Text = string.format(
-        "%d%%",
-        math.floor(Config.UI.Scale * 100)
-    )
 end
 
-Connect(ScaleMinus.MouseButton1Click, function()
-    Config.UI.Scale -= 0.05
+Connect(
+    MinusButton.MouseButton1Click,
+    function()
 
-    UpdateScale()
-end)
+        Config.UI.Scale =
+            Config.UI.Scale - 0.05
 
-Connect(ScalePlus.MouseButton1Click, function()
-    Config.UI.Scale += 0.05
+        UpdateScale()
 
-    UpdateScale()
-end)
-
---==================================================
--- RESET SETTINGS
---==================================================
-
-local ResetButton = Create("TextButton", {
-    Parent = SettingsPage,
-
-    Size = UDim2.new(
-        1,
-        0,
-        0,
-        45
-    ),
-
-    BackgroundColor3 = Color3.fromRGB(
-        45,
-        45,
-        55
-    ),
-
-    Text = "Reset Interface Settings",
-
-    Font = Enum.Font.GothamBold,
-
-    TextSize = 12,
-
-    TextColor3 = Config.UI.Text,
-
-    AutoButtonColor = false,
-})
-
-Corner(ResetButton, 8)
-
-Connect(ResetButton.MouseButton1Click, function()
-    Config.UI.Theme = "Dark"
-    Config.UI.Animations = true
-    Config.UI.Scale = 1
-
-    Config.Notifications.Enabled = true
-
-    Config.UI.Background = Color3.fromRGB(
-        15,
-        15,
-        20
-    )
-
-    Config.UI.Secondary = Color3.fromRGB(
-        20,
-        20,
-        27
-    )
-
-    Config.UI.Card = Color3.fromRGB(
-        25,
-        25,
-        34
-    )
-
-    Config.UI.Sidebar = Color3.fromRGB(
-        18,
-        18,
-        24
-    )
-
-    Config.UI.Text = Color3.fromRGB(
-        240,
-        240,
-        245
-    )
-
-    Config.UI.SubText = Color3.fromRGB(
-        150,
-        150,
-        165
-    )
-
-    Main.BackgroundColor3 = Config.UI.Background
-    Topbar.BackgroundColor3 = Config.UI.Secondary
-    TopbarCover.BackgroundColor3 = Config.UI.Secondary
-    Sidebar.BackgroundColor3 = Config.UI.Sidebar
-
-    ThemeButton.Text = "Dark"
-
-    UpdateScale()
-
-    if State.Toggles["Animations"] then
-        State.Toggles["Animations"].Set(true)
     end
+)
 
-    NotificationService:Notify(
-        "Settings",
-        "Interface settings reset."
-    )
-end)
+Connect(
+    PlusButton.MouseButton1Click,
+    function()
+
+        Config.UI.Scale =
+            Config.UI.Scale + 0.05
+
+        UpdateScale()
+
+    end
+)
+
+Components:Section(
+    SettingsPage,
+    "Interface",
+    "Restore the default UI configuration"
+)
+
+local ResetButton = Create(
+    "TextButton",
+    {
+
+        Parent = SettingsPage,
+
+        Size = UDim2.new(
+            1,
+            0,
+            0,
+            46
+        ),
+
+        BackgroundColor3 =
+            Config.UI.Card,
+
+        Text = "Reset Interface Settings",
+
+        Font = Enum.Font.GothamMedium,
+
+        TextSize = 11,
+
+        TextColor3 =
+            Config.UI.Text,
+
+        AutoButtonColor = false,
+
+    }
+)
+
+Corner(ResetButton, 10)
+
+AddHoverEffect(
+    ResetButton,
+    1.015
+)
+
+Connect(
+    ResetButton.MouseButton1Click,
+    function()
+
+        Config.UI.Scale = 1
+        Config.UI.Animations = true
+        Config.UI.Theme = "Dark"
+
+        UpdateScale()
+
+        NotificationService:Notify(
+            "Settings",
+            "Interface settings reset."
+        )
+
+    end
+)
 
 --==================================================
 -- SIDEBAR BUTTONS
 --==================================================
 
-local PageOrder = {
+local PageNames = {
+
     "Home",
     "Main Farm",
     "Quest",
@@ -2565,475 +2932,760 @@ local PageOrder = {
     "Player",
     "Misc",
     "Settings",
+
 }
 
-local PageIcons = {
-    Home = "⌂",
-    ["Main Farm"] = "◆",
-    Quest = "◇",
-    Raids = "◈",
-    Combat = "⚔",
-    Teleport = "➜",
-    Player = "●",
-    Misc = "⚙",
-    Settings = "⚙",
-}
+for _, pageName in ipairs(
+    PageNames
+) do
 
-for index, pageName in ipairs(PageOrder) do
-    local button = Create("TextButton", {
-        Parent = SidebarScroll,
+    local button = Create(
+        "TextButton",
+        {
 
-        Size = UDim2.new(
-            1,
-            0,
-            0,
-            38
-        ),
+            Parent = PageList,
 
-        BackgroundColor3 = Config.UI.Sidebar,
+            Size = UDim2.new(
+                1,
+                0,
+                0,
+                38
+            ),
 
-        Text = "",
+            BackgroundColor3 =
+                Config.UI.Card,
 
-        AutoButtonColor = false,
+            Text = pageName,
 
-        LayoutOrder = index,
-    })
+            Font = Enum.Font.GothamMedium,
+
+            TextSize = 11,
+
+            TextColor3 =
+                Config.UI.Text,
+
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
+
+            AutoButtonColor = false,
+
+        }
+    )
 
     Corner(button, 8)
 
-    local icon = Create("TextLabel", {
-        Parent = button,
+    local buttonPadding =
+        Instance.new("UIPadding")
 
-        BackgroundTransparency = 1,
+    buttonPadding.PaddingLeft =
+        UDim.new(0, 14)
 
-        Position = UDim2.new(
-            0,
-            12,
-            0,
-            0
-        ),
+    buttonPadding.Parent =
+        button
 
-        Size = UDim2.new(
-            0,
-            24,
-            1,
-            0
-        ),
+    State.Buttons[pageName] = {
 
-        Text = PageIcons[pageName] or "•",
+        Button = button,
+        Name = pageName,
 
-        Font = Enum.Font.GothamBold,
+    }
 
-        TextSize = 14,
+    AddHoverEffect(
+        button,
+        1.025
+    )
 
-        TextColor3 = Config.UI.SubText,
-    })
+    Connect(
+        button.MouseButton1Click,
+        function()
 
-    local label = Create("TextLabel", {
-        Parent = button,
+            PageService:Show(
+                pageName
+            )
 
-        BackgroundTransparency = 1,
-
-        Position = UDim2.new(
-            0,
-            42,
-            0,
-            0
-        ),
-
-        Size = UDim2.new(
-            1,
-            -50,
-            1,
-            0
-        ),
-
-        Text = pageName,
-
-        Font = Enum.Font.GothamMedium,
-
-        TextSize = 12,
-
-        TextColor3 = Config.UI.Text,
-
-        TextXAlignment = Enum.TextXAlignment.Left,
-    })
-
-    State.Buttons[pageName] = button
-
-    Connect(button.MouseEnter, function()
-        if State.CurrentPage ~= pageName then
-            Tween(button, {
-                BackgroundColor3 = Config.UI.Card
-            }, 0.12)
         end
-    end)
+    )
 
-    Connect(button.MouseLeave, function()
-        if State.CurrentPage ~= pageName then
-            Tween(button, {
-                BackgroundColor3 = Config.UI.Sidebar
-            }, 0.12)
-        end
-    end)
-
-    Connect(button.MouseButton1Click, function()
-        PageService:Show(pageName)
-    end)
 end
 
 --==================================================
--- SEARCH SYSTEM
+-- SEARCH
 --==================================================
 
-Connect(SearchBox:GetPropertyChangedSignal("Text"), function()
-    local query = string.lower(
-        SearchBox.Text or ""
-    )
+Connect(
+    SearchBox:GetPropertyChangedSignal(
+        "Text"
+    ),
+    function()
 
-    State.SearchText = query
+        State.SearchText =
+            string.lower(
+                SearchBox.Text
+            )
 
-    for pageName, button in pairs(State.Buttons) do
-        local visible = true
+        for pageName, data in pairs(
+            State.Buttons
+        ) do
 
-        if query ~= "" then
-            visible = string.find(
-                string.lower(pageName),
-                query,
-                1,
-                true
-            ) ~= nil
+            local visible =
+                State.SearchText == ""
+                or string.find(
+                    string.lower(
+                        pageName
+                    ),
+                    State.SearchText,
+                    1,
+                    true
+                )
+
+            data.Button.Visible =
+                visible
+
         end
 
-        button.Visible = visible
     end
-end)
+)
+
+--==================================================
+-- CONTENT CANVAS
+--==================================================
+
+Connect(
+    ContentLayout:GetPropertyChangedSignal(
+        "AbsoluteContentSize"
+    ),
+    function()
+
+        Content.CanvasSize =
+            UDim2.new(
+                0,
+                0,
+                0,
+                ContentLayout
+                    .AbsoluteContentSize.Y
+                + 24
+            )
+
+    end
+)
+
+Connect(
+    PageLayout:GetPropertyChangedSignal(
+        "AbsoluteContentSize"
+    ),
+    function()
+
+        PageList.CanvasSize =
+            UDim2.new(
+                0,
+                0,
+                0,
+                PageLayout
+                    .AbsoluteContentSize.Y
+            )
+
+    end
+)
 
 --==================================================
 -- FLOATING MINIMIZE BUTTON
 --==================================================
 
-local FloatingButton = Create("TextButton", {
-    Parent = ScreenGui,
+local FloatingButton = Create(
+    "TextButton",
+    {
 
-    Size = UDim2.new(
-        0,
-        58,
-        0,
-        58
-    ),
+        Parent = ScreenGui,
 
-    Position = UDim2.new(
-        0,
-        25,
-        0.5,
-        -29
-    ),
+        AnchorPoint =
+            Vector2.new(
+                0.5,
+                0.5
+            ),
 
-    BackgroundColor3 = Config.UI.Accent,
+        Position = UDim2.new(
+            0.5,
+            0,
+            0.5,
+            0
+        ),
 
-    Text = "F",
+        Size = UDim2.new(
+            0,
+            58,
+            0,
+            58
+        ),
 
-    TextColor3 = Color3.fromRGB(
-        255,
-        255,
-        255
-    ),
+        BackgroundColor3 =
+            Config.UI.Accent,
 
-    Font = Enum.Font.GothamBold,
+        Text = "F",
 
-    TextSize = 23,
+        Font = Enum.Font.GothamBold,
 
-    AutoButtonColor = false,
+        TextSize = 21,
 
-    Visible = false,
+        TextColor3 =
+            Color3.fromRGB(
+                255,
+                255,
+                255
+            ),
 
-    ZIndex = 100,
-})
+        Visible = false,
 
-Corner(FloatingButton, 100)
+        AutoButtonColor = false,
 
-Stroke(
+    }
+)
+
+Corner(
     FloatingButton,
-    Color3.fromRGB(65, 65, 80),
-    1
+    29
+)
+
+local FloatingStroke =
+    Stroke(
+        FloatingButton,
+        Color3.fromRGB(
+            255,
+            255,
+            255
+        ),
+        0.8
+    )
+
+local FloatingScale =
+    Instance.new("UIScale")
+
+FloatingScale.Scale = 0.8
+FloatingScale.Parent =
+    FloatingButton
+
+AddHoverEffect(
+    FloatingButton,
+    1.08
 )
 
 --==================================================
--- FLOATING BUTTON DRAG
+-- MINIMIZE / RESTORE
 --==================================================
 
-local floatingDragging = false
-local floatingMoved = false
-local floatingDragStart
-local floatingStartPosition
+local function ShowFloatingButton()
 
-Connect(FloatingButton.InputBegan, function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
+    FloatingButton.Visible = true
 
-        floatingDragging = true
-        floatingMoved = false
+    FloatingScale.Scale = 0.75
 
-        floatingDragStart = input.Position
-        floatingStartPosition = FloatingButton.Position
-    end
-end)
-
-Connect(UserInputService.InputChanged, function(input)
-    if not floatingDragging then
-        return
-    end
-
-    if input.UserInputType ~= Enum.UserInputType.MouseMovement
-        and input.UserInputType ~= Enum.UserInputType.Touch then
-        return
-    end
-
-    local delta = input.Position - floatingDragStart
-
-    if math.abs(delta.X) > 5
-        or math.abs(delta.Y) > 5 then
-
-        floatingMoved = true
-    end
-
-    FloatingButton.Position = UDim2.new(
-        floatingStartPosition.X.Scale,
-        floatingStartPosition.X.Offset + delta.X,
-
-        floatingStartPosition.Y.Scale,
-        floatingStartPosition.Y.Offset + delta.Y
+    Tween(
+        FloatingScale,
+        {
+            Scale = 1
+        },
+        0.38,
+        Enum.EasingStyle.Back,
+        Enum.EasingDirection.Out
     )
-end)
 
-Connect(UserInputService.InputEnded, function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
+end
 
-        if not floatingDragging then
-            return
-        end
+local function HideFloatingButton()
 
-        floatingDragging = false
+    Tween(
+        FloatingScale,
+        {
+            Scale = 0.75
+        },
+        0.22,
+        Enum.EasingStyle.Quint,
+        Enum.EasingDirection.In
+    )
 
-        if not floatingMoved then
-            State.Minimized = false
+    task.delay(
+        0.22,
+        function()
+
+            if not State.Minimized then
+                return
+            end
 
             FloatingButton.Visible = false
 
-            Main.Visible = true
-
-            Main.Size = UDim2.new(
-                0,
-                0,
-                0,
-                0
-            )
-
-            Tween(Main, {
-                Size = UDim2.new(
-                    0,
-                    Config.UI.Width,
-                    0,
-                    Config.UI.Height
-                )
-            }, 0.25)
         end
-    end
-end)
+    )
 
---==================================================
--- MINIMIZE
---==================================================
+end
 
-Connect(MinimizeButton.MouseButton1Click, function()
+local function MinimizeHub()
+
     if State.Minimized then
         return
     end
 
     State.Minimized = true
 
-    Tween(Main, {
-        Size = UDim2.new(
-            0,
-            0,
-            0,
-            0
-        )
-    }, 0.2)
+    Tween(
+        MainScale,
+        {
+            Scale = 0.92
+        },
+        0.25,
+        Enum.EasingStyle.Quint,
+        Enum.EasingDirection.In
+    )
 
-    task.delay(0.2, function()
-        if State.Destroyed then
+    task.delay(
+        0.24,
+        function()
+
+            if not State.Minimized then
+                return
+            end
+
+            Main.Visible = false
+
+            ShowFloatingButton()
+
+        end
+    )
+
+end
+
+local function RestoreHub()
+
+    if not State.Minimized then
+        return
+    end
+
+    State.Minimized = false
+
+    FloatingButton.Visible = false
+
+    Main.Visible = true
+
+    MainScale.Scale = 0.92
+
+    Tween(
+        MainScale,
+        {
+            Scale = Config.UI.Scale
+        },
+        0.42,
+        Enum.EasingStyle.Back,
+        Enum.EasingDirection.Out
+    )
+
+end
+
+--==================================================
+-- FLOATING BUTTON DRAG
+--==================================================
+
+local dragging = false
+local dragStart
+local startPosition
+local moved = false
+
+Connect(
+    FloatingButton.InputBegan,
+    function(input)
+
+        if
+            input.UserInputType ==
+            Enum.UserInputType.MouseButton1
+            or
+            input.UserInputType ==
+            Enum.UserInputType.Touch
+        then
+
+            dragging = true
+            moved = false
+
+            dragStart =
+                input.Position
+
+            startPosition =
+                FloatingButton.Position
+
+        end
+
+    end
+)
+
+Connect(
+    UserInputService.InputChanged,
+    function(input)
+
+        if not dragging then
             return
         end
 
-        Main.Visible = false
+        if
+            input.UserInputType ~=
+            Enum.UserInputType.MouseMovement
+            and
+            input.UserInputType ~=
+            Enum.UserInputType.Touch
+        then
+            return
+        end
 
-        FloatingButton.Visible = true
+        local delta =
+            input.Position
+            - dragStart
 
-        FloatingButton.Size = UDim2.new(
-            0,
-            0,
-            0,
-            0
-        )
+        if delta.Magnitude > 5 then
+            moved = true
+        end
 
-        Tween(FloatingButton, {
-            Size = UDim2.new(
-                0,
-                58,
-                0,
-                58
+        FloatingButton.Position =
+            UDim2.new(
+                startPosition.X.Scale,
+                startPosition.X.Offset
+                    + delta.X,
+
+                startPosition.Y.Scale,
+                startPosition.Y.Offset
+                    + delta.Y
             )
-        }, 0.25)
-    end)
-end)
+
+    end
+)
+
+Connect(
+    UserInputService.InputEnded,
+    function(input)
+
+        if
+            input.UserInputType ==
+            Enum.UserInputType.MouseButton1
+            or
+            input.UserInputType ==
+            Enum.UserInputType.Touch
+        then
+
+            if dragging and not moved then
+                RestoreHub()
+            end
+
+            dragging = false
+
+        end
+
+    end
+)
+
+--==================================================
+-- MINIMIZE BUTTON
+--==================================================
+
+Connect(
+    MinimizeButton.MouseButton1Click,
+    function()
+
+        MinimizeHub()
+
+    end
+)
 
 --==================================================
 -- CLOSE
 --==================================================
 
-Connect(CloseButton.MouseButton1Click, function()
-    NotificationService:Notify(
-        "Floquitave",
-        "Closing interface..."
-    )
+Connect(
+    CloseButton.MouseButton1Click,
+    function()
 
-    task.delay(0.15, function()
         Cleanup()
+
+        Tween(
+            MainScale,
+            {
+                Scale = 0.9
+            },
+            0.2,
+            Enum.EasingStyle.Quint,
+            Enum.EasingDirection.In
+        )
+
+        task.wait(0.2)
 
         if ScreenGui then
             ScreenGui:Destroy()
         end
-    end)
-end)
+
+    end
+)
+
+--==================================================
+-- MAIN WINDOW DRAG
+--==================================================
+
+local MainDragging = false
+local MainDragStart
+local MainStartPosition
+
+Connect(
+    Topbar.InputBegan,
+    function(input)
+
+        if
+            input.UserInputType ==
+            Enum.UserInputType.MouseButton1
+        then
+
+            MainDragging = true
+
+            MainDragStart =
+                input.Position
+
+            MainStartPosition =
+                Main.Position
+
+        end
+
+    end
+)
+
+Connect(
+    UserInputService.InputChanged,
+    function(input)
+
+        if not MainDragging then
+            return
+        end
+
+        if
+            input.UserInputType ~=
+            Enum.UserInputType.MouseMovement
+        then
+            return
+        end
+
+        local delta =
+            input.Position
+            - MainDragStart
+
+        Main.Position =
+            UDim2.new(
+                MainStartPosition.X.Scale,
+                MainStartPosition.X.Offset
+                    + delta.X,
+
+                MainStartPosition.Y.Scale,
+                MainStartPosition.Y.Offset
+                    + delta.Y
+            )
+
+    end
+)
+
+Connect(
+    UserInputService.InputEnded,
+    function(input)
+
+        if
+            input.UserInputType ==
+            Enum.UserInputType.MouseButton1
+        then
+
+            MainDragging = false
+
+        end
+
+    end
+)
 
 --==================================================
 -- FPS TRACKING
 --==================================================
 
-local frameCounter = 0
-local fpsTimer = os.clock()
+local frameCount = 0
+local lastFPSUpdate = os.clock()
 
-Connect(RunService.RenderStepped, function()
-    if State.Destroyed then
-        return
+Connect(
+    RunService.RenderStepped,
+    function()
+
+        frameCount += 1
+
+        local now = os.clock()
+
+        if now - lastFPSUpdate >= 1 then
+
+            State.FPS =
+                frameCount
+
+            frameCount = 0
+
+            lastFPSUpdate = now
+
+        end
+
     end
-
-    frameCounter += 1
-
-    local now = os.clock()
-
-    if now - fpsTimer >= 1 then
-        State.FPS = frameCounter
-
-        frameCounter = 0
-        fpsTimer = now
-    end
-end)
+)
 
 --==================================================
--- LIVE DATA
+-- LIVE DATA UPDATE
 --==================================================
 
-local updateAccumulator = 0
+local lastUpdate = 0
 
-Connect(RunService.Heartbeat, function(deltaTime)
-    if State.Destroyed then
-        return
-    end
+Connect(
+    RunService.Heartbeat,
+    function()
 
-    updateAccumulator += deltaTime
+        if State.Destroyed then
+            return
+        end
 
-    if updateAccumulator < Config.Performance.UpdateInterval then
-        return
-    end
+        local now = os.clock()
 
-    updateAccumulator = 0
+        if
+            now - lastUpdate
+            < Config.Performance.UpdateInterval
+        then
+            return
+        end
 
-    -- Player data
-    local level = PlayerService:GetLevel()
-    local beli = PlayerService:GetBeli()
-    local fragments = PlayerService:GetFragments()
-    local race = PlayerService:GetRace()
+        lastUpdate = now
 
-    -- World
-    local sea = WorldService:GetSea()
+        local level =
+            PlayerService:GetLevel()
 
-    -- Performance
-    local ping = PerformanceService:GetPing()
+        local beli =
+            PlayerService:GetBeli()
 
-    -- Uptime
-    local elapsed = os.clock() - StartTime
+        local fragments =
+            PlayerService:GetFragments()
 
-    -- Update cards
-    if State.Cards["LEVEL"] then
-        State.Cards["LEVEL"].Text = FormatNumber(level)
-    end
+        local race =
+            PlayerService:GetRace()
 
-    if State.Cards["BELI"] then
-        State.Cards["BELI"].Text = FormatNumber(beli)
-    end
+        local sea =
+            WorldService:GetSea()
 
-    if State.Cards["FRAGMENTS"] then
-        State.Cards["FRAGMENTS"].Text = FormatNumber(fragments)
-    end
+        local ping =
+            PerformanceService:GetPing()
 
-    if State.Cards["RACE"] then
-        State.Cards["RACE"].Text = race
-    end
-
-    if State.Cards["SEA"] then
-        State.Cards["SEA"].Text = sea
-    end
-
-    if State.Cards["FPS"] then
-        State.Cards["FPS"].Text = tostring(State.FPS)
-    end
-
-    if State.Cards["PING"] then
-        State.Cards["PING"].Text = tostring(ping) .. " ms"
-    end
-
-    if State.Cards["UPTIME"] then
-        State.Cards["UPTIME"].Text = FormatTime(elapsed)
-    end
-
-    -- Progress
-    local progress = math.clamp(
-        (level % 100) / 100,
-        0,
-        1
-    )
-
-    Tween(
-        ProgressBar,
-        {
-            Size = UDim2.new(
-                progress,
-                0,
-                1,
-                0
+        local uptime =
+            FormatTime(
+                now - StartTime
             )
-        },
-        0.25
-    )
 
-    ProgressText.Text = string.format(
-        "Level %d  •  %d%%",
-        level,
-        math.floor(progress * 100)
-    )
+        -- HOME CARDS
 
-    -- Session status
-    StatusText.Text = string.format(
-        "Online  •  %s  •  %d FPS  •  %d ms",
-        sea,
-        State.FPS,
-        ping
-    )
-end)
+        if State.Cards["LEVEL"] then
+
+            State.Cards["LEVEL"]
+                .Value.Text =
+                FormatNumber(level)
+
+        end
+
+        if State.Cards["BELI"] then
+
+            State.Cards["BELI"]
+                .Value.Text =
+                FormatNumber(beli)
+
+        end
+
+        if State.Cards["FRAGMENTS"] then
+
+            State.Cards["FRAGMENTS"]
+                .Value.Text =
+                FormatNumber(fragments)
+
+        end
+
+        if State.Cards["RACE"] then
+
+            State.Cards["RACE"]
+                .Value.Text =
+                tostring(race)
+
+        end
+
+        if State.Cards["SEA"] then
+
+            State.Cards["SEA"]
+                .Value.Text =
+                tostring(sea)
+
+        end
+
+        if State.Cards["FPS"] then
+
+            State.Cards["FPS"]
+                .Value.Text =
+                tostring(State.FPS)
+
+        end
+
+        if State.Cards["PING"] then
+
+            State.Cards["PING"]
+                .Value.Text =
+                tostring(ping) .. " ms"
+
+        end
+
+        if State.Cards["UPTIME"] then
+
+            State.Cards["UPTIME"]
+                .Value.Text =
+                uptime
+
+        end
+
+        -- PLAYER PAGE
+
+        local health,
+            maxHealth =
+            PlayerService:GetHealth()
+
+        PlayerInfoText.Text =
+            "Player: "
+            .. LocalPlayer.DisplayName
+            .. "\n\n"
+
+            .. "Username: "
+            .. LocalPlayer.Name
+            .. "\n"
+
+            .. "Level: "
+            .. tostring(level)
+            .. "\n"
+
+            .. "Race: "
+            .. tostring(race)
+            .. "\n"
+
+            .. "Health: "
+            .. string.format(
+                "%.0f / %.0f",
+                health,
+                maxHealth
+            )
+            .. "\n"
+
+            .. "Sea: "
+            .. tostring(sea)
+
+        -- STATUS
+
+        StatusSub.Text =
+            "FPS "
+            .. tostring(State.FPS)
+            .. "  •  Ping "
+            .. tostring(ping)
+            .. " ms  •  Uptime "
+            .. uptime
+
+    end
+)
 
 --==================================================
 -- INITIAL PAGE
@@ -3042,26 +3694,25 @@ end)
 PageService:Show("Home")
 
 --==================================================
--- INITIALIZATION
+-- INITIAL NOTIFICATION
 --==================================================
 
-task.defer(function()
-    task.wait(0.5)
+task.delay(
+    0.55,
+    function()
 
-    if State.Destroyed then
-        return
+        NotificationService:Notify(
+            "Floquitave",
+            "Version "
+                .. Config.Version
+                .. " loaded successfully."
+        )
+
     end
-
-    NotificationService:Notify(
-        "Floquitave",
-        "Version " .. Config.Version .. " loaded successfully."
-    )
-end)
+)
 
 print(
-    "[Floquitave] " ..
-    Config.Name ..
-    " v" ..
-    Config.Version ..
-    " loaded."
+    "[Floquitave] Version "
+        .. Config.Version
+        .. " loaded."
 )
