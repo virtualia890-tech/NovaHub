@@ -617,7 +617,21 @@ pcall(function()
     end
 end)
 
-ScreenGui.Parent = game:GetService("CoreGui")
+do
+    local parentGui
+    pcall(function()
+        if gethui then
+            parentGui = gethui()
+        end
+    end)
+    if not parentGui then
+        pcall(function() parentGui = game:GetService("CoreGui") end)
+    end
+    if not parentGui then
+        parentGui = LocalPlayer:WaitForChild("PlayerGui")
+    end
+    ScreenGui.Parent = parentGui
+end
 
 --==================================================
 -- MAIN
@@ -2424,11 +2438,11 @@ local FullState = {
 
 Section(FarmPage, "Full Farm Controller", "Target • Quest • Movement • Combat • Mastery")
 
-local FarmStatus = Card(FarmPage, "FARM STATUS", "Idle")
-local FarmTarget = Card(FarmPage, "CURRENT TARGET", "None")
-local FarmDistance = Card(FarmPage, "DISTANCE", "-")
-local FarmHP = Card(FarmPage, "TARGET HP", "-")
-local FarmWeapon = Card(FarmPage, "WEAPON", "Auto")
+local FarmStatusCard, FarmStatus = Card(FarmPage, "FARM STATUS", "Idle")
+local FarmTargetCard, FarmTarget = Card(FarmPage, "CURRENT TARGET", "None")
+local FarmDistanceCard, FarmDistance = Card(FarmPage, "DISTANCE", "-")
+local FarmHPCard, FarmHP = Card(FarmPage, "TARGET HP", "-")
+local FarmWeaponCard, FarmWeapon = Card(FarmPage, "WEAPON", "Auto")
 
 Toggle(FarmPage, "Auto Farm", "Runs the complete farm controller.", false, function(v)
     FullState.Farm.Enabled = v
@@ -2526,9 +2540,9 @@ end)
 local QuestPageFull = QuestPage
 Section(QuestPageFull, "Quest Controller", "World progression • special quests • sword/puzzle helpers")
 
-local QuestStatus = Card(QuestPageFull, "QUEST STATUS", "Idle")
-local QuestSelectedCard = Card(QuestPageFull, "SELECTED QUEST", "Auto")
-local QuestProgress = Card(QuestPageFull, "PROGRESS", "-")
+local QuestStatusCard, QuestStatus = Card(QuestPageFull, "QUEST STATUS", "Idle")
+local QuestSelectedCardFrame, QuestSelectedCard = Card(QuestPageFull, "SELECTED QUEST", "Auto")
+local QuestProgressCard, QuestProgress = Card(QuestPageFull, "PROGRESS", "-")
 
 ValueBox(QuestPageFull, "Quest / Boss Name", "Auto", function(v)
     FullState.Quest.Selected = tostring(v)
@@ -2589,8 +2603,8 @@ end)
 
 Section(RaidPage, "Raid Controller", "Chip • Start • Aura • Islands • Awakening")
 
-local RaidStatus = Card(RaidPage, "RAID STATUS", "Idle")
-local RaidChip = Card(RaidPage, "SELECTED CHIP", FullState.Raid.Chip)
+local RaidStatusCard, RaidStatus = Card(RaidPage, "RAID STATUS", "Idle")
+local RaidChipCard, RaidChip = Card(RaidPage, "SELECTED CHIP", FullState.Raid.Chip)
 
 ValueBox(RaidPage, "Chip", "Flame", function(v)
     FullState.Raid.Chip = tostring(v)
@@ -2642,9 +2656,9 @@ end)
 
 Section(CombatPage, "Combat Controller", "Player targeting • weapon selection • attack loop")
 
-local CombatStatus = Card(CombatPage, "COMBAT STATUS", "Idle")
-local CombatTarget = Card(CombatPage, "TARGET", "None")
-local CombatWeapon = Card(CombatPage, "WEAPON", "Melee")
+local CombatStatusCard, CombatStatus = Card(CombatPage, "COMBAT STATUS", "Idle")
+local CombatTargetCard, CombatTarget = Card(CombatPage, "TARGET", "None")
+local CombatWeaponCard, CombatWeapon = Card(CombatPage, "WEAPON", "Melee")
 
 ValueBox(CombatPage, "Weapon Type", "Melee", function(v)
     FullState.Combat.Weapon = tostring(v)
@@ -2694,7 +2708,7 @@ end)
 local SeaPage = PageService:Create("Sea Event")
 Section(SeaPage, "Sea Event Controller", "Sailing • event targets • chests • fruit collection")
 
-local SeaStatus = Card(SeaPage, "SEA STATUS", "Idle")
+local SeaStatusCard, SeaStatus = Card(SeaPage, "SEA STATUS", "Idle")
 ValueBox(SeaPage, "Event Name", "Auto", function(v)
     FullState.Sea.Event = tostring(v)
 end)
@@ -2729,7 +2743,7 @@ end)
 local RacePage = PageService:Create("Race V4")
 Section(RacePage, "Race V4 Controller", "Area navigation • trials • gear • transformation")
 
-local RaceStatus = Card(RacePage, "RACE STATUS", "Idle")
+local RaceStatusCard, RaceStatus = Card(RacePage, "RACE STATUS", "Idle")
 
 Toggle(RacePage, "Auto Race V4", "Runs the Race V4 controller.", false, function(v)
     FullState.Race.Enabled = v
@@ -2777,9 +2791,38 @@ end)
 local ShopPage = PageService:Create("Shop")
 Section(ShopPage, "Shop Controller", "Generic item purchasing through the adapter")
 
-local ShopStatus = Card(ShopPage, "SHOP STATUS", "Idle")
-ValueBox(ShopPage, "Item Name", "", function(v)
-    Full.Status.ShopItem = tostring(v)
+local ShopStatusCard, ShopStatus = Card(ShopPage, "SHOP STATUS", "Idle")
+local ShopItemHolder = Create("Frame", {
+    Size = UDim2.new(1, 0, 0, 70),
+    BackgroundColor3 = Theme.Card,
+    BorderSizePixel = 0
+}, ShopPage)
+Corner(ShopItemHolder, 11)
+Stroke(ShopItemHolder, Theme.Secondary, 0.3)
+Create("TextLabel", {
+    Position = UDim2.new(0, 14, 0, 10),
+    Size = UDim2.new(0.5, -14, 0, 20),
+    BackgroundTransparency = 1,
+    Text = "Item Name",
+    Font = Enum.Font.GothamBold,
+    TextSize = 12,
+    TextColor3 = Theme.Text,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, ShopItemHolder)
+local ShopItemBox = Create("TextBox", {
+    Position = UDim2.new(1, -120, 0, 10),
+    Size = UDim2.new(0, 106, 0, 36),
+    BackgroundColor3 = Theme.Secondary,
+    Text = "",
+    PlaceholderText = "Item",
+    Font = Enum.Font.GothamBold,
+    TextSize = 12,
+    TextColor3 = Theme.Text,
+    ClearTextOnFocus = false
+}, ShopItemHolder)
+Corner(ShopItemBox, 8)
+Connect(ShopItemBox:GetPropertyChangedSignal("Text"), function()
+    Full.Status.ShopItem = ShopItemBox.Text
 end)
 
 ActionButton(ShopPage, "Buy Selected Item", function()
@@ -2797,7 +2840,7 @@ end)
 --==================================================
 local ESPPage = PageService:Create("ESP")
 Section(ESPPage, "ESP Controller", "Local visual markers for players, bosses and fruits")
-local ESPStatus = Card(ESPPage, "ESP STATUS", "Idle")
+local ESPStatusCard, ESPStatus = Card(ESPPage, "ESP STATUS", "Idle")
 
 local ESPFolder = Instance.new("Folder")
 ESPFolder.Name = "Floquitave_ESP_31"
