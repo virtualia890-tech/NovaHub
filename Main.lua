@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.6.2
+    Version: 2.6.3
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.6.2",
+    Version = "2.6.3",
 
     Width = 920,
     Height = 590,
@@ -162,12 +162,16 @@ local Themes = {
 local Theme = Themes[Config.Theme]
 
 --==================================================
--- MOVEMENT SERVICE 2.6.2
+-- MOVEMENT SERVICE 2.6.3
 --==================================================
 
 local MovementService = {
     Active = false,
-    Target = nil
+    Target = nil,
+    Tween = nil,
+    Speed = 325,
+    Status = "Idle",
+    DestinationName = "None"
 }
 
 function MovementService:GetRoot()
@@ -175,28 +179,128 @@ function MovementService:GetRoot()
     return character and character:FindFirstChild("HumanoidRootPart")
 end
 
+function MovementService:GetHumanoid()
+    local character = LocalPlayer.Character
+    return character and character:FindFirstChildOfClass("Humanoid")
+end
+
 function MovementService:Stop()
     self.Active = false
     self.Target = nil
+    self.Status = "Stopped"
+
+    if self.Tween then
+        pcall(function()
+            self.Tween:Cancel()
+        end)
+        self.Tween = nil
+    end
 end
 
-function MovementService:GoTo(targetCFrame, yOffset)
+function MovementService:SetCollision(enabled)
+    local character = LocalPlayer.Character
+    if not character then return end
+
+    for _, object in ipairs(character:GetDescendants()) do
+        if object:IsA("BasePart") then
+            pcall(function()
+                object.CanCollide = enabled
+            end)
+        end
+    end
+end
+
+function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     local root = self:GetRoot()
-    if not root or not targetCFrame then return false end
+    local humanoid = self:GetHumanoid()
+
+    if not root or not targetCFrame then
+        self.Status = "Character unavailable"
+        return false
+    end
+
+    self:Stop()
 
     self.Active = true
     self.Target = targetCFrame
-    local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
+    self.DestinationName = destinationName or "Target"
+    self.Status = "Moving"
 
-    -- Controlled test movement. One service owns all teleports in this build.
+    if humanoid then
+        humanoid.Sit = false
+    end
+
     pcall(function()
-        root.CFrame = destination
+        root.Anchored = false
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
     end)
 
+    local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
+    local distance = (root.Position - destination.Position).Magnitude
+
+    -- Short moves are instant; long island travel uses a controlled tween.
+    if distance <= 220 then
+        local ok = pcall(function()
+            root.CFrame = destination
+            root.AssemblyLinearVelocity = Vector3.zero
+        end)
+
+        self.Active = false
+        self.Status = ok and "Arrived" or "Failed"
+        return ok
+    end
+
+    self:SetCollision(false)
+
+    local duration = math.clamp(distance / self.Speed, 0.15, 45)
+    local tween = TweenService:Create(
+        root,
+        TweenInfo.new(duration, Enum.EasingStyle.Linear),
+        {CFrame = destination}
+    )
+
+    self.Tween = tween
+
+    local ok = pcall(function()
+        tween:Play()
+        tween.Completed:Wait()
+    end)
+
+    if self.Tween == tween then
+        self.Tween = nil
+    end
+
+    self:SetCollision(true)
+
+    if not ok then
+        self.Active = false
+        self.Status = "Failed"
+        return false
+    end
+
+    root = self:GetRoot()
+    if not root then
+        self.Active = false
+        self.Status = "Character unavailable"
+        return false
+    end
+
+    local remaining = (root.Position - destination.Position).Magnitude
+
+    -- Final correction for small replication drift.
+    if remaining <= 350 then
+        pcall(function()
+            root.CFrame = destination
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+        remaining = (root.Position - destination.Position).Magnitude
+    end
+
     self.Active = false
-    return true
+    self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
+    return remaining <= 60
 end
 
 --==================================================
@@ -204,7 +308,7 @@ end
 --==================================================
 
 local IslandCFrames = {
-    ["First Sea"] = {
+    ["CA1"] = {
         ["Bandit Island"] = CFrame.new(1060, 16, 1547),
         ["Jungle"] = CFrame.new(-1602, 37, 153),
         ["Pirate Village"] = CFrame.new(-1140, 5, 3828),
@@ -218,7 +322,7 @@ local IslandCFrames = {
         ["Underwater City"] = CFrame.new(61122, 18, 1569),
         ["Fountain City"] = CFrame.new(5259, 39, 4050)
     },
-    ["Second Sea"] = {
+    ["CA2"] = {
         ["Kingdom of Rose"] = CFrame.new(-425, 73, 1836),
         ["Green Zone"] = CFrame.new(-2448, 73, -3210),
         ["Graveyard"] = CFrame.new(-5494, 49, -794),
@@ -228,7 +332,7 @@ local IslandCFrames = {
         ["Ice Castle"] = CFrame.new(5400, 28, -6236),
         ["Forgotten Island"] = CFrame.new(-3052, 237, -10148)
     },
-    ["Third Sea"] = {
+    ["CA3"] = {
         ["Port Town"] = CFrame.new(-290, 44, 5454),
         ["Hydra Island"] = CFrame.new(5228, 604, 345),
         ["Great Tree"] = CFrame.new(2276, 25, -6493),
@@ -244,7 +348,7 @@ local IslandCFrames = {
 }
 
 local TeleportLocations = {
-    ["First Sea"] = {
+    ["CA1"] = {
         "Bandit Island",
         "Jungle",
         "Pirate Village",
@@ -259,7 +363,7 @@ local TeleportLocations = {
         "Fountain City"
     },
 
-    ["Second Sea"] = {
+    ["CA2"] = {
         "Kingdom of Rose",
         "Green Zone",
         "Graveyard",
@@ -270,7 +374,7 @@ local TeleportLocations = {
         "Forgotten Island"
     },
 
-    ["Third Sea"] = {
+    ["CA3"] = {
         "Port Town",
         "Hydra Island",
         "Great Tree",
@@ -1188,7 +1292,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.6.2 Movement + Teleport",
+    Text = "2.6.3 Teleport Rework",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1333,13 +1437,39 @@ local TeleportPage = PageService:Create("Teleport")
 Section(
     TeleportPage,
     "Teleport",
-    "Destinos organizados por Sea"
+    "CA1 / CA2 / CA3 — selecione o mapa e depois a ilha"
 )
+
+local TeleportStatusCard, TeleportStatusValue = Card(
+    TeleportPage,
+    "STATUS",
+    "Idle"
+)
+
+local TeleportDestinationCard, TeleportDestinationValue = Card(
+    TeleportPage,
+    "DESTINO",
+    "None"
+)
+
+local SelectedCA = "CA1"
+
+local CAHolder = Create("Frame", {
+    Size = UDim2.new(1, 0, 0, 44),
+    BackgroundTransparency = 1
+}, TeleportPage)
+
+local CALayout = Create("UIListLayout", {
+    FillDirection = Enum.FillDirection.Horizontal,
+    HorizontalAlignment = Enum.HorizontalAlignment.Center,
+    Padding = UDim.new(0, 8),
+    SortOrder = Enum.SortOrder.LayoutOrder
+}, CAHolder)
 
 local TeleportSearch = Create("TextBox", {
     Size = UDim2.new(1, 0, 0, 40),
     BackgroundColor3 = Theme.Card,
-    PlaceholderText = "Search island...",
+    PlaceholderText = "Pesquisar ilha...",
     PlaceholderColor3 = Theme.SubText,
     Text = "",
     Font = Enum.Font.Gotham,
@@ -1357,10 +1487,12 @@ local TeleportHolder = Create("Frame", {
     AutomaticSize = Enum.AutomaticSize.Y
 }, TeleportPage)
 
-local TeleportLayout = Create("UIListLayout", {
+Create("UIListLayout", {
     Padding = UDim.new(0, 8),
     SortOrder = Enum.SortOrder.LayoutOrder
 }, TeleportHolder)
+
+local BuildTeleport
 
 local function ClearTeleport()
     for _, child in ipairs(TeleportHolder:GetChildren()) do
@@ -1370,80 +1502,123 @@ local function ClearTeleport()
     end
 end
 
-local function BuildTeleport()
+local function SetTeleportStatus(status, destination)
+    TeleportStatusValue.Text = status or MovementService.Status
+    if destination then
+        TeleportDestinationValue.Text = destination
+    end
+end
+
+local function TeleportToIsland(caName, locationName)
+    local destination = IslandCFrames[caName]
+        and IslandCFrames[caName][locationName]
+
+    if not destination then
+        SetTeleportStatus("Destino não configurado", locationName)
+        Notify("Teleport", "Destino não configurado: " .. locationName)
+        return
+    end
+
+    SetTeleportStatus("Teleportando...", locationName)
+
+    task.spawn(function()
+        local ok = MovementService:GoTo(destination, 5, locationName)
+        SetTeleportStatus(MovementService.Status, locationName)
+
+        if ok then
+            Notify("Teleport", "Chegou em " .. locationName .. ".")
+        else
+            Notify("Teleport", "Falha ao chegar em " .. locationName .. ".")
+        end
+    end)
+end
+
+BuildTeleport = function()
     ClearTeleport()
 
+    local locations = TeleportLocations[SelectedCA] or {}
     local search = string.lower(TeleportSearch.Text or "")
 
-    for seaName, locations in pairs(TeleportLocations) do
-        local matching = {}
+    local header = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 42),
+        BackgroundColor3 = Theme.Secondary,
+        BorderSizePixel = 0
+    }, TeleportHolder)
 
-        for _, locationName in ipairs(locations) do
-            if search == ""
-                or string.find(string.lower(locationName), search, 1, true)
-                or string.find(string.lower(seaName), search, 1, true)
-            then
-                table.insert(matching, locationName)
-            end
-        end
+    Corner(header, 10)
 
-        if #matching > 0 then
-            local seaHeader = Create("Frame", {
+    Create("TextLabel", {
+        Position = UDim2.new(0, 14, 0, 0),
+        Size = UDim2.new(1, -28, 1, 0),
+        BackgroundTransparency = 1,
+        Text = SelectedCA .. " — " .. tostring(#locations) .. " destinos",
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, header)
+
+    for _, locationName in ipairs(locations) do
+        if search == "" or string.find(string.lower(locationName), search, 1, true) then
+            local button = Create("TextButton", {
                 Size = UDim2.new(1, 0, 0, 42),
-                BackgroundColor3 = Theme.Secondary,
-                BorderSizePixel = 0
+                BackgroundColor3 = Theme.Card,
+                Text = "   " .. locationName,
+                Font = Enum.Font.Gotham,
+                TextSize = 12,
+                TextColor3 = Theme.Text,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                AutoButtonColor = false
             }, TeleportHolder)
 
-            Corner(seaHeader, 10)
+            Corner(button, 9)
+            AddHoverEffect(button)
 
-            Create("TextLabel", {
-                Position = UDim2.new(0, 14, 0, 0),
-                Size = UDim2.new(1, -28, 1, 0),
-                BackgroundTransparency = 1,
-                Text = "▼  " .. seaName,
-                Font = Enum.Font.GothamBold,
-                TextSize = 13,
-                TextColor3 = Theme.Text,
-                TextXAlignment = Enum.TextXAlignment.Left
-            }, seaHeader)
-
-            for _, locationName in ipairs(matching) do
-                local button = Create("TextButton", {
-                    Size = UDim2.new(1, 0, 0, 42),
-                    BackgroundColor3 = Theme.Card,
-                    Text = "   " .. locationName,
-                    Font = Enum.Font.Gotham,
-                    TextSize = 12,
-                    TextColor3 = Theme.Text,
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    AutoButtonColor = false
-                }, TeleportHolder)
-
-                Corner(button, 9)
-                AddHoverEffect(button)
-
-                Connect(button.MouseButton1Click, function()
-                    local destination = IslandCFrames[seaName]
-                        and IslandCFrames[seaName][locationName]
-
-                    if not destination then
-                        Notify("Teleport", "Destino ainda não configurado: " .. locationName)
-                        return
-                    end
-
-                    FarmState.Enabled = false
-                    MovementService:Stop()
-
-                    if MovementService:GoTo(destination, 4) then
-                        Notify("Teleport", "Teleportado para " .. locationName .. ".")
-                    else
-                        Notify("Teleport", "Não foi possível teleportar.")
-                    end
-                end)
-            end
+            Connect(button.MouseButton1Click, function()
+                TeleportToIsland(SelectedCA, locationName)
+            end)
         end
     end
 end
+
+for index, caName in ipairs({"CA1", "CA2", "CA3"}) do
+    local caButton = Create("TextButton", {
+        Size = UDim2.new(0.32, -4, 1, 0),
+        BackgroundColor3 = caName == SelectedCA and Theme.Accent or Theme.Card,
+        Text = caName,
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        TextColor3 = Theme.Text,
+        AutoButtonColor = false,
+        LayoutOrder = index
+    }, CAHolder)
+
+    Corner(caButton, 9)
+    AddHoverEffect(caButton)
+
+    Connect(caButton.MouseButton1Click, function()
+        SelectedCA = caName
+
+        for _, child in ipairs(CAHolder:GetChildren()) do
+            if child:IsA("TextButton") then
+                child.BackgroundColor3 =
+                    child == caButton and Theme.Accent or Theme.Card
+            end
+        end
+
+        BuildTeleport()
+    end)
+end
+
+ActionButton(
+    TeleportPage,
+    "STOP TELEPORT",
+    function()
+        MovementService:Stop()
+        SetTeleportStatus("Stopped")
+        Notify("Teleport", "Movimento interrompido.")
+    end
+)
 
 Connect(TeleportSearch:GetPropertyChangedSignal("Text"), BuildTeleport)
 
@@ -1677,7 +1852,7 @@ local function StartLevelQuest(q)
     end
 
     FarmState.QuestStatus = "Going to quest"
-    MovementService:GoTo(q.Pos, 3)
+    MovementService:GoTo(q.Pos, 3, "Quest NPC")
     task.wait(0.35)
 
     local ok = pcall(function()
@@ -1878,7 +2053,7 @@ local function MoveToTarget(target)
 
     -- Stay above the mob instead of orbiting around it.
     local desired = targetRoot.CFrame * CFrame.new(0, FarmState.Distance, 0)
-    MovementService:GoTo(CFrame.new(desired.Position, targetRoot.Position), 0)
+    MovementService:GoTo(CFrame.new(desired.Position, targetRoot.Position), 0, "Farm Target")
 
     -- Bring Mob is anchored to the farm location, never to the player.
     if FarmState.BringMobs and FarmState.FarmAnchor then
