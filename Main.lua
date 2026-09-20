@@ -1,3 +1,57 @@
+-- FLOQUITAVE 3.1.1 BOOTSTRAP / DIAGNOSTIC
+-- This tiny layer is intentionally created before the main hub so a runtime
+-- error in any later system cannot make the user think the script did nothing.
+local __Players = game:GetService("Players")
+local __LocalPlayer = __Players.LocalPlayer
+local __PlayerGui = __LocalPlayer and __LocalPlayer:WaitForChild("PlayerGui", 10)
+local __Bootstrap
+local __Status
+
+if __PlayerGui then
+    pcall(function()
+        local old = __PlayerGui:FindFirstChild("Floquitave_Bootstrap_3_1_1")
+        if old then old:Destroy() end
+    end)
+    __Bootstrap = Instance.new("ScreenGui")
+    __Bootstrap.Name = "Floquitave_Bootstrap_3_1_1"
+    __Bootstrap.ResetOnSpawn = false
+    __Bootstrap.DisplayOrder = 999999
+    __Bootstrap.IgnoreGuiInset = true
+    __Bootstrap.Parent = __PlayerGui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 420, 0, 100)
+    frame.Position = UDim2.new(0.5, -210, 0.5, -50)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
+    frame.BorderSizePixel = 0
+    frame.Parent = __Bootstrap
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -24, 0, 28)
+    title.Position = UDim2.new(0, 12, 0, 10)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 16
+    title.TextColor3 = Color3.fromRGB(245,245,250)
+    title.Text = "Floquitave 3.1.1 • Inicializando..."
+    title.Parent = frame
+
+    __Status = Instance.new("TextLabel")
+    __Status.Size = UDim2.new(1, -24, 0, 45)
+    __Status.Position = UDim2.new(0, 12, 0, 42)
+    __Status.BackgroundTransparency = 1
+    __Status.Font = Enum.Font.Gotham
+    __Status.TextSize = 12
+    __Status.TextWrapped = true
+    __Status.TextXAlignment = Enum.TextXAlignment.Left
+    __Status.TextYAlignment = Enum.TextYAlignment.Top
+    __Status.TextColor3 = Color3.fromRGB(170,170,185)
+    __Status.Text = "Carregando interface..."
+    __Status.Parent = frame
+end
+
+local __ok, __err = xpcall(function()
 --[[
     FLOQUITAVE HUB
     Version: 3.1.0
@@ -618,17 +672,18 @@ pcall(function()
 end)
 
 do
-    local parentGui
-    pcall(function()
-        if gethui then
-            parentGui = gethui()
-        end
-    end)
+    local parentGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not parentGui then
+        parentGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    end
+    if not parentGui then
+        pcall(function() parentGui = gethui and gethui() or nil end)
+    end
     if not parentGui then
         pcall(function() parentGui = game:GetService("CoreGui") end)
     end
     if not parentGui then
-        parentGui = LocalPlayer:WaitForChild("PlayerGui")
+        error("Nao foi possivel encontrar PlayerGui/CoreGui para criar a interface.")
     end
     ScreenGui.Parent = parentGui
 end
@@ -1123,7 +1178,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "3.0 Full Systems Build",
+    Text = "3.1.1 Full Systems Build",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -3694,7 +3749,7 @@ ApplyTheme()
 
 Notify(
     "Floquitave",
-    "3.0.0 carregado com sucesso."
+    "3.1.1 carregado com sucesso."
 )
 
 print(
@@ -3702,3 +3757,18 @@ print(
     .. Config.Version
     .. " loaded."
 )
+end, function(err)
+    return tostring(err)
+end)
+
+if __ok then
+    if __Bootstrap then
+        pcall(function() __Bootstrap:Destroy() end)
+    end
+else
+    warn("[Floquitave 3.1.1] ERRO AO INICIAR: " .. tostring(__err))
+    if __Status then
+        __Status.TextColor3 = Color3.fromRGB(255, 120, 120)
+        __Status.Text = "ERRO AO INICIAR:\n" .. tostring(__err) .. "\n\nEnvie exatamente esta mensagem se continuar."
+    end
+end
