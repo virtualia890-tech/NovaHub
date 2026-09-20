@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.6.0
+    Version: 2.6.1
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -19,6 +19,7 @@ local Stats = game:GetService("Stats")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local MarketplaceService = game:GetService("MarketplaceService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -28,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.6.0",
+    Version = "2.6.1",
 
     Width = 920,
     Height = 590,
@@ -1109,7 +1110,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.6.0 Main Farm - Step 1",
+    Text = "2.6.1 Level Farm + Quest Test",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1422,7 +1423,13 @@ local FarmState = {
     ScanRadius = 350,
     AttackCooldown = 0.12,
     TargetName = "Auto",
-    SelectedWeapon = "Auto",
+    AutoQuest = true,
+    QuestStatus = "Idle",
+    QuestMob = nil,
+    QuestName = nil,
+    QuestLevel = nil,
+    QuestPosition = nil,
+    FarmAnchor = nil,
     CurrentTarget = nil,
     CurrentTool = nil,
     LastAttack = 0,
@@ -1500,6 +1507,98 @@ local function FindEnemyContainers()
 
     return containers
 end
+
+
+--==================================================
+-- LEVEL FARM / QUEST TEST
+--==================================================
+
+-- First Sea quest table for this controlled test stage.
+-- More seas can be added after this cycle is confirmed working.
+local QuestData = {
+    {Min=1, Max=9, Mob="Bandit", Quest="BanditQuest1", Level=1, Pos=CFrame.new(1060,16,1547)},
+    {Min=10, Max=14, Mob="Monkey", Quest="JungleQuest", Level=1, Pos=CFrame.new(-1602,37,153)},
+    {Min=15, Max=29, Mob="Gorilla", Quest="JungleQuest", Level=2, Pos=CFrame.new(-1602,37,153)},
+    {Min=30, Max=39, Mob="Pirate", Quest="BuggyQuest1", Level=1, Pos=CFrame.new(-1140,5,3828)},
+    {Min=40, Max=59, Mob="Brute", Quest="BuggyQuest1", Level=2, Pos=CFrame.new(-1140,5,3828)},
+    {Min=60, Max=74, Mob="Desert Bandit", Quest="DesertQuest", Level=1, Pos=CFrame.new(896,6,4390)},
+    {Min=75, Max=89, Mob="Desert Officer", Quest="DesertQuest", Level=2, Pos=CFrame.new(896,6,4390)},
+    {Min=90, Max=99, Mob="Snow Bandit", Quest="SnowQuest", Level=1, Pos=CFrame.new(1389,87,-1298)},
+    {Min=100, Max=119, Mob="Snowman", Quest="SnowQuest", Level=2, Pos=CFrame.new(1389,87,-1298)},
+    {Min=120, Max=149, Mob="Chief Petty Officer", Quest="MarineQuest2", Level=1, Pos=CFrame.new(-5035,29,4325)},
+    {Min=150, Max=174, Mob="Sky Bandit", Quest="SkyQuest", Level=1, Pos=CFrame.new(-4842,718,-2623)},
+    {Min=175, Max=189, Mob="Dark Master", Quest="SkyQuest", Level=2, Pos=CFrame.new(-4842,718,-2623)},
+    {Min=190, Max=209, Mob="Prisoner", Quest="PrisonerQuest", Level=1, Pos=CFrame.new(5308,2,475)},
+    {Min=210, Max=249, Mob="Dangerous Prisoner", Quest="PrisonerQuest", Level=2, Pos=CFrame.new(5308,2,475)},
+    {Min=250, Max=274, Mob="Toga Warrior", Quest="ColosseumQuest", Level=1, Pos=CFrame.new(-1577,7,-2984)},
+    {Min=275, Max=299, Mob="Gladiator", Quest="ColosseumQuest", Level=2, Pos=CFrame.new(-1577,7,-2984)},
+    {Min=300, Max=324, Mob="Military Soldier", Quest="MagmaQuest", Level=1, Pos=CFrame.new(-5316,12,8517)},
+    {Min=325, Max=374, Mob="Military Spy", Quest="MagmaQuest", Level=2, Pos=CFrame.new(-5316,12,8517)},
+    {Min=375, Max=399, Mob="Fishman Warrior", Quest="FishmanQuest", Level=1, Pos=CFrame.new(61122,18,1569)},
+    {Min=400, Max=449, Mob="Fishman Commando", Quest="FishmanQuest", Level=2, Pos=CFrame.new(61122,18,1569)},
+    {Min=450, Max=474, Mob="God's Guard", Quest="SkyExp1Quest", Level=1, Pos=CFrame.new(-4721,845,-1954)},
+    {Min=475, Max=524, Mob="Shanda", Quest="SkyExp1Quest", Level=2, Pos=CFrame.new(-7863,5545,-380)},
+    {Min=525, Max=549, Mob="Royal Squad", Quest="SkyExp2Quest", Level=1, Pos=CFrame.new(-7903,5635,-1411)},
+    {Min=550, Max=624, Mob="Royal Soldier", Quest="SkyExp2Quest", Level=2, Pos=CFrame.new(-7903,5635,-1411)},
+    {Min=625, Max=649, Mob="Galley Pirate", Quest="FountainQuest", Level=1, Pos=CFrame.new(5259,39,4050)},
+    {Min=650, Max=9999, Mob="Galley Captain", Quest="FountainQuest", Level=2, Pos=CFrame.new(5259,39,4050)}
+}
+
+local function GetLevelFarmQuest()
+    local level = PlayerService:GetLevel()
+    for _, q in ipairs(QuestData) do
+        if level >= q.Min and level <= q.Max then
+            return q
+        end
+    end
+    return nil
+end
+
+local function GetQuestRemote()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    return remotes and remotes:FindFirstChild("CommF_")
+end
+
+local function QuestVisible()
+    local gui = LocalPlayer:FindFirstChild("PlayerGui")
+    local main = gui and gui:FindFirstChild("Main")
+    local quest = main and main:FindFirstChild("Quest")
+    return quest and quest.Visible == true
+end
+
+local function StartLevelQuest(q)
+    if not q then return false end
+    local remote = GetQuestRemote()
+    local root = GetCharacterRoot()
+    if not remote or not root then
+        FarmState.QuestStatus = "Quest remote/root unavailable"
+        return false
+    end
+
+    FarmState.QuestMob = q.Mob
+    FarmState.QuestName = q.Quest
+    FarmState.QuestLevel = q.Level
+    FarmState.QuestPosition = q.Pos
+    FarmState.TargetName = q.Mob
+
+    if QuestVisible() then
+        FarmState.QuestStatus = "Quest active"
+        return true
+    end
+
+    FarmState.QuestStatus = "Going to quest"
+    root.CFrame = q.Pos * CFrame.new(0, 3, 0)
+    task.wait(0.35)
+
+    local ok = pcall(function()
+        remote:InvokeServer("StartQuest", q.Quest, q.Level)
+    end)
+
+    FarmState.QuestStatus = ok and "Quest requested" or "Quest request failed"
+    task.wait(0.35)
+    return ok
+end
+
 
 local function IsValidFarmTarget(model)
     if not IsAlive(model) then
@@ -1599,59 +1698,50 @@ local function GetEquippedTool()
     return nil
 end
 
-local function ToolMatchesSelection(tool)
-    if not tool or not tool:IsA("Tool") then
-        return false
-    end
+local function IsLikelyFightingStyle(tool)
+    if not tool or not tool:IsA("Tool") then return false end
+    if tool.ToolTip == "Melee" then return true end
 
-    if FarmState.SelectedWeapon == "Auto" or FarmState.SelectedWeapon == "" then
-        return true
+    local n = string.lower(tool.Name)
+    local names = {
+        "combat","dark step","electric","water kung fu","dragon breath",
+        "superhuman","death step","sharkman karate","electric claw",
+        "dragon talon","godhuman","sanguine art"
+    }
+    for _, name in ipairs(names) do
+        if string.find(n, name, 1, true) then return true end
     end
-
-    return string.find(
-        string.lower(tool.Name),
-        string.lower(FarmState.SelectedWeapon),
-        1,
-        true
-    ) ~= nil
+    return false
 end
 
-local function EquipSelectedTool()
+local function EquipFirstTool()
     local humanoid = GetCharacterHumanoid()
-
-    if not humanoid then
-        return nil
-    end
+    if not humanoid then return nil end
 
     local equipped = GetEquippedTool()
-
-    if equipped and ToolMatchesSelection(equipped) then
+    if equipped and IsLikelyFightingStyle(equipped) then
         FarmState.CurrentTool = equipped
         return equipped
     end
 
     local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if not backpack then return nil end
 
-    if not backpack then
-        return nil
-    end
-
+    local fallback = nil
     for _, tool in ipairs(backpack:GetChildren()) do
-        if ToolMatchesSelection(tool) then
-            pcall(function()
-                humanoid:EquipTool(tool)
-            end)
-
-            FarmState.CurrentTool = tool
-            return tool
+        if tool:IsA("Tool") then
+            fallback = fallback or tool
+            if IsLikelyFightingStyle(tool) then
+                pcall(function() humanoid:EquipTool(tool) end)
+                FarmState.CurrentTool = tool
+                return tool
+            end
         end
     end
 
+    -- Do not equip a random inventory item in this test build.
+    FarmState.CurrentTool = nil
     return nil
-end
-
-local function EquipFirstTool()
-    return EquipSelectedTool()
 end
 
 local function AttackTarget(target)
@@ -1690,24 +1780,36 @@ end
 local function MoveToTarget(target)
     local root = GetCharacterRoot()
     local targetRoot = GetTargetRoot(target)
+    if not root or not targetRoot then return false end
 
-    if not root or not targetRoot then
-        return false
+    if not FarmState.FarmAnchor then
+        FarmState.FarmAnchor = targetRoot.CFrame
     end
 
-    local offset = CFrame.new(0, 0, FarmState.Distance)
-
-    if FarmState.BringMobs then
-        -- Local positioning only. A server-authoritative implementation
-        -- should perform the actual mob positioning on the server.
-        pcall(function()
-            targetRoot.CFrame = root.CFrame * CFrame.new(0, 0, -FarmState.Distance)
-        end)
-    end
-
+    -- Stay above the mob instead of orbiting around it.
+    local desired = targetRoot.CFrame * CFrame.new(0, FarmState.Distance, 0)
     pcall(function()
-        root.CFrame = targetRoot.CFrame * offset
+        root.CFrame = CFrame.new(desired.Position, targetRoot.Position)
     end)
+
+    -- Bring Mob is anchored to the farm location, never to the player.
+    if FarmState.BringMobs and FarmState.FarmAnchor then
+        local anchor = FarmState.FarmAnchor
+        for _, container in ipairs(FindEnemyContainers()) do
+            for _, mob in ipairs(container:GetChildren()) do
+                if IsValidFarmTarget(mob) then
+                    local mr = GetTargetRoot(mob)
+                    if mr and string.find(string.lower(mob.Name), string.lower(FarmState.TargetName), 1, true) then
+                        pcall(function()
+                            mr.CFrame = anchor
+                            mr.AssemblyLinearVelocity = Vector3.zero
+                            mr.AssemblyAngularVelocity = Vector3.zero
+                        end)
+                    end
+                end
+            end
+        end
+    end
 
     return true
 end
@@ -1729,6 +1831,7 @@ end
 local function StopFarm()
     FarmState.Enabled = false
     FarmState.CurrentTarget = nil
+    FarmState.FarmAnchor = nil
     FarmState.Status = "Stopped"
 
     ApplyNoClip(false)
@@ -1751,7 +1854,24 @@ local function FarmStep()
         ApplyNoClip(true)
     end
 
+    if FarmState.AutoQuest then
+        local q = GetLevelFarmQuest()
+        if q then
+            FarmState.TargetName = q.Mob
+            FarmState.QuestMob = q.Mob
+            if not QuestVisible() then
+                StartLevelQuest(q)
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+                return
+            end
+        else
+            FarmState.QuestStatus = "No quest for level/sea"
+        end
+    end
+
     if not FarmState.CurrentTarget or not IsValidFarmTarget(FarmState.CurrentTarget) then
+        FarmState.FarmAnchor = nil
         FarmState.CurrentTarget = GetNearestTarget()
     end
 
@@ -1794,121 +1914,6 @@ local FarmDistanceCard, FarmDistanceValue = Card(
     "DISTANCE",
     tostring(FarmState.Distance)
 )
-
-local FarmHPCard, FarmHPValue = Card(
-    FarmPage,
-    "TARGET HP",
-    "-"
-)
-
-local FarmWeaponCard, FarmWeaponValue = Card(
-    FarmPage,
-    "WEAPON",
-    FarmState.SelectedWeapon
-)
-
-
-local TargetNameHolder = Create("Frame", {
-    Size = UDim2.new(1, 0, 0, 70),
-    BackgroundColor3 = Theme.Card,
-    BorderSizePixel = 0
-}, FarmPage)
-
-Corner(TargetNameHolder, 11)
-Stroke(TargetNameHolder, Theme.Secondary, 0.3)
-
-Create("TextLabel", {
-    Position = UDim2.new(0, 14, 0, 10),
-    Size = UDim2.new(0.48, -14, 0, 20),
-    BackgroundTransparency = 1,
-    Text = "Target Name",
-    Font = Enum.Font.GothamBold,
-    TextSize = 12,
-    TextColor3 = Theme.Text,
-    TextXAlignment = Enum.TextXAlignment.Left
-}, TargetNameHolder)
-
-local TargetNameBox = Create("TextBox", {
-    Position = UDim2.new(0.48, 0, 0, 10),
-    Size = UDim2.new(0.52, -14, 0, 36),
-    BackgroundColor3 = Theme.Secondary,
-    Text = "Auto",
-    PlaceholderText = "Auto or enemy name",
-    PlaceholderColor3 = Theme.SubText,
-    Font = Enum.Font.GothamBold,
-    TextSize = 12,
-    TextColor3 = Theme.Text,
-    ClearTextOnFocus = false
-}, TargetNameHolder)
-
-Corner(TargetNameBox, 8)
-
-Connect(TargetNameBox.FocusLost, function()
-    local value = TargetNameBox.Text
-    if value == nil or value == "" then
-        value = "Auto"
-        TargetNameBox.Text = value
-    end
-
-    FarmState.TargetName = value
-    FarmState.CurrentTarget = nil
-    Notify("Main Farm", "Target: " .. value)
-end)
-
-local WeaponHolder = Create("Frame", {
-    Size = UDim2.new(1, 0, 0, 70),
-    BackgroundColor3 = Theme.Card,
-    BorderSizePixel = 0
-}, FarmPage)
-
-Corner(WeaponHolder, 11)
-Stroke(WeaponHolder, Theme.Secondary, 0.3)
-
-Create("TextLabel", {
-    Position = UDim2.new(0, 14, 0, 10),
-    Size = UDim2.new(0.48, -14, 0, 20),
-    BackgroundTransparency = 1,
-    Text = "Weapon",
-    Font = Enum.Font.GothamBold,
-    TextSize = 12,
-    TextColor3 = Theme.Text,
-    TextXAlignment = Enum.TextXAlignment.Left
-}, WeaponHolder)
-
-local WeaponBox = Create("TextBox", {
-    Position = UDim2.new(0.48, 0, 0, 10),
-    Size = UDim2.new(0.52, -14, 0, 36),
-    BackgroundColor3 = Theme.Secondary,
-    Text = "Auto",
-    PlaceholderText = "Auto or tool name",
-    PlaceholderColor3 = Theme.SubText,
-    Font = Enum.Font.GothamBold,
-    TextSize = 12,
-    TextColor3 = Theme.Text,
-    ClearTextOnFocus = false
-}, WeaponHolder)
-
-Corner(WeaponBox, 8)
-
-Connect(WeaponBox.FocusLost, function()
-    local value = WeaponBox.Text
-    if value == nil or value == "" then
-        value = "Auto"
-        WeaponBox.Text = value
-    end
-
-    FarmState.SelectedWeapon = value
-    FarmState.CurrentTool = nil
-    FarmWeaponValue.Text = value
-
-    if FarmState.UseTool then
-        local tool = EquipSelectedTool()
-        Notify(
-            "Main Farm",
-            tool and ("Weapon equipada: " .. tool.Name) or ("Weapon não encontrada: " .. value)
-        )
-    end
-end)
 
 Toggle(
     FarmPage,
@@ -2061,7 +2066,7 @@ ActionButton(
 
 ActionButton(
     FarmPage,
-    "EMERGENCY STOP",
+    "Stop Farm",
     function()
         StopFarm()
         Notify("Main Farm", "Farm parado manualmente.")
@@ -2088,41 +2093,17 @@ FarmConnect(RunService.Heartbeat, function()
     FarmStep()
 
     FarmStatusValue.Text = FarmState.Status
+    if QuestStatusValue then QuestStatusValue.Text = FarmState.QuestStatus or "Idle" end
+    if QuestMobValue then QuestMobValue.Text = FarmState.QuestMob or "Auto by level" end
 
     if FarmState.CurrentTarget
         and FarmState.CurrentTarget.Parent
         and IsValidFarmTarget(FarmState.CurrentTarget)
     then
         FarmTargetValue.Text = FarmState.CurrentTarget.Name
-
-        local targetHumanoid = FarmState.CurrentTarget:FindFirstChildOfClass("Humanoid")
-        local targetRoot = GetTargetRoot(FarmState.CurrentTarget)
-        local playerRoot = GetCharacterRoot()
-
-        if targetHumanoid then
-            FarmHPValue.Text = string.format(
-                "%d / %d",
-                math.max(0, math.floor(targetHumanoid.Health)),
-                math.max(0, math.floor(targetHumanoid.MaxHealth))
-            )
-        else
-            FarmHPValue.Text = "-"
-        end
-
-        if targetRoot and playerRoot then
-            FarmDistanceValue.Text = string.format(
-                "%.1f",
-                (targetRoot.Position - playerRoot.Position).Magnitude
-            )
-        end
     else
         FarmTargetValue.Text = "None"
-        FarmHPValue.Text = "-"
-        FarmDistanceValue.Text = tostring(FarmState.Distance)
     end
-
-    local equipped = GetEquippedTool()
-    FarmWeaponValue.Text = equipped and equipped.Name or FarmState.SelectedWeapon
 end)
 
 FarmConnect(LocalPlayer.CharacterAdded, function()
@@ -2157,12 +2138,19 @@ Section(
     "Quest management interface"
 )
 
+local QuestStatusCard, QuestStatusValue = Card(QuestPage, "QUEST STATUS", "Idle")
+local QuestMobCard, QuestMobValue = Card(QuestPage, "QUEST MOB", "Auto by level")
+
+
 Toggle(
     QuestPage,
     "Auto Quest",
-    "Test toggle — interface only",
-    false,
+    "Usa o nível atual para selecionar e iniciar a quest do Level Farm.",
+    true,
     function(enabled)
+        FarmState.AutoQuest = enabled
+        FarmState.CurrentTarget = nil
+        FarmState.FarmAnchor = nil
         Notify("Auto Quest", enabled and "Enabled" or "Disabled")
     end
 )
