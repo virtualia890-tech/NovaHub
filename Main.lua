@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.4
+    Version: 2.7.1
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.4",
+    Version = "2.7.1",
 
     Width = 920,
     Height = 590,
@@ -1376,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.7.4 Quest Cycle Fix",
+    Text = "2.7.1 Quest Flow + Special Farms",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1773,8 +1773,6 @@ local FarmState = {
     QuestRoutePending = false,
     QuestStartLevel = 0,
     QuestStartedAt = 0,
-    QuestMissingSince = 0,
-    QuestCompletionGrace = 0.75,
 
     Enabled = false,
     AutoMastery = false,
@@ -2118,7 +2116,6 @@ local function StartLevelQuest(q)
         FarmState.QuestRoutePending = true
         FarmState.QuestStartLevel = PlayerService:GetLevel()
         FarmState.QuestStartedAt = os.clock()
-        FarmState.QuestMissingSince = 0
         FarmState.QuestStatus = "Quest accepted - going to mobs"
     else
         FarmState.QuestStatus = "Quest request failed"
@@ -2650,74 +2647,48 @@ local function FarmStep()
         FarmState.MobPosition = q.MobPos
 
         local visible = QuestVisible()
-        local matches = visible and QuestMatches(q)
+        if visible then
+            FarmState.QuestSeenVisible = true
+        end
 
-        -- PHASE 1: a quest was just accepted.
-        -- Force one route to the mob area before doing any other quest decision.
+        -- If the hub has just accepted a quest, NEVER go back to the NPC
+        -- on the next heartbeat. The next phase is always the mob area.
         if FarmState.QuestOwnedByHub and FarmState.QuestRoutePending then
-            FarmState.QuestRoutePending = false
-            FarmState.QuestMissingSince = 0
             FarmState.CurrentTarget = nil
             FarmState.FarmAnchor = nil
-            FarmState.QuestStatus = "Quest accepted -> mobs"
+            FarmState.QuestRoutePending = false
+            FarmState.QuestStatus = "Quest accepted - travelling to " .. q.Mob
             MoveToQuestMobArea(q)
             return
         end
 
-        -- Remember that the quest UI really appeared at least once.
-        -- This prevents the short UI delay after StartQuest from being
-        -- interpreted as an instantly completed quest.
-        if visible then
-            FarmState.QuestSeenVisible = true
-            FarmState.QuestMissingSince = 0
-        end
-
-        -- PHASE 2: quest completion detector.
-        -- When a quest that was visibly active disappears, wait a short
-        -- grace period. If it stays gone, release ownership and return
-        -- to the NPC on the next step.
+        -- Once the quest UI has actually been observed, its disappearance
+        -- means the quest finished/was removed and a new one can be requested.
         if FarmState.QuestOwnedByHub and FarmState.QuestSeenVisible and not visible then
-            if FarmState.QuestMissingSince == 0 then
-                FarmState.QuestMissingSince = os.clock()
-                FarmState.QuestStatus = "Quest UI disappeared - confirming"
-                return
-            end
-
-            if os.clock() - FarmState.QuestMissingSince >= FarmState.QuestCompletionGrace then
-                FarmState.QuestOwnedByHub = false
-                FarmState.QuestSeenVisible = false
-                FarmState.QuestRoutePending = false
-                FarmState.QuestMissingSince = 0
-                FarmState.CurrentTarget = nil
-                FarmState.FarmAnchor = nil
-                FarmState.QuestStatus = "Quest complete -> new quest"
-                FarmState.Status = "Returning to quest NPC"
-                MovementService:Stop()
-                return
-            end
-        end
-
-        -- If the visible quest is no longer the quest for the current
-        -- level bracket, release it so StartLevelQuest can replace it.
-        if FarmState.QuestOwnedByHub and visible and not matches then
             FarmState.QuestOwnedByHub = false
             FarmState.QuestSeenVisible = false
-            FarmState.QuestRoutePending = false
-            FarmState.QuestMissingSince = 0
             FarmState.CurrentTarget = nil
             FarmState.FarmAnchor = nil
-            FarmState.QuestStatus = "Quest changed -> refreshing"
         end
 
-        -- PHASE 3: acquire/reacquire quest.
+        -- Level changes may select a different quest bracket.
+        if FarmState.QuestOwnedByHub and FarmState.QuestStartLevel > 0 then
+            local nowLevel = PlayerService:GetLevel()
+            local ownedQuest = GetLevelFarmQuest()
+            if ownedQuest and ownedQuest.Mob ~= FarmState.QuestMob then
+                FarmState.QuestOwnedByHub = false
+                FarmState.QuestSeenVisible = false
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+            end
+        end
+
         if not FarmState.QuestOwnedByHub then
-            if matches then
+            if visible and QuestMatches(q) then
                 FarmState.QuestOwnedByHub = true
                 FarmState.QuestSeenVisible = true
-                FarmState.QuestMissingSince = 0
                 FarmState.QuestStatus = "Correct quest active"
             else
-                FarmState.Status = "Getting quest"
                 StartLevelQuest(q)
                 FarmState.CurrentTarget = nil
                 FarmState.FarmAnchor = nil
@@ -3049,20 +3020,7 @@ FarmConnect(RunService.Heartbeat, function()
     FarmStep()
 
     FarmStatusValue.Text = FarmState.Status
-    if QuestStatusValue then QuestStatusValue.Text = FarmState.QuestStatus
-        if QuestCycleValue then
-            if not FarmState.AutoQuest then
-                QuestCycleValue.Text = "Auto Quest OFF"
-            elseif not FarmState.QuestOwnedByHub then
-                QuestCycleValue.Text = "GET QUEST"
-            elseif FarmState.QuestRoutePending then
-                QuestCycleValue.Text = "QUEST -> MOBS"
-            elseif FarmState.QuestSeenVisible then
-                QuestCycleValue.Text = "FARMING QUEST"
-            else
-                QuestCycleValue.Text = "WAITING QUEST UI"
-            end
-        end or "Idle" end
+    if QuestStatusValue then QuestStatusValue.Text = FarmState.QuestStatus or "Idle" end
     if QuestMobValue then QuestMobValue.Text = FarmState.QuestMob or "Auto by level"
         QuestSeaValue.Text = FarmState.CurrentSea and ("Sea " .. tostring(FarmState.CurrentSea)) or "Auto" end
 
