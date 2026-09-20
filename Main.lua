@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.5.1
+    Version: 2.6.0
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -28,7 +28,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.5.1",
+    Version = "2.6.0",
 
     Width = 920,
     Height = 590,
@@ -1109,7 +1109,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.5.1 Main Farm Test Build",
+    Text = "2.6.0 Main Farm - Step 1",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1422,6 +1422,7 @@ local FarmState = {
     ScanRadius = 350,
     AttackCooldown = 0.12,
     TargetName = "Auto",
+    SelectedWeapon = "Auto",
     CurrentTarget = nil,
     CurrentTool = nil,
     LastAttack = 0,
@@ -1598,7 +1599,24 @@ local function GetEquippedTool()
     return nil
 end
 
-local function EquipFirstTool()
+local function ToolMatchesSelection(tool)
+    if not tool or not tool:IsA("Tool") then
+        return false
+    end
+
+    if FarmState.SelectedWeapon == "Auto" or FarmState.SelectedWeapon == "" then
+        return true
+    end
+
+    return string.find(
+        string.lower(tool.Name),
+        string.lower(FarmState.SelectedWeapon),
+        1,
+        true
+    ) ~= nil
+end
+
+local function EquipSelectedTool()
     local humanoid = GetCharacterHumanoid()
 
     if not humanoid then
@@ -1607,7 +1625,7 @@ local function EquipFirstTool()
 
     local equipped = GetEquippedTool()
 
-    if equipped then
+    if equipped and ToolMatchesSelection(equipped) then
         FarmState.CurrentTool = equipped
         return equipped
     end
@@ -1619,7 +1637,7 @@ local function EquipFirstTool()
     end
 
     for _, tool in ipairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") then
+        if ToolMatchesSelection(tool) then
             pcall(function()
                 humanoid:EquipTool(tool)
             end)
@@ -1630,6 +1648,10 @@ local function EquipFirstTool()
     end
 
     return nil
+end
+
+local function EquipFirstTool()
+    return EquipSelectedTool()
 end
 
 local function AttackTarget(target)
@@ -1772,6 +1794,121 @@ local FarmDistanceCard, FarmDistanceValue = Card(
     "DISTANCE",
     tostring(FarmState.Distance)
 )
+
+local FarmHPCard, FarmHPValue = Card(
+    FarmPage,
+    "TARGET HP",
+    "-"
+)
+
+local FarmWeaponCard, FarmWeaponValue = Card(
+    FarmPage,
+    "WEAPON",
+    FarmState.SelectedWeapon
+)
+
+
+local TargetNameHolder = Create("Frame", {
+    Size = UDim2.new(1, 0, 0, 70),
+    BackgroundColor3 = Theme.Card,
+    BorderSizePixel = 0
+}, FarmPage)
+
+Corner(TargetNameHolder, 11)
+Stroke(TargetNameHolder, Theme.Secondary, 0.3)
+
+Create("TextLabel", {
+    Position = UDim2.new(0, 14, 0, 10),
+    Size = UDim2.new(0.48, -14, 0, 20),
+    BackgroundTransparency = 1,
+    Text = "Target Name",
+    Font = Enum.Font.GothamBold,
+    TextSize = 12,
+    TextColor3 = Theme.Text,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, TargetNameHolder)
+
+local TargetNameBox = Create("TextBox", {
+    Position = UDim2.new(0.48, 0, 0, 10),
+    Size = UDim2.new(0.52, -14, 0, 36),
+    BackgroundColor3 = Theme.Secondary,
+    Text = "Auto",
+    PlaceholderText = "Auto or enemy name",
+    PlaceholderColor3 = Theme.SubText,
+    Font = Enum.Font.GothamBold,
+    TextSize = 12,
+    TextColor3 = Theme.Text,
+    ClearTextOnFocus = false
+}, TargetNameHolder)
+
+Corner(TargetNameBox, 8)
+
+Connect(TargetNameBox.FocusLost, function()
+    local value = TargetNameBox.Text
+    if value == nil or value == "" then
+        value = "Auto"
+        TargetNameBox.Text = value
+    end
+
+    FarmState.TargetName = value
+    FarmState.CurrentTarget = nil
+    Notify("Main Farm", "Target: " .. value)
+end)
+
+local WeaponHolder = Create("Frame", {
+    Size = UDim2.new(1, 0, 0, 70),
+    BackgroundColor3 = Theme.Card,
+    BorderSizePixel = 0
+}, FarmPage)
+
+Corner(WeaponHolder, 11)
+Stroke(WeaponHolder, Theme.Secondary, 0.3)
+
+Create("TextLabel", {
+    Position = UDim2.new(0, 14, 0, 10),
+    Size = UDim2.new(0.48, -14, 0, 20),
+    BackgroundTransparency = 1,
+    Text = "Weapon",
+    Font = Enum.Font.GothamBold,
+    TextSize = 12,
+    TextColor3 = Theme.Text,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, WeaponHolder)
+
+local WeaponBox = Create("TextBox", {
+    Position = UDim2.new(0.48, 0, 0, 10),
+    Size = UDim2.new(0.52, -14, 0, 36),
+    BackgroundColor3 = Theme.Secondary,
+    Text = "Auto",
+    PlaceholderText = "Auto or tool name",
+    PlaceholderColor3 = Theme.SubText,
+    Font = Enum.Font.GothamBold,
+    TextSize = 12,
+    TextColor3 = Theme.Text,
+    ClearTextOnFocus = false
+}, WeaponHolder)
+
+Corner(WeaponBox, 8)
+
+Connect(WeaponBox.FocusLost, function()
+    local value = WeaponBox.Text
+    if value == nil or value == "" then
+        value = "Auto"
+        WeaponBox.Text = value
+    end
+
+    FarmState.SelectedWeapon = value
+    FarmState.CurrentTool = nil
+    FarmWeaponValue.Text = value
+
+    if FarmState.UseTool then
+        local tool = EquipSelectedTool()
+        Notify(
+            "Main Farm",
+            tool and ("Weapon equipada: " .. tool.Name) or ("Weapon não encontrada: " .. value)
+        )
+    end
+end)
 
 Toggle(
     FarmPage,
@@ -1924,7 +2061,7 @@ ActionButton(
 
 ActionButton(
     FarmPage,
-    "Stop Farm",
+    "EMERGENCY STOP",
     function()
         StopFarm()
         Notify("Main Farm", "Farm parado manualmente.")
@@ -1957,9 +2094,35 @@ FarmConnect(RunService.Heartbeat, function()
         and IsValidFarmTarget(FarmState.CurrentTarget)
     then
         FarmTargetValue.Text = FarmState.CurrentTarget.Name
+
+        local targetHumanoid = FarmState.CurrentTarget:FindFirstChildOfClass("Humanoid")
+        local targetRoot = GetTargetRoot(FarmState.CurrentTarget)
+        local playerRoot = GetCharacterRoot()
+
+        if targetHumanoid then
+            FarmHPValue.Text = string.format(
+                "%d / %d",
+                math.max(0, math.floor(targetHumanoid.Health)),
+                math.max(0, math.floor(targetHumanoid.MaxHealth))
+            )
+        else
+            FarmHPValue.Text = "-"
+        end
+
+        if targetRoot and playerRoot then
+            FarmDistanceValue.Text = string.format(
+                "%.1f",
+                (targetRoot.Position - playerRoot.Position).Magnitude
+            )
+        end
     else
         FarmTargetValue.Text = "None"
+        FarmHPValue.Text = "-"
+        FarmDistanceValue.Text = tostring(FarmState.Distance)
     end
+
+    local equipped = GetEquippedTool()
+    FarmWeaponValue.Text = equipped and equipped.Name or FarmState.SelectedWeapon
 end)
 
 FarmConnect(LocalPlayer.CharacterAdded, function()
