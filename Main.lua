@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.5.1
+    Version: 3.1.0
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -28,7 +28,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "3.0.0",
+    Version = "3.1.0",
 
     Width = 920,
     Height = 590,
@@ -1344,10 +1344,34 @@ local function BuildTeleport()
                 AddHoverEffect(button)
 
                 Connect(button.MouseButton1Click, function()
-                    Notify(
-                        "Teleport",
-                        locationName .. " selecionado."
-                    )
+                    local ok = false
+                    local root = PlayerService:GetCharacter() and PlayerService:GetCharacter():FindFirstChild("HumanoidRootPart")
+                    local searchNames = {locationName}
+                    if locationName == "Skylands" then table.insert(searchNames, "Sky") end
+                    if locationName == "Kingdom of Rose" then table.insert(searchNames, "KingdomOfRose") end
+                    if locationName == "Green Zone" then table.insert(searchNames, "GreenZone") end
+                    if locationName == "Port Town" then table.insert(searchNames, "PortTown") end
+                    if locationName == "Tiki Outpost" then table.insert(searchNames, "TikiOutpost") end
+                    if root then
+                        local candidates = {workspace:FindFirstChild("Map"), workspace:FindFirstChild("WorldOrigin"), workspace}
+                        for _, container in ipairs(candidates) do
+                            if container then
+                                for _, wanted in ipairs(searchNames) do
+                                    local found = container:FindFirstChild(wanted, true)
+                                    if found then
+                                        local part = found:IsA("BasePart") and found or found:FindFirstChildWhichIsA("BasePart", true)
+                                        if part then
+                                            root.CFrame = part.CFrame + Vector3.new(0, 8, 0)
+                                            ok = true
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                            if ok then break end
+                        end
+                    end
+                    Notify("Teleport", ok and (locationName .. " teleportado.") or (locationName .. " não encontrado no mapa."))
                 end)
             end
         end
@@ -2192,18 +2216,127 @@ local function FullAttack()
     return true
 end
 
--- Adapter layer: game-specific remotes/actions can be filled in later
--- without rewriting the UI/controllers.
-Full.Adapter.StartQuest = function(_) return false end
-Full.Adapter.AbandonQuest = function() return false end
-Full.Adapter.StartRaid = function(_) return false end
-Full.Adapter.BuyChip = function(_) return false end
-Full.Adapter.Awaken = function() return false end
-Full.Adapter.Teleport = function(_) return false end
-Full.Adapter.BuyItem = function(_) return false end
-Full.Adapter.UseSkill = function(_) return false end
-Full.Adapter.StartSeaEvent = function(_) return false end
-Full.Adapter.RaceAction = function(_) return false end
+--==================================================
+-- FLOQUITAVE 3.1 GAME ADAPTER
+--==================================================
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CommF = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("CommF_")
+local QuestDB31 = {
+    {1, 9, "Bandit", "BanditQuest1", 1}, {10, 14, "Monkey", "JungleQuest", 1},
+    {15, 29, "Gorilla", "JungleQuest", 2}, {30, 39, "Pirate", "BuggyQuest1", 1},
+    {40, 59, "Brute", "BuggyQuest1", 2}, {60, 74, "Desert Bandit", "DesertQuest", 1},
+    {75, 89, "Desert Officer", "DesertQuest", 2}, {90, 99, "Snow Bandit", "SnowQuest", 1},
+    {100, 119, "Snowman", "SnowQuest", 2}, {120, 149, "Chief Petty Officer", "MarineQuest2", 1},
+    {150, 174, "Sky Bandit", "SkyQuest", 1}, {175, 189, "Dark Master", "SkyQuest", 2},
+    {190, 209, "Prisoner", "PrisonerQuest", 1}, {210, 249, "Dangerous Prisoner", "PrisonerQuest", 2},
+    {250, 274, "Toga Warrior", "ColosseumQuest", 1}, {275, 299, "Gladiator", "ColosseumQuest", 2},
+    {300, 324, "Military Soldier", "MagmaQuest", 1}, {325, 374, "Military Spy", "MagmaQuest", 2},
+    {375, 399, "Fishman Warrior", "FishmanQuest", 1}, {400, 449, "Fishman Commando", "FishmanQuest", 2},
+    {450, 474, "God's Guard", "SkyExp1Quest", 1}, {475, 524, "Shanda", "SkyExp1Quest", 2},
+    {525, 549, "Royal Squad", "SkyExp2Quest", 1}, {550, 624, "Royal Soldier", "SkyExp2Quest", 2},
+    {625, 649, "Galley Pirate", "FountainQuest", 1}, {650, 699, "Galley Captain", "FountainQuest", 2},
+    {700, 724, "Raider", "Area1Quest", 1}, {725, 774, "Mercenary", "Area1Quest", 2},
+    {775, 799, "Swan Pirate", "Area2Quest", 1}, {800, 874, "Factory Staff", "Area2Quest", 2},
+    {875, 899, "Marine Lieutenant", "MarineQuest3", 1}, {900, 949, "Marine Captain", "MarineQuest3", 2},
+    {950, 974, "Zombie", "ZombieQuest", 1}, {975, 999, "Vampire", "ZombieQuest", 2},
+    {1000, 1049, "Snow Trooper", "SnowMountainQuest", 1}, {1050, 1099, "Winter Warrior", "SnowMountainQuest", 2},
+    {1100, 1124, "Lab Subordinate", "IceSideQuest", 1}, {1125, 1174, "Horned Warrior", "ForgottenQuest", 1},
+    {1175, 1199, "Magma Ninja", "FireSideQuest", 1}, {1200, 1249, "Lava Pirate", "FireSideQuest", 2},
+    {1250, 1274, "Ship Deckhand", "ShipQuest1", 1}, {1275, 1299, "Ship Engineer", "ShipQuest1", 2},
+    {1300, 1324, "Ship Steward", "ShipQuest2", 1}, {1325, 1349, "Ship Officer", "ShipQuest2", 2},
+    {1350, 1374, "Arctic Warrior", "FrostQuest", 1}, {1375, 1424, "Snow Lurker", "FrostQuest", 2},
+    {1425, 1449, "Sea Soldier", "ForgottenQuest", 1}, {1450, 1474, "Water Fighter", "ForgottenQuest", 2},
+    {1475, 1499, "Pirate Millionaire", "PiratePortQuest", 1}, {1500, 1524, "Pistol Billionaire", "PiratePortQuest", 2},
+    {1525, 1574, "Dragon Crew Warrior", "AmazonQuest", 1}, {1575, 1599, "Dragon Crew Archer", "AmazonQuest", 2},
+    {1600, 1624, "Female Islander", "FemaleIslandQuest", 1}, {1625, 1649, "Giant Islander", "FemaleIslandQuest", 2},
+    {1650, 1699, "Marine Commodore", "MarineTreeQuest", 1}, {1700, 1724, "Fishman Raider", "DeepForestIsland3", 1},
+    {1725, 1774, "Fishman Captain", "DeepForestIsland3", 2}, {1775, 1799, "Forest Pirate", "DeepForestIsland", 1},
+    {1800, 1824, "Mythological Pirate", "DeepForestIsland", 2}, {1825, 1849, "Jungle Pirate", "DeepForestIsland2", 1},
+    {1850, 1874, "Musketeer Pirate", "DeepForestIsland2", 2}, {1875, 1899, "Reborn Skeleton", "HauntedQuest1", 1},
+    {1900, 1924, "Living Zombie", "HauntedQuest1", 2}, {1925, 1949, "Demonic Soul", "HauntedQuest2", 1},
+    {1950, 1974, "Soul Reaper", "HauntedQuest2", 2}, {1975, 1999, "Cookie Crafter", "IceCreamIslandQuest", 1},
+    {2000, 2024, "Cake Guard", "IceCreamIslandQuest", 2}, {2025, 2049, "Baking Staff", "CakeQuest1", 1},
+    {2050, 2074, "Head Baker", "CakeQuest1", 2}, {2075, 2099, "Cocoa Warrior", "ChocQuest1", 1},
+    {2100, 2124, "Chocolate Bar Battler", "ChocQuest1", 2}, {2125, 2149, "Sweet Thief", "ChocQuest2", 1},
+    {2150, 2174, "Candy Rebel", "ChocQuest2", 2}, {2175, 2199, "Candy Pirate", "CandyQuest1", 1},
+    {2200, 2224, "Snow Demon", "CandyQuest1", 2}, {2225, 2249, "Isle Outlaw", "TikiQuest1", 1},
+    {2250, 2274, "Island Boy", "TikiQuest1", 2},
+}
+
+local function CommF31(...)
+    if not CommF then return false, "CommF_ not found" end
+    local ok, result = pcall(function() return CommF:InvokeServer(...) end)
+    if not ok then return false, tostring(result) end
+    return true, result
+end
+
+local function GetQuestInfo31(level, preferred)
+    level = tonumber(level) or 1
+    if preferred and preferred ~= "" and preferred ~= "Auto" then
+        for _, q in ipairs(QuestDB31) do
+            if q[3]:lower() == preferred:lower() then return q end
+        end
+    end
+    local best
+    for _, q in ipairs(QuestDB31) do
+        if level >= q[1] and level <= q[2] then best = q end
+    end
+    return best
+end
+
+local function QuestActive31()
+    local gui = LocalPlayer:FindFirstChild("PlayerGui")
+    local main = gui and gui:FindFirstChild("Main")
+    local quest = main and main:FindFirstChild("Quest")
+    if quest then
+        local title = quest:FindFirstChild("Container") and quest.Container:FindFirstChild("QuestTitle")
+        if title and title:IsA("TextLabel") and title.Text ~= "" then return true end
+    end
+    return false
+end
+
+local function FindQuestGiver31(questName)
+    local containers = {workspace:FindFirstChild("Map"), workspace}
+    for _, container in ipairs(containers) do
+        if container then
+            local obj = container:FindFirstChild(questName, true)
+            if obj then
+                local part = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+                if part then return part end
+            end
+        end
+    end
+end
+
+local function FindTool31(name)
+    local char = LocalPlayer.Character
+    if name and name ~= "" and name ~= "Auto" then
+        if char then
+            for _, t in ipairs(char:GetChildren()) do if t:IsA("Tool") and t.Name:lower():find(name:lower(),1,true) then return t end end
+        end
+        for _, t in ipairs(LocalPlayer.Backpack:GetChildren()) do if t:IsA("Tool") and t.Name:lower():find(name:lower(),1,true) then return t end end
+    end
+    return FullToolByType("Auto")
+end
+
+Full.Adapter.StartQuest = function(questName)
+    local q = GetQuestInfo31(PlayerService:GetLevel(), questName)
+    if not q then return false end
+    local ok = CommF31("StartQuest", q[4], q[5])
+    return ok
+end
+Full.Adapter.AbandonQuest = function() return CommF31("AbandonQuest") end
+Full.Adapter.BuyChip = function(chip) return CommF31("RaidsNpc", "Select", chip) end
+Full.Adapter.Awaken = function() return CommF31("Awakener", "Check") end
+Full.Adapter.StartRaid = function()
+    local ok = CommF31("RaidsNpc", "Select", FullState and FullState.Raid and FullState.Raid.Chip or "Flame")
+    return ok
+end
+Full.Adapter.BuyItem = function(item) return CommF31("BuyItem", item) end
+Full.Adapter.StartSeaEvent = function(event) return CommF31("StartEvent", event) end
+Full.Adapter.RaceAction = function(action) return CommF31(action) end
+Full.Adapter.UseSkill = function(skill) return CommF31("UseSkill", skill) end
+Full.Adapter.Teleport = function(place) return CommF31("Travel", place) end
 
 --==================================================
 -- GLOBAL AUTOMATION STATE
@@ -2272,6 +2405,7 @@ local FullState = {
         AutoTrial = false,
         AutoGear = false,
     },
+    ESP = {Players = false, Bosses = false, Fruits = false},
     Misc = {
         AntiAFK = false,
         AntiKick = false,
@@ -2304,6 +2438,15 @@ end)
 
 Toggle(FarmPage, "Auto Quest", "Lets the farm controller request the selected quest through the adapter.", false, function(v)
     FullState.Farm.AutoQuest = v
+end)
+
+Toggle(FarmPage, "Database Auto Quest", "Selects the quest and monster from the built-in level database.", true, function(v)
+    FullState.Farm.AutoQuest = v
+end)
+
+ValueBox(FarmPage, "Weapon Name", "Auto", function(v)
+    FullState.Farm.Weapon = tostring(v)
+    FarmWeapon.Text = tostring(v)
 end)
 
 Toggle(FarmPage, "Auto Mastery", "Switches the controller into mastery-oriented combat.", false, function(v)
@@ -2650,6 +2793,51 @@ ActionButton(ShopPage, "Buy Selected Item", function()
 end)
 
 --==================================================
+-- ESP 3.1
+--==================================================
+local ESPPage = PageService:Create("ESP")
+Section(ESPPage, "ESP Controller", "Local visual markers for players, bosses and fruits")
+local ESPStatus = Card(ESPPage, "ESP STATUS", "Idle")
+
+local ESPFolder = Instance.new("Folder")
+ESPFolder.Name = "Floquitave_ESP_31"
+ESPFolder.Parent = ScreenGui
+
+local function ClearESP31()
+    for _, child in ipairs(ESPFolder:GetChildren()) do child:Destroy() end
+end
+local function MarkESP31(model, label, color)
+    if not model or not model:IsA("Model") then return end
+    local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChildWhichIsA("BasePart")
+    if not root then return end
+    local h = Instance.new("Highlight")
+    h.Adornee = model; h.FillTransparency = 0.75; h.OutlineTransparency = 0.15; h.Parent = ESPFolder
+    local b = Instance.new("BillboardGui")
+    b.Adornee = root; b.Size = UDim2.new(0,160,0,28); b.StudsOffset = Vector3.new(0,3,0); b.AlwaysOnTop = true; b.Parent = ESPFolder
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.fromScale(1,1); t.BackgroundTransparency = 1; t.Text = label; t.Font = Enum.Font.GothamBold; t.TextSize = 12; t.TextColor3 = color; t.TextStrokeTransparency = 0.4; t.Parent = b
+end
+local function RefreshESP31()
+    ClearESP31()
+    local count = 0
+    if FullState.ESP.Players then
+        for _, plr in ipairs(Players:GetPlayers()) do if plr ~= LocalPlayer and plr.Character then MarkESP31(plr.Character, "PLAYER: "..plr.Name, Color3.fromRGB(90,160,255)); count += 1 end end
+    end
+    if FullState.ESP.Bosses then
+        for _, obj in ipairs(FullFindEnemies()) do local hum=obj:FindFirstChildOfClass("Humanoid"); if hum and hum.MaxHealth >= 10000 then MarkESP31(obj,"BOSS: "..obj.Name,Color3.fromRGB(255,90,90)); count += 1 end end
+    end
+    if FullState.ESP.Fruits then
+        for _, obj in ipairs(workspace:GetDescendants()) do if obj:IsA("Tool") and obj.Name:lower():find("fruit",1,true) then local m=obj:IsA("Model") and obj or obj.Parent; if m and m:IsA("Model") then MarkESP31(m,"FRUIT: "..obj.Name,Color3.fromRGB(180,90,255)); count += 1 end end end
+    end
+    ESPStatus.Text = tostring(count).." marker(s)"
+end
+Toggle(ESPPage, "Player ESP", "Highlights other players.", false, function(v) FullState.ESP.Players=v; RefreshESP31() end)
+Toggle(ESPPage, "Boss ESP", "Highlights high-health enemies.", false, function(v) FullState.ESP.Bosses=v; RefreshESP31() end)
+Toggle(ESPPage, "Fruit ESP", "Highlights Tool objects whose name contains fruit.", false, function(v) FullState.ESP.Fruits=v; RefreshESP31() end)
+ActionButton(ESPPage, "Refresh ESP", RefreshESP31)
+ActionButton(ESPPage, "Clear ESP", function() ClearESP31(); ESPStatus.Text="Cleared" end)
+
+--==================================================
 -- MISC 3.0
 --==================================================
 
@@ -2701,6 +2889,19 @@ FullConnect(RunService.Heartbeat, function()
 
     -- Farm
     if FullState.Farm.Enabled and FullAlive() then
+        if FullState.Farm.AutoQuest then
+            local q = GetQuestInfo31(PlayerService:GetLevel(), FullState.Farm.Target)
+            if q and not QuestActive31() then
+                Full.Adapter.AbandonQuest()
+                local giver = FindQuestGiver31(q[4])
+                local root = FullRoot()
+                if giver and root then
+                    root.CFrame = giver.CFrame + Vector3.new(0, 3, 0)
+                end
+                Full.Adapter.StartQuest(q[4])
+                QuestStatus.Text = "Starting: " .. q[4]
+            end
+        end
         local target = Full.Status.FarmTarget
         if not target or not target.Parent or not target:FindFirstChildOfClass("Humanoid")
             or target:FindFirstChildOfClass("Humanoid").Health <= 0
@@ -2716,6 +2917,20 @@ FullConnect(RunService.Heartbeat, function()
                 local y = FullState.Farm.Distance
                 local offset = CFrame.new(0, y, 0) * CFrame.Angles(math.rad(-90), 0, 0)
                 FullMoveTo(target, offset)
+                if FullState.Farm.BringMobs then
+                    local myRoot = FullRoot()
+                    if myRoot then
+                        for _, mob in ipairs(FullFindEnemies()) do
+                            local mh = mob:FindFirstChildOfClass("Humanoid")
+                            local mr = mob:FindFirstChild("HumanoidRootPart")
+                            if mh and mr and mh.Health > 0 and (FullState.Farm.Target == "Auto" or mob.Name == target.Name) then
+                                if (mr.Position - myRoot.Position).Magnitude <= FullState.Farm.Radius then
+                                    pcall(function() mr.CFrame = myRoot.CFrame * CFrame.new(0,0,-FullState.Farm.Distance) end)
+                                end
+                            end
+                        end
+                    end
+                end
                 if FullState.Farm.AutoEquip then
                     FullEquip(FullState.Farm.Weapon)
                 end
@@ -2769,6 +2984,14 @@ FullConnect(RunService.Heartbeat, function()
         end
     end
 
+    -- Periodic ESP refresh.
+    if FullState.ESP.Players or FullState.ESP.Bosses or FullState.ESP.Fruits then
+        if os.clock() - (Full.Status.LastESP or 0) >= 1.5 then
+            Full.Status.LastESP = os.clock()
+            RefreshESP31()
+        end
+    end
+
     -- Hide local notifications when requested.
     if FullState.Misc.HideNotifications then
         local gui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
@@ -2804,8 +3027,8 @@ end)
 --==================================================
 
 Notify(
-    "Floquitave 3.0",
-    "Full systems build carregado. Controllers prontos para análise/teste."
+    "Floquitave 3.1",
+    "Functional test build carregado. Quest/Farm/Raid/ESP/Teleport adapters ativados."
 )
 
 
@@ -3098,6 +3321,7 @@ local PageNames = {
     "Home",
     "Main Farm",
     "Quest",
+    "ESP",
     "Raids",
     "Combat",
     "Sea Event",
@@ -3115,6 +3339,7 @@ local PageIcons = {
     Home = "⌂",
     ["Main Farm"] = "◈",
     Quest = "◆",
+    ESP = "◎",
     Raids = "◇",
     Combat = "⚔",
     ["Sea Event"] = "≈",
