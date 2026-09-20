@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.6.5
+    Version: 2.7.0
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.6.5",
+    Version = "2.7.0",
 
     Width = 920,
     Height = 590,
@@ -1376,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.6.5 Farm Route Fix",
+    Text = "2.7.0 Cake Prince + Bone",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1761,6 +1761,14 @@ Section(
 --==================================================
 
 local FarmState = {
+    AutoCakePrince = false,
+    AutoBone = false,
+    SpecialStatus = "Idle",
+    SpecialTarget = "None",
+    CakeStatus = "Checking...",
+    BoneCount = "Checking...",
+    BoneRotation = 1,
+
     Enabled = false,
     AutoMastery = false,
     AutoTarget = true,
@@ -2348,6 +2356,242 @@ local function StopFarm()
     ApplyNoClip(false)
 end
 
+
+--==================================================
+-- SPECIAL FARMS 2.7.0
+-- Built directly on the tested 2.6.5 base.
+-- These modes DO NOT use quest farming.
+--==================================================
+
+local CakeSpecial = {
+    BossNames = {"Cake Prince", "Cake Prince [Lv. 2300] [Raid Boss]"},
+    MobNames = {"Cookie Crafter", "Cake Guard", "Baking Staff", "Head Baker"},
+    BossPos = CFrame.new(-2103, 70, -12165),
+    MobPoints = {
+        CFrame.new(-2212.88965, 37.00510, -11969.2568),
+        CFrame.new(-1693.98047, 35.21882, -12436.8438),
+        CFrame.new(-1980.43750, 34.66531, -12983.8408),
+        CFrame.new(-2151.37793, 51.00957, -13033.3975)
+    },
+    PointIndex = 1,
+    LastCheck = 0
+}
+
+local BoneSpecial = {
+    MobNames = {"Reborn Skeleton", "Living Zombie", "Demonic Soul", "Posessed Mummy"},
+    -- Rotation through the four Haunted Castle mob areas.
+    Points = {
+        CFrame.new(-8763.72363, 165.72299, 6159.86182),   -- Reborn Skeleton
+        CFrame.new(-10144.13184, 138.62668, 5838.08887), -- Living Zombie
+        CFrame.new(-9505.87207, 172.10483, 6158.99316),  -- Demonic Soul
+        CFrame.new(-9582.02246, 16.25153, 6205.47852)    -- Posessed Mummy
+    },
+    LastCheck = 0
+}
+
+local function SpecialNameMatch(name, wantedNames)
+    local n = string.lower(tostring(name or ""))
+    for _, wanted in ipairs(wantedNames) do
+        local w = string.lower(wanted)
+        if n == w or string.find(n, w, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function GetSpecialEnemy(wantedNames)
+    local root = GetCharacterRoot()
+    local best, bestDist = nil, math.huge
+
+    for _, container in ipairs(FindEnemyContainers()) do
+        for _, enemy in ipairs(container:GetChildren()) do
+            if SpecialNameMatch(enemy.Name, wantedNames) and IsValidFarmTarget(enemy) then
+                local enemyRoot = GetTargetRoot(enemy)
+                if enemyRoot then
+                    local d = root and (enemyRoot.Position - root.Position).Magnitude or 0
+                    if d < bestDist then
+                        best = enemy
+                        bestDist = d
+                    end
+                end
+            end
+        end
+    end
+
+    return best
+end
+
+local function SpecialEquipAndAttack(enemy)
+    if not enemy or not IsValidFarmTarget(enemy) then
+        return false
+    end
+
+    FarmState.SpecialTarget = enemy.Name
+
+    if FarmState.UseTool then
+        EquipFirstTool()
+    end
+
+    MoveToTarget(enemy)
+    AttackTarget(enemy)
+    return true
+end
+
+local function GetCakeSpawnerText()
+    local remote = GetQuestRemote()
+    if not remote then
+        return nil
+    end
+
+    local ok, result = pcall(function()
+        return remote:InvokeServer("CakePrinceSpawner")
+    end)
+
+    if ok then
+        return tostring(result or "")
+    end
+    return nil
+end
+
+local function ParseCakeProgress(text)
+    if not text or text == "" then
+        return nil, "Checking..."
+    end
+
+    local lower = string.lower(text)
+    if string.find(lower, "open the portal", 1, true) then
+        return 500, "500 / 500 - portal ready"
+    end
+
+    local best = nil
+    for digits in string.gmatch(text, "%d+") do
+        local n = tonumber(digits)
+        if n and n >= 0 and n <= 500 then
+            if not best or n > best then
+                best = n
+            end
+        end
+    end
+
+    if best then
+        return best, tostring(best) .. " / 500"
+    end
+
+    return nil, text
+end
+
+local function CheckBoneCount()
+    local remote = GetQuestRemote()
+    if not remote then return end
+
+    local ok, result = pcall(function()
+        return remote:InvokeServer("Bones", "Check")
+    end)
+
+    if ok then
+        FarmState.BoneCount = tostring(result)
+    end
+end
+
+local function DisableNormalQuestFarmForSpecial()
+    FarmState.Enabled = false
+    FarmState.AutoQuest = false
+    FarmState.CurrentTarget = nil
+    FarmState.FarmAnchor = nil
+    MovementService:Stop()
+
+    pcall(function()
+        local remote = GetQuestRemote()
+        if remote and QuestVisible() then
+            remote:InvokeServer("AbandonQuest")
+        end
+    end)
+end
+
+local function StopSpecialFarms()
+    FarmState.AutoCakePrince = false
+    FarmState.AutoBone = false
+    FarmState.SpecialStatus = "Idle"
+    FarmState.SpecialTarget = "None"
+    MovementService:Stop()
+end
+
+local function CakePrinceSpecialStep()
+    if not FarmState.AutoCakePrince then return end
+
+    local boss = GetSpecialEnemy(CakeSpecial.BossNames)
+    if boss then
+        FarmState.SpecialStatus = "Cake Prince spawned - attacking"
+        FarmState.CakeStatus = "Boss spawned"
+        SpecialEquipAndAttack(boss)
+        return
+    end
+
+    -- A stored boss model means the boss exists/is about to enter Workspace.
+    for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
+        if SpecialNameMatch(obj.Name, CakeSpecial.BossNames) then
+            FarmState.SpecialStatus = "Cake Prince detected - moving to boss"
+            MovementService:GoTo(CakeSpecial.BossPos, 18, "Cake Prince")
+            return
+        end
+    end
+
+    if os.clock() - CakeSpecial.LastCheck >= 2 then
+        CakeSpecial.LastCheck = os.clock()
+        local text = GetCakeSpawnerText()
+        local progress, display = ParseCakeProgress(text)
+        FarmState.CakeStatus = display or "Checking..."
+
+        if progress and progress >= 500 then
+            local remote = GetQuestRemote()
+            if remote then
+                pcall(function()
+                    remote:InvokeServer("CakePrinceSpawner")
+                end)
+            end
+        end
+    end
+
+    local mob = GetSpecialEnemy(CakeSpecial.MobNames)
+    if mob then
+        FarmState.SpecialStatus = "Killing Cake mobs"
+        SpecialEquipAndAttack(mob)
+        return
+    end
+
+    if not MovementService.Active then
+        local point = CakeSpecial.MobPoints[CakeSpecial.PointIndex]
+        FarmState.SpecialStatus = "Cake mob rotation " .. CakeSpecial.PointIndex .. "/4"
+        MovementService:GoTo(point, 18, "Cake mobs")
+        CakeSpecial.PointIndex = (CakeSpecial.PointIndex % #CakeSpecial.MobPoints) + 1
+    end
+end
+
+local function BoneSpecialStep()
+    if not FarmState.AutoBone then return end
+
+    if os.clock() - BoneSpecial.LastCheck >= 3 then
+        BoneSpecial.LastCheck = os.clock()
+        CheckBoneCount()
+    end
+
+    local mob = GetSpecialEnemy(BoneSpecial.MobNames)
+    if mob then
+        FarmState.SpecialStatus = "Haunted Castle rotation"
+        SpecialEquipAndAttack(mob)
+        return
+    end
+
+    if not MovementService.Active then
+        local i = math.clamp(FarmState.BoneRotation, 1, #BoneSpecial.Points)
+        FarmState.SpecialStatus = "Bone rotation " .. i .. "/" .. #BoneSpecial.Points
+        MovementService:GoTo(BoneSpecial.Points[i], 18, "Bone farm")
+        FarmState.BoneRotation = (i % #BoneSpecial.Points) + 1
+    end
+end
+
+
 local function FarmStep()
     if not FarmState.Enabled then
         return
@@ -2458,6 +2702,10 @@ Toggle(
     "Find the nearest valid NPC and continuously process the farm loop.",
     false,
     function(enabled)
+        if enabled and (FarmState.AutoCakePrince or FarmState.AutoBone) then
+            StopSpecialFarms()
+        end
+
         FarmState.Enabled = enabled
         FarmState.StartedAt = enabled and os.clock() or 0
 
@@ -2469,6 +2717,61 @@ Toggle(
         else
             StopFarm()
             Notify("Auto Farm", "Farm engine parado.")
+        end
+    end
+)
+
+Section(
+    FarmPage,
+    "Special Farms",
+    "Sem quests • modos separados do Auto Farm Level"
+)
+
+local SpecialFarmCard, SpecialFarmValue = Card(FarmPage, "SPECIAL STATUS", "Idle")
+local CakeFarmCard, CakeFarmValue = Card(FarmPage, "CAKE PRINCE", "Checking...")
+local BoneFarmCard, BoneFarmValue = Card(FarmPage, "BONES", "Checking...")
+
+Toggle(
+    FarmPage,
+    "Auto Cake Prince",
+    "Mata os 4 mobs da Cake Land, acompanha o spawn e ataca Cake Prince. Não usa quests.",
+    false,
+    function(enabled)
+        if enabled then
+            StopSpecialFarms()
+            DisableNormalQuestFarmForSpecial()
+            FarmState.AutoCakePrince = true
+            FarmState.SpecialStatus = "Starting Cake Prince cycle"
+            Notify("Auto Cake Prince", "Enabled - No Quest")
+        else
+            FarmState.AutoCakePrince = false
+            MovementService:Stop()
+            FarmState.SpecialStatus = "Idle"
+            FarmState.SpecialTarget = "None"
+            Notify("Auto Cake Prince", "Disabled")
+        end
+    end
+)
+
+Toggle(
+    FarmPage,
+    "Auto Farm Bone",
+    "Rotação Haunted Castle: Reborn Skeleton, Living Zombie, Demonic Soul e Posessed Mummy. Não usa quests.",
+    false,
+    function(enabled)
+        if enabled then
+            StopSpecialFarms()
+            DisableNormalQuestFarmForSpecial()
+            FarmState.AutoBone = true
+            FarmState.BoneRotation = 1
+            FarmState.SpecialStatus = "Starting Bone rotation"
+            Notify("Auto Farm Bone", "Enabled - No Quest")
+        else
+            FarmState.AutoBone = false
+            MovementService:Stop()
+            FarmState.SpecialStatus = "Idle"
+            FarmState.SpecialTarget = "None"
+            Notify("Auto Farm Bone", "Disabled")
         end
     end
 )
@@ -2606,9 +2909,31 @@ ActionButton(
     "Stop Farm",
     function()
         StopFarm()
+        StopSpecialFarms()
         Notify("Main Farm", "Farm parado manualmente.")
     end
 )
+
+--==================================================
+-- SPECIAL FARM LOOP 2.7.0
+--==================================================
+
+FarmConnect(RunService.Heartbeat, function()
+    if State.Destroyed then return end
+    if not FarmState.AutoCakePrince and not FarmState.AutoBone then return end
+
+    if not MovementService.Active then
+        if FarmState.AutoCakePrince then
+            CakePrinceSpecialStep()
+        elseif FarmState.AutoBone then
+            BoneSpecialStep()
+        end
+    end
+
+    SpecialFarmValue.Text = FarmState.SpecialStatus .. " • " .. FarmState.SpecialTarget
+    CakeFarmValue.Text = FarmState.CakeStatus
+    BoneFarmValue.Text = FarmState.BoneCount
+end)
 
 --==================================================
 -- FARM LOOP
