@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.0
+    Version: 2.6.5
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.0",
+    Version = "2.6.5",
 
     Width = 920,
     Height = 590,
@@ -162,8 +162,8 @@ local Themes = {
 local Theme = Themes[Config.Theme]
 
 --==================================================
--- MOVEMENT SERVICE 2.6.6
--- Stable direct travel, shared by Teleport / Quest / Farm
+-- MOVEMENT SERVICE 2.6.5
+-- Slower travel + safe cruise height
 --==================================================
 
 local MovementService = {
@@ -171,6 +171,7 @@ local MovementService = {
     Target = nil,
     Tween = nil,
     Speed = 250,
+    SafeHeight = 120,
     Status = "Idle",
     DestinationName = "None"
 }
@@ -249,16 +250,14 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
         return false
     end
 
+    -- Do not restart the same route every farm tick. Repeated GoTo calls
+    -- were cancelling the cruise while the character was still rising.
     local requestedName = destinationName or "Target"
-
-    -- A new route always owns the movement service. This also clears any
-    -- unfinished Quest/Farm tween before a manual island teleport.
-    self:Stop()
-
-    root = self:GetRoot()
-    if not root then
-        self.Status = "Character unavailable"
-        return false
+    if self.Active then
+        if self.DestinationName == requestedName then
+            return false
+        end
+        self:Stop()
     end
 
     self.Active = true
@@ -277,14 +276,41 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     end)
 
     local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
+    local totalDistance = (root.Position - destination.Position).Magnitude
 
-    -- 2.6.6: no separate "rise" phase. The previous three-stage route could
-    -- repeatedly leave the character in the vertical part of the trip.
-    -- Water Walk already protects normal water traversal when enabled.
+    -- Farm/short movement stays direct. Long island travel rises first,
+    -- crosses at a fixed safe altitude, then descends at the destination.
+    if totalDistance <= 260 then
+        self:SetCollision(false)
+        local ok = self:TweenRoot(root, destination)
+        self:SetCollision(true)
+        self.Active = false
+        self.Status = ok and "Arrived" or "Failed"
+        return ok
+    end
+
     self:SetCollision(false)
-    local ok = self:TweenRoot(root, destination)
-    self:SetCollision(true)
 
+    local cruiseY = math.max(root.Position.Y, destination.Position.Y) + self.SafeHeight
+    local rise = CFrame.new(root.Position.X, cruiseY, root.Position.Z)
+    local cruise = CFrame.new(destination.Position.X, cruiseY, destination.Position.Z)
+
+    self.Status = "Rising"
+    local ok = self:TweenRoot(root, rise)
+
+    if ok then
+        root = self:GetRoot()
+        self.Status = "Cruising"
+        ok = self:TweenRoot(root, cruise)
+    end
+
+    if ok then
+        root = self:GetRoot()
+        self.Status = "Descending"
+        ok = self:TweenRoot(root, destination)
+    end
+
+    self:SetCollision(true)
     self.Active = false
 
     root = self:GetRoot()
@@ -294,23 +320,12 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     end
 
     local remaining = (root.Position - destination.Position).Magnitude
-
-    if remaining <= 80 then
-        pcall(function()
-            root.CFrame = destination
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-        self.Status = "Arrived"
-        return true
-    end
-
-    self.Status = "Failed (" .. math.floor(remaining) .. " studs)"
-    return false
+    self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
+    return remaining <= 60
 end
 
 --==================================================
--- WATER WALK 2.6.6
+-- WATER WALK 2.6.5
 --==================================================
 
 local WaterWalkService = {
@@ -1361,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.7.0 Special Farms Test",
+    Text = "2.6.5 Farm Route Fix",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1590,9 +1605,6 @@ local function TeleportToIsland(seaName, locationName)
 
     SetTeleportStatus("Teleportando...", locationName)
 
-    -- Manual teleport has priority over any unfinished quest/farm movement.
-    MovementService:Stop()
-
     task.spawn(function()
         local ok = MovementService:GoTo(destination, 5, locationName)
         SetTeleportStatus(MovementService.Status, locationName)
@@ -1770,8 +1782,6 @@ local FarmState = {
     CurrentSea = nil,
     LastQuestMove = 0,
     LastMobMove = 0,
-    ActiveQuestKey = nil,
-    QuestStartedByHub = false,
     FarmAnchor = nil,
     CurrentTarget = nil,
     CurrentTool = nil,
@@ -1779,258 +1789,6 @@ local FarmState = {
     Status = "Idle",
     StartedAt = 0
 }
-
-
---==================================================
--- SPECIAL FARM STATE 2.7.0
--- Cake Prince / Bones run WITHOUT quest farming
---==================================================
-
-local SpecialFarmState = {
-    Mode = "None",
-    Status = "Idle",
-    Target = "None",
-    CakeProgress = "Checking...",
-    Bones = "Checking...",
-    RotationIndex = 1,
-    LastCounterCheck = 0,
-    LastBoneCheck = 0
-}
-
-local CakeFarmConfig = {
-    BossNames = {
-        "Cake Prince",
-        "Cake Prince [Lv. 2300] [Raid Boss]"
-    },
-    MobNames = {
-        "Cookie Crafter",
-        "Cake Guard",
-        "Baking Staff",
-        "Head Baker"
-    },
-    BossPosition = CFrame.new(-2103, 70, -12165),
-    Rotation = {
-        CFrame.new(-2212.88965, 37.0051041, -11969.2568),
-        CFrame.new(-1693.98047, 35.2188225, -12436.8438),
-        CFrame.new(-1980.4375, 34.6653099, -12983.8408),
-        CFrame.new(-2151.37793, 51.0095749, -13033.3975)
-    }
-}
-
-local BoneFarmConfig = {
-    MobNames = {
-        "Reborn Skeleton",
-        "Living Zombie",
-        "Demonic Soul",
-        "Posessed Mummy"
-    },
-    Rotation = {
-        -- Rotation through the Haunted Castle groups instead of quest farming.
-        CFrame.new(-8763.72363, 165.72299, 6159.86182),
-        CFrame.new(-10144.13184, 138.62668, 5838.08887),
-        CFrame.new(-9505.87207, 172.10483, 6158.99316),
-        CFrame.new(-9582.02246, 16.25153, 6205.47852)
-    }
-}
-
-local function SpecialNameMatches(name, list)
-    local clean = string.lower(tostring(name or ""))
-    for _, wanted in ipairs(list) do
-        local w = string.lower(wanted)
-        if clean == w or string.find(clean, w, 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
-local function FindSpecialEnemy(names)
-    local root = GetCharacterRoot()
-    local best, bestDistance = nil, math.huge
-
-    for _, container in ipairs(FindEnemyContainers()) do
-        for _, enemy in ipairs(container:GetChildren()) do
-            if SpecialNameMatches(enemy.Name, names) and IsValidFarmTarget(enemy) then
-                local eroot = GetTargetRoot(enemy)
-                if eroot then
-                    local distance = root and (eroot.Position - root.Position).Magnitude or 0
-                    if distance < bestDistance then
-                        best = enemy
-                        bestDistance = distance
-                    end
-                end
-            end
-        end
-    end
-
-    return best
-end
-
-local function FindStoredSpecialEnemy(names)
-    for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
-        if SpecialNameMatches(obj.Name, names) then
-            return obj
-        end
-    end
-    return nil
-end
-
-local function SetSpecialMode(mode)
-    MovementService:Stop()
-    FarmState.CurrentTarget = nil
-    FarmState.FarmAnchor = nil
-
-    SpecialFarmState.Mode = mode or "None"
-    SpecialFarmState.Status = mode == "None" and "Idle" or ("Starting " .. mode)
-    SpecialFarmState.Target = "None"
-    SpecialFarmState.RotationIndex = 1
-
-    if mode ~= "None" then
-        -- Special farms are intentionally no-quest modes.
-        FarmState.Enabled = false
-        FarmState.AutoQuest = false
-        FarmState.QuestStartedByHub = false
-        FarmState.ActiveQuestKey = nil
-
-        if QuestVisible() then
-            pcall(function()
-                local remote = GetQuestRemote()
-                if remote then remote:InvokeServer("AbandonQuest") end
-            end)
-        end
-    end
-end
-
-local function GetCakeProgress()
-    local remote = GetQuestRemote()
-    if not remote then
-        return nil, "Quest remote unavailable"
-    end
-
-    local ok, response = pcall(function()
-        return remote:InvokeServer("CakePrinceSpawner")
-    end)
-
-    if not ok then
-        return nil, "Counter unavailable"
-    end
-
-    local text = tostring(response or "")
-
-    if string.find(string.lower(text), "open the portal", 1, true) then
-        return 500, "Portal ready"
-    end
-
-    -- The reference returns a sentence containing the Cake Prince kill count.
-    -- Parse all 0..500 values and keep the largest plausible progress value.
-    local best = nil
-    for digits in string.gmatch(text, "%d+") do
-        local n = tonumber(digits)
-        if n and n >= 0 and n <= 500 then
-            if not best or n > best then best = n end
-        end
-    end
-
-    if best then
-        return best, tostring(best) .. " / 500"
-    end
-
-    return nil, text ~= "" and text or "Checking..."
-end
-
-local function GetBoneCount()
-    local remote = GetQuestRemote()
-    if not remote then return nil end
-
-    local ok, result = pcall(function()
-        return remote:InvokeServer("Bones", "Check")
-    end)
-
-    if ok then return result end
-    return nil
-end
-
-local function ProcessSpecialTarget(target, label)
-    if not target or not IsValidFarmTarget(target) then return false end
-
-    SpecialFarmState.Target = target.Name
-    SpecialFarmState.Status = label or ("Farming " .. target.Name)
-
-    if FarmState.UseTool then
-        EquipFirstTool()
-    end
-
-    MoveToTarget(target)
-    AttackTarget(target)
-    return true
-end
-
-local function AdvanceRotation(config, label)
-    local points = config.Rotation
-    if not points or #points == 0 then return end
-
-    local index = math.clamp(SpecialFarmState.RotationIndex, 1, #points)
-    SpecialFarmState.Status = label .. " " .. tostring(index) .. "/" .. tostring(#points))
-    MovementService:GoTo(points[index], 18, label)
-    SpecialFarmState.RotationIndex = (index % #points) + 1
-end
-
-local function CakePrinceStep()
-    local boss = FindSpecialEnemy(CakeFarmConfig.BossNames)
-
-    if boss then
-        SpecialFarmState.CakeProgress = "Boss spawned"
-        ProcessSpecialTarget(boss, "Attacking Cake Prince")
-        return
-    end
-
-    if FindStoredSpecialEnemy(CakeFarmConfig.BossNames) then
-        SpecialFarmState.CakeProgress = "Boss spawning"
-        SpecialFarmState.Status = "Going to Cake Prince"
-        MovementService:GoTo(CakeFarmConfig.BossPosition, 20, "Cake Prince")
-        return
-    end
-
-    if os.clock() - SpecialFarmState.LastCounterCheck > 2 then
-        SpecialFarmState.LastCounterCheck = os.clock()
-        local progress, display = GetCakeProgress()
-        SpecialFarmState.CakeProgress = display or "Checking..."
-
-        if progress and progress >= 500 then
-            local remote = GetQuestRemote()
-            if remote then
-                pcall(function()
-                    remote:InvokeServer("CakePrinceSpawner")
-                end)
-            end
-        end
-    end
-
-    local mob = FindSpecialEnemy(CakeFarmConfig.MobNames)
-    if mob then
-        ProcessSpecialTarget(mob, "Cake mobs -> Cake Prince")
-    elseif not MovementService.Active then
-        AdvanceRotation(CakeFarmConfig, "Cake rotation")
-    end
-end
-
-local function BoneFarmStep()
-    if os.clock() - SpecialFarmState.LastBoneCheck > 3 then
-        SpecialFarmState.LastBoneCheck = os.clock()
-        local count = GetBoneCount()
-        if count ~= nil then
-            SpecialFarmState.Bones = tostring(count)
-        end
-    end
-
-    local mob = FindSpecialEnemy(BoneFarmConfig.MobNames)
-    if mob then
-        ProcessSpecialTarget(mob, "Bone farm rotation")
-    elseif not MovementService.Active then
-        AdvanceRotation(BoneFarmConfig, "Haunted Castle")
-    end
-end
-
 
 local FarmConnections = {}
 
@@ -2281,22 +2039,8 @@ local function QuestMatches(q)
         or string.find(text, simplified, 1, true) ~= nil
 end
 
-local function GetQuestKey(q)
-    if not q then return nil end
-    return tostring(q.Sea) .. ":" .. tostring(q.Quest) .. ":" .. tostring(q.Level) .. ":" .. tostring(q.Mob)
-end
-
-local function HubQuestIsActive(q)
-    return QuestVisible()
-        and FarmState.QuestStartedByHub
-        and FarmState.ActiveQuestKey == GetQuestKey(q)
-end
-
 local function AbandonCurrentQuest()
     local remote = GetQuestRemote()
-    FarmState.ActiveQuestKey = nil
-    FarmState.QuestStartedByHub = false
-
     if not remote then return false end
 
     return pcall(function()
@@ -2309,13 +2053,10 @@ local function StartLevelQuest(q)
 
     local remote = GetQuestRemote()
     local root = GetCharacterRoot()
-
     if not remote or not root then
         FarmState.QuestStatus = "Quest remote/root unavailable"
         return false
     end
-
-    local questKey = GetQuestKey(q)
 
     FarmState.QuestMob = q.Mob
     FarmState.QuestName = q.Quest
@@ -2325,26 +2066,15 @@ local function StartLevelQuest(q)
     FarmState.CurrentSea = q.Sea
     FarmState.TargetName = q.Mob
 
-    -- If this hub started this exact quest and the Quest UI is still visible,
-    -- do NOT abandon/restart it just because the UI text parser differs.
-    if HubQuestIsActive(q) then
+    if QuestVisible() and QuestMatches(q) then
         FarmState.QuestStatus = "Correct quest active"
         return true
     end
 
-    -- Existing quest not owned by our current route: only replace it when its
-    -- visible text clearly does not match the level quest.
-    if QuestVisible() then
-        if QuestMatches(q) then
-            FarmState.ActiveQuestKey = questKey
-            FarmState.QuestStartedByHub = true
-            FarmState.QuestStatus = "Correct quest active"
-            return true
-        else
-            FarmState.QuestStatus = "Replacing wrong quest"
-            AbandonCurrentQuest()
-            task.wait(0.3)
-        end
+    if QuestVisible() and not QuestMatches(q) then
+        FarmState.QuestStatus = "Replacing wrong quest"
+        AbandonCurrentQuest()
+        task.wait(0.25)
     end
 
     FarmState.QuestStatus = "Going to quest NPC"
@@ -2355,26 +2085,21 @@ local function StartLevelQuest(q)
         return false
     end
 
-    task.wait(0.3)
+    task.wait(0.35)
 
-    local ok, result = pcall(function()
-        return remote:InvokeServer("StartQuest", q.Quest, q.Level)
-    end)
-
-    if ok then
-        -- Critical 2.6.6 fix: remember that WE successfully requested this
-        -- quest. The farm can now leave the quest NPC and head to MobPos.
-        FarmState.ActiveQuestKey = questKey
-        FarmState.QuestStartedByHub = true
-        FarmState.QuestStatus = "Quest accepted: " .. q.Mob
-        task.wait(0.4)
-        return true
+    local rootAfterMove = GetCharacterRoot()
+    if not rootAfterMove or (rootAfterMove.Position - q.QuestPos.Position).Magnitude > 90 then
+        FarmState.QuestStatus = "Quest NPC too far"
+        return false
     end
 
-    FarmState.ActiveQuestKey = nil
-    FarmState.QuestStartedByHub = false
-    FarmState.QuestStatus = "Quest request failed"
-    return false
+    local ok = pcall(function()
+        remote:InvokeServer("StartQuest", q.Quest, q.Level)
+    end)
+
+    FarmState.QuestStatus = ok and ("Quest: " .. q.Mob) or "Quest request failed"
+    task.wait(0.35)
+    return ok
 end
 
 local function MoveToQuestMobArea(q)
@@ -2662,30 +2387,11 @@ local function FarmStep()
         FarmState.QuestMob = q.Mob
         FarmState.MobPosition = q.MobPos
 
-        -- Quest completed/closed: clear ownership so the next cycle can
-        -- collect a fresh quest. While visible, a quest started by this hub is
-        -- trusted even if the UI wording differs from our text matcher.
-        if not QuestVisible() then
-            FarmState.ActiveQuestKey = nil
-            FarmState.QuestStartedByHub = false
-
-            local started = StartLevelQuest(q)
-            FarmState.CurrentTarget = nil
-            FarmState.FarmAnchor = nil
-
-            if started then
-                -- Next farm tick goes to MobPos instead of returning to NPC.
-                FarmState.Status = "Quest accepted - going to mob area"
-            end
-            return
-        elseif not HubQuestIsActive(q) and not QuestMatches(q) then
+        if not QuestVisible() or not QuestMatches(q) then
             StartLevelQuest(q)
             FarmState.CurrentTarget = nil
             FarmState.FarmAnchor = nil
             return
-        elseif not HubQuestIsActive(q) and QuestMatches(q) then
-            FarmState.ActiveQuestKey = GetQuestKey(q)
-            FarmState.QuestStartedByHub = true
         end
     end
 
@@ -2752,10 +2458,6 @@ Toggle(
     "Find the nearest valid NPC and continuously process the farm loop.",
     false,
     function(enabled)
-        if enabled and SpecialFarmState.Mode ~= "None" then
-            SetSpecialMode("None")
-        end
-
         FarmState.Enabled = enabled
         FarmState.StartedAt = enabled and os.clock() or 0
 
@@ -2767,48 +2469,6 @@ Toggle(
         else
             StopFarm()
             Notify("Auto Farm", "Farm engine parado.")
-        end
-    end
-)
-
-Section(
-    FarmPage,
-    "Special Farms",
-    "No Quest • Cake Prince cycle • Haunted Castle Bones"
-)
-
-local SpecialModeCard, SpecialModeValue = Card(FarmPage, "SPECIAL FARM", "None")
-local CakeProgressCard, CakeProgressValue = Card(FarmPage, "CAKE PRINCE", "Checking...")
-local BoneCountCard, BoneCountValue = Card(FarmPage, "BONES", "Checking...")
-
-Toggle(
-    FarmPage,
-    "Auto Cake Prince",
-    "Sem quest: verifica o progresso, farma Cookie Crafter/Cake Guard/Baking Staff/Head Baker e ataca Cake Prince quando aparecer.",
-    false,
-    function(enabled)
-        if enabled then
-            SetSpecialMode("Cake Prince")
-            Notify("Auto Cake Prince", "Ciclo especial iniciado sem quests.")
-        elseif SpecialFarmState.Mode == "Cake Prince" then
-            SetSpecialMode("None")
-            Notify("Auto Cake Prince", "Stopped")
-        end
-    end
-)
-
-Toggle(
-    FarmPage,
-    "Auto Farm Bone",
-    "Sem quest: faz rotação no Haunted Castle e farma Reborn Skeleton, Living Zombie, Demonic Soul e Posessed Mummy.",
-    false,
-    function(enabled)
-        if enabled then
-            SetSpecialMode("Bones")
-            Notify("Auto Farm Bone", "Rotação do Haunted Castle iniciada sem quests.")
-        elseif SpecialFarmState.Mode == "Bones" then
-            SetSpecialMode("None")
-            Notify("Auto Farm Bone", "Stopped")
         end
     end
 )
@@ -2946,34 +2606,9 @@ ActionButton(
     "Stop Farm",
     function()
         StopFarm()
-        SetSpecialMode("None")
         Notify("Main Farm", "Farm parado manualmente.")
     end
 )
-
---==================================================
--- SPECIAL FARM LOOP
---==================================================
-
-FarmConnect(RunService.Heartbeat, function()
-    if State.Destroyed or SpecialFarmState.Mode == "None" then
-        return
-    end
-
-    if MovementService.Active then
-        SpecialFarmState.Status = MovementService.Status .. ": " .. tostring(MovementService.DestinationName)
-    else
-        if SpecialFarmState.Mode == "Cake Prince" then
-            CakePrinceStep()
-        elseif SpecialFarmState.Mode == "Bones" then
-            BoneFarmStep()
-        end
-    end
-
-    SpecialModeValue.Text = SpecialFarmState.Mode .. " • " .. SpecialFarmState.Status
-    CakeProgressValue.Text = SpecialFarmState.CakeProgress
-    BoneCountValue.Text = SpecialFarmState.Bones
-end)
 
 --==================================================
 -- FARM LOOP
