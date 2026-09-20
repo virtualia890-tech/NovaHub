@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.1
+    Version: 2.8.0
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.1",
+    Version = "2.8.0",
 
     Width = 920,
     Height = 590,
@@ -1376,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.7.1 Quest Flow + Special Farms",
+    Text = "2.8.0 Major Farm Update",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -2014,8 +2014,30 @@ end
 
 local function GetQuestFrame()
     local gui = LocalPlayer:FindFirstChild("PlayerGui")
-    local main = gui and gui:FindFirstChild("Main")
-    return main and main:FindFirstChild("Quest")
+    if not gui then return nil end
+
+    local main = gui:FindFirstChild("Main")
+    local direct = main and main:FindFirstChild("Quest")
+    if direct and direct:IsA("GuiObject") then
+        return direct
+    end
+
+    -- Custom copies of the game can move Quest deeper in Main.
+    if main then
+        local recursive = main:FindFirstChild("Quest", true)
+        if recursive and recursive:IsA("GuiObject") then
+            return recursive
+        end
+    end
+
+    -- Last safe fallback: a visible GuiObject literally named Quest.
+    for _, obj in ipairs(gui:GetDescendants()) do
+        if obj.Name == "Quest" and obj:IsA("GuiObject") then
+            return obj
+        end
+    end
+
+    return nil
 end
 
 local function QuestVisible()
@@ -2373,7 +2395,7 @@ end
 
 
 --==================================================
--- SPECIAL FARMS 2.7.1
+-- SPECIAL FARMS 2.8.0
 -- Built directly on the tested 2.6.5 base.
 -- These modes DO NOT use quest farming.
 --==================================================
@@ -2729,6 +2751,21 @@ local function FarmStep()
     if FarmState.UseTool then
         AttackTarget(target)
     end
+
+    -- Quest-cycle watchdog. When the current kill completes the mission,
+    -- the Quest panel disappears; release ownership immediately so the
+    -- next FarmStep returns to the NPC instead of farming without a quest.
+    if FarmState.AutoQuest and FarmState.QuestOwnedByHub and FarmState.QuestSeenVisible then
+        if not QuestVisible() then
+            FarmState.QuestOwnedByHub = false
+            FarmState.QuestSeenVisible = false
+            FarmState.QuestRoutePending = false
+            FarmState.CurrentTarget = nil
+            FarmState.FarmAnchor = nil
+            FarmState.QuestStatus = "Quest complete - requesting next quest"
+            FarmState.Status = "Quest complete"
+        end
+    end
 end
 
 
@@ -2980,7 +3017,7 @@ ActionButton(
 )
 
 --==================================================
--- SPECIAL FARM LOOP 2.7.1
+-- SPECIAL FARM LOOP 2.8.0
 --==================================================
 
 FarmConnect(RunService.Heartbeat, function()
@@ -2998,6 +3035,38 @@ FarmConnect(RunService.Heartbeat, function()
     SpecialFarmValue.Text = FarmState.SpecialStatus .. " • " .. FarmState.SpecialTarget
     CakeFarmValue.Text = FarmState.CakeStatus
     BoneFarmValue.Text = FarmState.BoneCount
+end)
+
+
+--==================================================
+-- 2.8.0 MAJOR FARM LOOP
+-- One exclusive movement farm at a time.
+--==================================================
+
+local MajorLastStep = 0
+FarmConnect(RunService.Heartbeat, function()
+    if State.Destroyed then return end
+    if os.clock() - MajorLastStep < 0.08 then return end
+    MajorLastStep = os.clock()
+
+    if MajorFarm.BossEnabled then
+        BossFarmStep()
+    elseif MajorFarm.EliteEnabled then
+        EliteFarmStep()
+    elseif MajorFarm.MaterialEnabled then
+        MaterialFarmStep()
+    elseif MajorFarm.ChestEnabled then
+        ChestFarmStep()
+    elseif MajorFarm.MasteryEnabled then
+        MasteryFarmStep()
+    end
+
+    if BossStatusValue then BossStatusValue.Text = MajorFarm.BossStatus end
+    if EliteStatusValue then EliteStatusValue.Text = MajorFarm.EliteStatus end
+    if EliteProgressValue then EliteProgressValue.Text = MajorFarm.EliteProgress end
+    if MaterialStatusValue then MaterialStatusValue.Text = MajorFarm.MaterialStatus end
+    if ChestStatusValue then ChestStatusValue.Text = MajorFarm.ChestStatus end
+    if MasteryStatusValue then MasteryStatusValue.Text = MajorFarm.MasteryStatus end
 end)
 
 --==================================================
@@ -3070,6 +3139,7 @@ local QuestStatusCard, QuestStatusValue = Card(QuestPage, "QUEST STATUS", "Idle"
 local QuestMobCard, QuestMobValue = Card(QuestPage, "QUEST MOB", "Auto by level")
 local QuestSeaCard, QuestSeaValue = Card(QuestPage, "SEA", "Auto")
 local QuestRouteCard, QuestRouteValue = Card(QuestPage, "ROUTE", "Quest NPC -> Mob Spawn")
+local QuestPhaseCard, QuestPhaseValue = Card(QuestPage, "PHASE", "Idle")
 
 
 Toggle(
@@ -3107,6 +3177,446 @@ Toggle(
     end
 )
 
+
+--==================================================
+-- 2.8.0 MAJOR FARM SERVICES
+-- Independent implementations based on the public reference behavior.
+-- Cake Prince / Bone code above is intentionally left unchanged.
+--==================================================
+
+local MajorFarm = {
+    FastAttack = false,
+    FastAttackDelay = 0.175,
+
+    BossEnabled = false,
+    BossIndex = 1,
+    BossStatus = "Idle",
+
+    ChestEnabled = false,
+    ChestStatus = "Idle",
+
+    EliteEnabled = false,
+    EliteStatus = "Idle",
+    EliteProgress = "0",
+
+    MaterialEnabled = false,
+    MaterialIndex = 1,
+    MaterialStatus = "Idle",
+
+    MasteryEnabled = false,
+    MasteryIndex = 1,
+    MasteryHealthPercent = 40,
+    MasteryStatus = "Idle",
+
+    Busy = false
+}
+
+local BossLists = {
+    [1] = {
+        "The Saw", "The Gorilla King", "Bobby", "Yeti", "Mob Leader",
+        "Vice Admiral", "Warden", "Chief Warden", "Swan", "Magma Admiral",
+        "Fishman Lord", "Wysper", "Thunder God", "Cyborg", "Saber Expert"
+    },
+    [2] = {
+        "Diamond", "Jeremy", "Fajita", "Don Swan", "Smoke Admiral",
+        "Cursed Captain", "Darkbeard", "Order", "Awakened Ice Admiral", "Tide Keeper"
+    },
+    [3] = {
+        "Stone", "Island Empress", "Rocket Admiral", "Captain Elephant",
+        "Beautiful Pirate", "rip_indra True Form", "Longma", "Soul Reaper",
+        "Cake Queen", "Cake Prince", "Dough King"
+    }
+}
+
+local BossFallbackPositions = {
+    ["Magma Admiral"] = CFrame.new(-5765.90, 82.92, 8718.30),
+    ["Fishman Lord"] = CFrame.new(61260.15, 30.95, 1193.43),
+    ["Wysper"] = CFrame.new(-7866.13, 5576.43, -546.75),
+    ["Thunder God"] = CFrame.new(-7994.98, 5761.03, -2088.65),
+    ["Cyborg"] = CFrame.new(6094.02, 73.77, 3825.73),
+    ["Awakened Ice Admiral"] = CFrame.new(6403.54, 340.30, -6894.56),
+    ["Tide Keeper"] = CFrame.new(-3795.64, 105.89, -11421.31),
+    ["Stone"] = CFrame.new(-1027.65, 92.40, 6578.85),
+    ["Cake Prince"] = CFrame.new(-2103, 70, -12165)
+}
+
+local MaterialProfiles = {
+    {
+        Name = "Leather + Scrap Metal",
+        Seas = {
+            [1] = {Mobs={"Pirate","Brute"}, Pos=CFrame.new(-1141.07, 14.10, 3831.55)},
+            [2] = {Mobs={"Mercenary"}, Pos=CFrame.new(-986.77, 72.88, 1088.45)},
+            [3] = {Mobs={"Pirate Millionaire"}, Pos=CFrame.new(-118.81, 55.49, 5649.17)}
+        }
+    },
+    {
+        Name = "Magma Ore",
+        Seas = {
+            [1] = {Mobs={"Military Soldier","Military Spy"}, Pos=CFrame.new(-5806.70, 78.50, 8904.47)},
+            [2] = {Mobs={"Lava Pirate"}, Pos=CFrame.new(-5158.77, 14.48, -4654.26)}
+        }
+    },
+    {
+        Name = "Fish Tail",
+        Seas = {
+            [1] = {Mobs={"Fishman Warrior","Fishman Commando"}, Pos=CFrame.new(61122.65, 18.50, 1569.40)},
+            [3] = {Mobs={"Fishman Captain"}, Pos=CFrame.new(-10828.11, 331.83, -9049.15)}
+        }
+    },
+    {
+        Name = "Angel Wings",
+        Seas = {
+            [1] = {Mobs={"Royal Soldier"}, Pos=CFrame.new(-7759.46, 5606.94, -1862.70)}
+        }
+    },
+    {
+        Name = "Radioactive Material",
+        Seas = {
+            [2] = {Mobs={"Factory Staff"}, Pos=CFrame.new(-105.89, 72.81, -670.25)}
+        }
+    },
+    {
+        Name = "Mystic Droplet",
+        Seas = {
+            [2] = {Mobs={"Water Fighter"}, Pos=CFrame.new(-3331.70, 239.14, -10553.36)}
+        }
+    },
+    {
+        Name = "Vampire Fang",
+        Seas = {
+            [2] = {Mobs={"Vampire"}, Pos=CFrame.new(-6132.39, 9.01, -1466.17)}
+        }
+    },
+    {
+        Name = "Gunpowder",
+        Seas = {
+            [3] = {Mobs={"Pistol Billionaire"}, Pos=CFrame.new(-185.69, 84.71, 6103.63)}
+        }
+    },
+    {
+        Name = "Mini Tusk",
+        Seas = {
+            [3] = {Mobs={"Mythological Pirate"}, Pos=CFrame.new(-13456.05, 469.43, -7039.96)}
+        }
+    },
+    {
+        Name = "Conjured Cocoa",
+        Seas = {
+            [3] = {Mobs={"Chocolate Bar Battler","Cocoa Warrior","Sweet Thief","Candy Rebel"}, Pos=CFrame.new(582.83, 25.58, -12550.70)}
+        }
+    },
+    {
+        Name = "Dragon Scale",
+        Seas = {
+            [3] = {Mobs={"Dragon Crew Warrior","Dragon Crew Archer"}, Pos=CFrame.new(6668.76, 481.38, 329.12)}
+        }
+    }
+}
+
+local MasteryModes = {"Melee", "Sword", "Gun", "Blox Fruit"}
+
+local function StopMajorMovementModes(exceptName)
+    if exceptName ~= "Boss" then MajorFarm.BossEnabled = false end
+    if exceptName ~= "Chest" then MajorFarm.ChestEnabled = false end
+    if exceptName ~= "Elite" then MajorFarm.EliteEnabled = false end
+    if exceptName ~= "Material" then MajorFarm.MaterialEnabled = false end
+    if exceptName ~= "Mastery" then MajorFarm.MasteryEnabled = false end
+
+    FarmState.Enabled = false
+    MovementService:Stop()
+end
+
+local function GetToolByCategory(category)
+    local character = LocalPlayer.Character
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+    local function scan(container)
+        if not container then return nil end
+        for _, tool in ipairs(container:GetChildren()) do
+            if tool:IsA("Tool") then
+                local tip = tostring(tool.ToolTip or "")
+                if category == "Blox Fruit" then
+                    if tip == "Blox Fruit" or tip == "Fruit" then return tool end
+                elseif tip == category then
+                    return tool
+                end
+            end
+        end
+        return nil
+    end
+
+    return scan(character) or scan(backpack)
+end
+
+local function EquipCategory(category)
+    local tool = GetToolByCategory(category)
+    if not tool then return false end
+    if tool.Parent == LocalPlayer.Character then return true end
+
+    local humanoid = GetCharacterHumanoid()
+    if humanoid then
+        pcall(function() humanoid:EquipTool(tool) end)
+        task.wait(0.05)
+        return tool.Parent == LocalPlayer.Character
+    end
+    return false
+end
+
+local function FastAttackTarget(target)
+    if not target or not IsValidFarmTarget(target) then return false end
+
+    local character = LocalPlayer.Character
+    local tool = character and character:FindFirstChildOfClass("Tool")
+    local targetRoot = GetTargetRoot(target)
+    local head = target:FindFirstChild("Head") or targetRoot
+    if not tool or not head then return false end
+
+    -- Newer/custom combat path: a Tool-owned LeftClickRemote.
+    local leftClick = tool:FindFirstChild("LeftClickRemote")
+    if leftClick and leftClick:IsA("RemoteEvent") and targetRoot then
+        local direction = targetRoot.Position - character:GetPivot().Position
+        if direction.Magnitude > 0 then
+            pcall(function()
+                leftClick:FireServer(direction.Unit, 1)
+            end)
+            return true
+        end
+    end
+
+    -- Net combat path used by the reference architecture.
+    local modules = ReplicatedStorage:FindFirstChild("Modules")
+    local net = modules and modules:FindFirstChild("Net")
+    local registerAttack = net and net:FindFirstChild("RE/RegisterAttack")
+    local registerHit = net and net:FindFirstChild("RE/RegisterHit")
+
+    if registerAttack and registerHit then
+        local ok = pcall(function()
+            registerAttack:FireServer(MajorFarm.FastAttackDelay)
+            registerHit:FireServer(head, {{target, head}})
+        end)
+        if ok then return true end
+    end
+
+    pcall(function() tool:Activate() end)
+    return true
+end
+
+local function MajorAttack(target)
+    if MajorFarm.FastAttack then
+        return FastAttackTarget(target)
+    end
+    return AttackTarget(target)
+end
+
+local function FindNamedEnemy(names)
+    return GetSpecialEnemy(names)
+end
+
+local function FindStoredNamedEnemy(names)
+    for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
+        if SpecialNameMatch(obj.Name, names) then
+            return obj
+        end
+    end
+    return nil
+end
+
+local function GetCurrentBossName()
+    local list = BossLists[GetCurrentSeaNumber()] or BossLists[1]
+    MajorFarm.BossIndex = math.clamp(MajorFarm.BossIndex, 1, #list)
+    return list[MajorFarm.BossIndex], list
+end
+
+local function BossFarmStep()
+    if not MajorFarm.BossEnabled or MovementService.Active then return end
+
+    local bossName = GetCurrentBossName()
+    local enemy = FindNamedEnemy({bossName})
+    if enemy then
+        MajorFarm.BossStatus = "Attacking " .. bossName
+        EquipFirstTool()
+        MoveToTarget(enemy)
+        MajorAttack(enemy)
+        return
+    end
+
+    local stored = FindStoredNamedEnemy({bossName})
+    if stored then
+        MajorFarm.BossStatus = bossName .. " detected"
+        local storedRoot = GetTargetRoot(stored)
+        if storedRoot then
+            MovementService:GoTo(storedRoot.CFrame, 18, bossName)
+        elseif BossFallbackPositions[bossName] then
+            MovementService:GoTo(BossFallbackPositions[bossName], 18, bossName)
+        end
+        return
+    end
+
+    MajorFarm.BossStatus = "Waiting for " .. bossName
+    if BossFallbackPositions[bossName] then
+        MovementService:GoTo(BossFallbackPositions[bossName], 18, bossName)
+    end
+end
+
+local function FindNearestChest()
+    local root = GetCharacterRoot()
+    if not root then return nil end
+
+    local nearest, best = nil, math.huge
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj.Name == "Chest1" or obj.Name == "Chest2" or obj.Name == "Chest3" then
+            local disabled = obj:GetAttribute("IsDisabled")
+            local ok, pivot = pcall(function() return obj:GetPivot() end)
+            if ok and not disabled then
+                local d = (pivot.Position - root.Position).Magnitude
+                if d < best then
+                    best, nearest = d, obj
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function ChestFarmStep()
+    if not MajorFarm.ChestEnabled or MovementService.Active then return end
+    local chest = FindNearestChest()
+    if not chest then
+        MajorFarm.ChestStatus = "No active chest found"
+        return
+    end
+
+    local ok, pivot = pcall(function() return chest:GetPivot() end)
+    if ok then
+        MajorFarm.ChestStatus = "Collecting " .. chest.Name
+        MovementService:GoTo(pivot, 1, chest.Name)
+    end
+end
+
+local EliteNames = {"Diablo", "Deandre", "Urban"}
+local EliteNPC = CFrame.new(-5418.89, 313.74, -2826.23)
+
+local function EliteFarmStep()
+    if not MajorFarm.EliteEnabled or MovementService.Active then return end
+    if GetCurrentSeaNumber() ~= 3 then
+        MajorFarm.EliteStatus = "Elite Hunter requires Sea 3"
+        return
+    end
+
+    local remote = GetQuestRemote()
+    if remote then
+        pcall(function()
+            MajorFarm.EliteProgress = tostring(remote:InvokeServer("EliteHunter", "Progress"))
+        end)
+    end
+
+    local enemy = FindNamedEnemy(EliteNames)
+    if enemy then
+        MajorFarm.EliteStatus = "Attacking " .. enemy.Name
+        EquipFirstTool()
+        MoveToTarget(enemy)
+        MajorAttack(enemy)
+        return
+    end
+
+    local stored = FindStoredNamedEnemy(EliteNames)
+    if stored then
+        MajorFarm.EliteStatus = "Elite spawned - locating"
+        local sr = GetTargetRoot(stored)
+        if sr then MovementService:GoTo(sr.CFrame, 18, "Elite") end
+        return
+    end
+
+    MajorFarm.EliteStatus = "Getting Elite Hunter quest"
+    MovementService:GoTo(EliteNPC, 3, "Elite Hunter")
+    if remote then
+        pcall(function() remote:InvokeServer("EliteHunter") end)
+    end
+end
+
+local function GetCurrentMaterial()
+    MajorFarm.MaterialIndex = math.clamp(MajorFarm.MaterialIndex, 1, #MaterialProfiles)
+    return MaterialProfiles[MajorFarm.MaterialIndex]
+end
+
+local function MaterialFarmStep()
+    if not MajorFarm.MaterialEnabled or MovementService.Active then return end
+
+    local profile = GetCurrentMaterial()
+    local data = profile.Seas[GetCurrentSeaNumber()]
+    if not data then
+        MajorFarm.MaterialStatus = profile.Name .. " unavailable in this Sea"
+        return
+    end
+
+    local enemy = FindNamedEnemy(data.Mobs)
+    if enemy then
+        MajorFarm.MaterialStatus = profile.Name .. " • " .. enemy.Name
+        EquipFirstTool()
+        MoveToTarget(enemy)
+        MajorAttack(enemy)
+    else
+        MajorFarm.MaterialStatus = "Travelling: " .. profile.Name
+        MovementService:GoTo(data.Pos, 18, profile.Name)
+    end
+end
+
+local function MasteryFarmStep()
+    if not MajorFarm.MasteryEnabled or MovementService.Active then return end
+
+    local q = GetLevelFarmQuest()
+    if not q then
+        MajorFarm.MasteryStatus = "No level farm data"
+        return
+    end
+
+    local target = GetNearestTarget()
+    if not target then
+        MajorFarm.MasteryStatus = "Finding " .. q.Mob
+        MovementService:GoTo(q.MobPos, 18, "Mastery mobs")
+        return
+    end
+
+    local hum = target:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.MaxHealth <= 0 then return end
+    local hp = (hum.Health / hum.MaxHealth) * 100
+    local category = MasteryModes[MajorFarm.MasteryIndex]
+
+    MoveToTarget(target)
+
+    if hp <= MajorFarm.MasteryHealthPercent then
+        MajorFarm.MasteryStatus = "Finishing with " .. category
+        if EquipCategory(category) then
+            MajorAttack(target)
+        else
+            MajorFarm.MasteryStatus = "No " .. category .. " tool found"
+        end
+    else
+        MajorFarm.MasteryStatus = string.format("Lowering HP %.0f%% -> %d%%", hp, MajorFarm.MasteryHealthPercent)
+        EquipFirstTool()
+        MajorAttack(target)
+    end
+end
+
+
+
+FarmConnect(RunService.Heartbeat, function()
+    if not QuestPhaseValue then return end
+    if not FarmState.Enabled then
+        QuestPhaseValue.Text = "Idle"
+    elseif MovementService.Active then
+        QuestPhaseValue.Text = "Travelling: " .. tostring(MovementService.DestinationName)
+    elseif FarmState.AutoQuest and not FarmState.QuestOwnedByHub then
+        QuestPhaseValue.Text = "Need Quest"
+    elseif FarmState.AutoQuest and FarmState.QuestRoutePending then
+        QuestPhaseValue.Text = "Quest -> Mob"
+    elseif FarmState.CurrentTarget then
+        QuestPhaseValue.Text = "Fighting"
+    else
+        QuestPhaseValue.Text = "Waiting for mob"
+    end
+end)
+
 --==================================================
 -- COMBAT
 --==================================================
@@ -3115,19 +3625,197 @@ local CombatPage = PageService:Create("Combat")
 
 Section(
     CombatPage,
-    "Combat",
-    "Combat interface"
+    "Combat Service",
+    "Shared attack engine used by the new 2.8.0 farm modules"
 )
+
+local FastAttackCard, FastAttackValue = Card(CombatPage, "FAST ATTACK", "Disabled")
+local FastDelayCard, FastDelayValue = Card(CombatPage, "ATTACK DELAY", "0.175")
 
 Toggle(
     CombatPage,
-    "Combat Assist",
-    "Test toggle — interface only",
+    "Fast Attack",
+    "Uses LeftClickRemote / Modules.Net when available, with Tool:Activate fallback.",
     false,
     function(enabled)
-        Notify("Combat", enabled and "Enabled" or "Disabled")
+        MajorFarm.FastAttack = enabled
+        FastAttackValue.Text = enabled and "Enabled" or "Disabled"
+        Notify("Fast Attack", enabled and "Enabled" or "Disabled")
     end
 )
+
+ValueBox(
+    CombatPage,
+    "Fast Attack Delay",
+    0.175,
+    function(value)
+        MajorFarm.FastAttackDelay = math.clamp(value, 0.05, 1)
+        FastDelayValue.Text = tostring(MajorFarm.FastAttackDelay)
+    end
+)
+
+
+--==================================================
+-- ADVANCED FARM 2.8.0
+--==================================================
+
+local AdvancedFarmPage = PageService:Create("Advanced Farm")
+
+Section(
+    AdvancedFarmPage,
+    "Boss Farm",
+    "Select a boss for the current Sea and farm it when available."
+)
+
+local BossSelectCard, BossSelectValue = Card(AdvancedFarmPage, "SELECTED BOSS", GetCurrentBossName())
+local BossStatusCard, BossStatusValue = Card(AdvancedFarmPage, "BOSS STATUS", "Idle")
+
+ActionButton(AdvancedFarmPage, "Next Boss", function()
+    local _, list = GetCurrentBossName()
+    MajorFarm.BossIndex = (MajorFarm.BossIndex % #list) + 1
+    BossSelectValue.Text = GetCurrentBossName()
+end)
+
+Toggle(
+    AdvancedFarmPage,
+    "Auto Farm Boss",
+    "Locates the selected boss and attacks it. Raid/special spawn requirements remain game-controlled.",
+    false,
+    function(enabled)
+        if enabled then
+            StopMajorMovementModes("Boss")
+            StopSpecialFarms()
+        end
+        MajorFarm.BossEnabled = enabled
+        MajorFarm.BossStatus = enabled and "Starting" or "Idle"
+        if not enabled then MovementService:Stop() end
+    end
+)
+
+Section(
+    AdvancedFarmPage,
+    "Elite Hunter",
+    "Sea 3 • Diablo / Deandre / Urban"
+)
+
+local EliteStatusCard, EliteStatusValue = Card(AdvancedFarmPage, "ELITE STATUS", "Idle")
+local EliteProgressCard, EliteProgressValue = Card(AdvancedFarmPage, "ELITE KILLS", "0")
+
+Toggle(
+    AdvancedFarmPage,
+    "Auto Elite Hunter",
+    "Gets the Elite Hunter task and attacks the active elite.",
+    false,
+    function(enabled)
+        if enabled then
+            StopMajorMovementModes("Elite")
+            StopSpecialFarms()
+        end
+        MajorFarm.EliteEnabled = enabled
+        if not enabled then MovementService:Stop() end
+    end
+)
+
+Section(
+    AdvancedFarmPage,
+    "Material Farm",
+    "Cycles through reference-backed material routes."
+)
+
+local MaterialSelectCard, MaterialSelectValue = Card(AdvancedFarmPage, "SELECTED MATERIAL", MaterialProfiles[1].Name)
+local MaterialStatusCard, MaterialStatusValue = Card(AdvancedFarmPage, "MATERIAL STATUS", "Idle")
+
+ActionButton(AdvancedFarmPage, "Next Material", function()
+    MajorFarm.MaterialIndex = (MajorFarm.MaterialIndex % #MaterialProfiles) + 1
+    MaterialSelectValue.Text = GetCurrentMaterial().Name
+end)
+
+Toggle(
+    AdvancedFarmPage,
+    "Auto Farm Material",
+    "Farms the mob group associated with the selected material and current Sea.",
+    false,
+    function(enabled)
+        if enabled then
+            StopMajorMovementModes("Material")
+            StopSpecialFarms()
+        end
+        MajorFarm.MaterialEnabled = enabled
+        if not enabled then MovementService:Stop() end
+    end
+)
+
+Section(
+    AdvancedFarmPage,
+    "Chest Farm",
+    "Finds the nearest active Chest1 / Chest2 / Chest3."
+)
+
+local ChestStatusCard, ChestStatusValue = Card(AdvancedFarmPage, "CHEST STATUS", "Idle")
+
+Toggle(
+    AdvancedFarmPage,
+    "Auto Chest Farm",
+    "Continuously travels to the nearest active chest.",
+    false,
+    function(enabled)
+        if enabled then
+            StopMajorMovementModes("Chest")
+            StopSpecialFarms()
+        end
+        MajorFarm.ChestEnabled = enabled
+        if not enabled then MovementService:Stop() end
+    end
+)
+
+Section(
+    AdvancedFarmPage,
+    "Mastery Farm",
+    "Lowers target HP, then changes to the selected mastery category for the finish."
+)
+
+local MasteryModeCard, MasteryModeValue = Card(AdvancedFarmPage, "MASTERY MODE", MasteryModes[1])
+local MasteryStatusCard, MasteryStatusValue = Card(AdvancedFarmPage, "MASTERY STATUS", "Idle")
+
+ActionButton(AdvancedFarmPage, "Next Mastery Mode", function()
+    MajorFarm.MasteryIndex = (MajorFarm.MasteryIndex % #MasteryModes) + 1
+    MasteryModeValue.Text = MasteryModes[MajorFarm.MasteryIndex]
+end)
+
+ValueBox(
+    AdvancedFarmPage,
+    "Finish at HP %",
+    40,
+    function(value)
+        MajorFarm.MasteryHealthPercent = math.clamp(math.floor(value), 1, 100)
+    end
+)
+
+Toggle(
+    AdvancedFarmPage,
+    "Auto Mastery Farm",
+    "Experimental: Melee / Sword / Gun / Blox Fruit finishing mode.",
+    false,
+    function(enabled)
+        if enabled then
+            StopMajorMovementModes("Mastery")
+            StopSpecialFarms()
+        end
+        MajorFarm.MasteryEnabled = enabled
+        if not enabled then MovementService:Stop() end
+    end
+)
+
+Section(
+    AdvancedFarmPage,
+    "Progress / Items",
+    "Foundation for longer item quest chains."
+)
+
+Card(AdvancedFarmPage, "CDK", "Framework reserved • not enabled")
+Card(AdvancedFarmPage, "TTK", "Framework reserved • not enabled")
+Card(AdvancedFarmPage, "NOTE", "Kept disabled until each quest chain is verified")
+
 
 --==================================================
 -- MISC
