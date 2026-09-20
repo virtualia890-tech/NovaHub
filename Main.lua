@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.6.3
+    Version: 2.6.4
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.6.3",
+    Version = "2.6.4",
 
     Width = 920,
     Height = 590,
@@ -162,14 +162,16 @@ local Themes = {
 local Theme = Themes[Config.Theme]
 
 --==================================================
--- MOVEMENT SERVICE 2.6.3
+-- MOVEMENT SERVICE 2.6.4
+-- Slower travel + safe cruise height
 --==================================================
 
 local MovementService = {
     Active = false,
     Target = nil,
     Tween = nil,
-    Speed = 325,
+    Speed = 200,
+    SafeHeight = 120,
     Status = "Idle",
     DestinationName = "None"
 }
@@ -210,6 +212,35 @@ function MovementService:SetCollision(enabled)
     end
 end
 
+function MovementService:TweenRoot(root, destination)
+    if not root or not root.Parent then return false end
+
+    local distance = (root.Position - destination.Position).Magnitude
+    if distance <= 4 then
+        root.CFrame = destination
+        return true
+    end
+
+    local duration = math.clamp(distance / self.Speed, 0.12, 60)
+    local tween = TweenService:Create(
+        root,
+        TweenInfo.new(duration, Enum.EasingStyle.Linear),
+        {CFrame = destination}
+    )
+
+    self.Tween = tween
+    local ok = pcall(function()
+        tween:Play()
+        tween.Completed:Wait()
+    end)
+
+    if self.Tween == tween then
+        self.Tween = nil
+    end
+
+    return ok and self.Active
+end
+
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     local root = self:GetRoot()
     local humanoid = self:GetHumanoid()
@@ -220,7 +251,6 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     end
 
     self:Stop()
-
     self.Active = true
     self.Target = targetCFrame
     self.DestinationName = destinationName or "Target"
@@ -237,15 +267,14 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     end)
 
     local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
-    local distance = (root.Position - destination.Position).Magnitude
+    local totalDistance = (root.Position - destination.Position).Magnitude
 
-    -- Short moves are instant; long island travel uses a controlled tween.
-    if distance <= 220 then
-        local ok = pcall(function()
-            root.CFrame = destination
-            root.AssemblyLinearVelocity = Vector3.zero
-        end)
-
+    -- Farm/short movement stays direct. Long island travel rises first,
+    -- crosses at a fixed safe altitude, then descends at the destination.
+    if totalDistance <= 260 then
+        self:SetCollision(false)
+        local ok = self:TweenRoot(root, destination)
+        self:SetCollision(true)
         self.Active = false
         self.Status = ok and "Arrived" or "Failed"
         return ok
@@ -253,62 +282,108 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
 
     self:SetCollision(false)
 
-    local duration = math.clamp(distance / self.Speed, 0.15, 45)
-    local tween = TweenService:Create(
-        root,
-        TweenInfo.new(duration, Enum.EasingStyle.Linear),
-        {CFrame = destination}
-    )
+    local cruiseY = math.max(root.Position.Y, destination.Position.Y) + self.SafeHeight
+    local rise = CFrame.new(root.Position.X, cruiseY, root.Position.Z)
+    local cruise = CFrame.new(destination.Position.X, cruiseY, destination.Position.Z)
 
-    self.Tween = tween
+    self.Status = "Rising"
+    local ok = self:TweenRoot(root, rise)
 
-    local ok = pcall(function()
-        tween:Play()
-        tween.Completed:Wait()
-    end)
+    if ok then
+        root = self:GetRoot()
+        self.Status = "Cruising"
+        ok = self:TweenRoot(root, cruise)
+    end
 
-    if self.Tween == tween then
-        self.Tween = nil
+    if ok then
+        root = self:GetRoot()
+        self.Status = "Descending"
+        ok = self:TweenRoot(root, destination)
     end
 
     self:SetCollision(true)
+    self.Active = false
 
-    if not ok then
-        self.Active = false
+    root = self:GetRoot()
+    if not ok or not root then
         self.Status = "Failed"
         return false
     end
 
-    root = self:GetRoot()
-    if not root then
-        self.Active = false
-        self.Status = "Character unavailable"
-        return false
-    end
-
     local remaining = (root.Position - destination.Position).Magnitude
-
-    -- Final correction for small replication drift.
-    if remaining <= 350 then
-        pcall(function()
-            root.CFrame = destination
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-        remaining = (root.Position - destination.Position).Magnitude
-    end
-
-    self.Active = false
     self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
     return remaining <= 60
 end
+
+--==================================================
+-- WATER WALK 2.6.4
+--==================================================
+
+local WaterWalkService = {
+    Enabled = false,
+    Platform = nil
+}
+
+function WaterWalkService:SetEnabled(enabled)
+    self.Enabled = enabled
+
+    if not enabled and self.Platform then
+        self.Platform:Destroy()
+        self.Platform = nil
+    end
+end
+
+function WaterWalkService:Update()
+    if not self.Enabled then return end
+
+    local root = MovementService:GetRoot()
+    if not root then return end
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    rayParams.IgnoreWater = false
+
+    local result = workspace:Raycast(
+        root.Position + Vector3.new(0, 8, 0),
+        Vector3.new(0, -18, 0),
+        rayParams
+    )
+
+    local overWater = result and result.Material == Enum.Material.Water
+
+    if overWater then
+        if not self.Platform or not self.Platform.Parent then
+            self.Platform = Instance.new("Part")
+            self.Platform.Name = "Floquitave_WaterWalk"
+            self.Platform.Size = Vector3.new(7, 0.5, 7)
+            self.Platform.Anchored = true
+            self.Platform.CanCollide = true
+            self.Platform.Transparency = 1
+            self.Platform.Parent = workspace
+        end
+
+        self.Platform.CFrame = CFrame.new(
+            root.Position.X,
+            result.Position.Y + 1.7,
+            root.Position.Z
+        )
+    elseif self.Platform then
+        self.Platform:Destroy()
+        self.Platform = nil
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    WaterWalkService:Update()
+end)
 
 --==================================================
 -- TELEPORT DIRECTORY
 --==================================================
 
 local IslandCFrames = {
-    ["CA1"] = {
+    ["Sea 1"] = {
         ["Bandit Island"] = CFrame.new(1060, 16, 1547),
         ["Jungle"] = CFrame.new(-1602, 37, 153),
         ["Pirate Village"] = CFrame.new(-1140, 5, 3828),
@@ -322,7 +397,7 @@ local IslandCFrames = {
         ["Underwater City"] = CFrame.new(61122, 18, 1569),
         ["Fountain City"] = CFrame.new(5259, 39, 4050)
     },
-    ["CA2"] = {
+    ["Sea 2"] = {
         ["Kingdom of Rose"] = CFrame.new(-425, 73, 1836),
         ["Green Zone"] = CFrame.new(-2448, 73, -3210),
         ["Graveyard"] = CFrame.new(-5494, 49, -794),
@@ -332,7 +407,7 @@ local IslandCFrames = {
         ["Ice Castle"] = CFrame.new(5400, 28, -6236),
         ["Forgotten Island"] = CFrame.new(-3052, 237, -10148)
     },
-    ["CA3"] = {
+    ["Sea 3"] = {
         ["Port Town"] = CFrame.new(-290, 44, 5454),
         ["Hydra Island"] = CFrame.new(5228, 604, 345),
         ["Great Tree"] = CFrame.new(2276, 25, -6493),
@@ -348,7 +423,7 @@ local IslandCFrames = {
 }
 
 local TeleportLocations = {
-    ["CA1"] = {
+    ["Sea 1"] = {
         "Bandit Island",
         "Jungle",
         "Pirate Village",
@@ -363,7 +438,7 @@ local TeleportLocations = {
         "Fountain City"
     },
 
-    ["CA2"] = {
+    ["Sea 2"] = {
         "Kingdom of Rose",
         "Green Zone",
         "Graveyard",
@@ -374,7 +449,7 @@ local TeleportLocations = {
         "Forgotten Island"
     },
 
-    ["CA3"] = {
+    ["Sea 3"] = {
         "Port Town",
         "Hydra Island",
         "Great Tree",
@@ -1292,7 +1367,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.6.3 Teleport Rework",
+    Text = "2.6.4 Sea Quest + Farm Test",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1437,7 +1512,7 @@ local TeleportPage = PageService:Create("Teleport")
 Section(
     TeleportPage,
     "Teleport",
-    "CA1 / CA2 / CA3 — selecione o mapa e depois a ilha"
+    "Sea 1 / Sea 2 / Sea 3 — selecione o mapa e depois a ilha"
 )
 
 local TeleportStatusCard, TeleportStatusValue = Card(
@@ -1452,19 +1527,19 @@ local TeleportDestinationCard, TeleportDestinationValue = Card(
     "None"
 )
 
-local SelectedCA = "CA1"
+local SelectedSea = "Sea 1"
 
-local CAHolder = Create("Frame", {
+local SeaHolder = Create("Frame", {
     Size = UDim2.new(1, 0, 0, 44),
     BackgroundTransparency = 1
 }, TeleportPage)
 
-local CALayout = Create("UIListLayout", {
+local SeaLayout = Create("UIListLayout", {
     FillDirection = Enum.FillDirection.Horizontal,
     HorizontalAlignment = Enum.HorizontalAlignment.Center,
     Padding = UDim.new(0, 8),
     SortOrder = Enum.SortOrder.LayoutOrder
-}, CAHolder)
+}, SeaHolder)
 
 local TeleportSearch = Create("TextBox", {
     Size = UDim2.new(1, 0, 0, 40),
@@ -1509,9 +1584,9 @@ local function SetTeleportStatus(status, destination)
     end
 end
 
-local function TeleportToIsland(caName, locationName)
-    local destination = IslandCFrames[caName]
-        and IslandCFrames[caName][locationName]
+local function TeleportToIsland(seaName, locationName)
+    local destination = IslandCFrames[seaName]
+        and IslandCFrames[seaName][locationName]
 
     if not destination then
         SetTeleportStatus("Destino não configurado", locationName)
@@ -1536,7 +1611,7 @@ end
 BuildTeleport = function()
     ClearTeleport()
 
-    local locations = TeleportLocations[SelectedCA] or {}
+    local locations = TeleportLocations[SelectedSea] or {}
     local search = string.lower(TeleportSearch.Text or "")
 
     local header = Create("Frame", {
@@ -1551,7 +1626,7 @@ BuildTeleport = function()
         Position = UDim2.new(0, 14, 0, 0),
         Size = UDim2.new(1, -28, 1, 0),
         BackgroundTransparency = 1,
-        Text = SelectedCA .. " — " .. tostring(#locations) .. " destinos",
+        Text = SelectedSea .. " — " .. tostring(#locations) .. " destinos",
         Font = Enum.Font.GothamBold,
         TextSize = 13,
         TextColor3 = Theme.Text,
@@ -1575,40 +1650,51 @@ BuildTeleport = function()
             AddHoverEffect(button)
 
             Connect(button.MouseButton1Click, function()
-                TeleportToIsland(SelectedCA, locationName)
+                TeleportToIsland(SelectedSea, locationName)
             end)
         end
     end
 end
 
-for index, caName in ipairs({"CA1", "CA2", "CA3"}) do
-    local caButton = Create("TextButton", {
+for index, seaName in ipairs({"Sea 1", "Sea 2", "Sea 3"}) do
+    local seaButton = Create("TextButton", {
         Size = UDim2.new(0.32, -4, 1, 0),
-        BackgroundColor3 = caName == SelectedCA and Theme.Accent or Theme.Card,
-        Text = caName,
+        BackgroundColor3 = seaName == SelectedSea and Theme.Accent or Theme.Card,
+        Text = seaName,
         Font = Enum.Font.GothamBold,
         TextSize = 13,
         TextColor3 = Theme.Text,
         AutoButtonColor = false,
         LayoutOrder = index
-    }, CAHolder)
+    }, SeaHolder)
 
-    Corner(caButton, 9)
-    AddHoverEffect(caButton)
+    Corner(seaButton, 9)
+    AddHoverEffect(seaButton)
 
-    Connect(caButton.MouseButton1Click, function()
-        SelectedCA = caName
+    Connect(seaButton.MouseButton1Click, function()
+        SelectedSea = seaName
 
-        for _, child in ipairs(CAHolder:GetChildren()) do
+        for _, child in ipairs(SeaHolder:GetChildren()) do
             if child:IsA("TextButton") then
                 child.BackgroundColor3 =
-                    child == caButton and Theme.Accent or Theme.Card
+                    child == seaButton and Theme.Accent or Theme.Card
             end
         end
 
         BuildTeleport()
     end)
 end
+
+Toggle(
+    TeleportPage,
+    "Water Walk",
+    "Cria uma superfície invisível sob o personagem quando estiver sobre a água.",
+    false,
+    function(enabled)
+        WaterWalkService:SetEnabled(enabled)
+        Notify("Water Walk", enabled and "Enabled" or "Disabled")
+    end
+)
 
 ActionButton(
     TeleportPage,
@@ -1685,7 +1771,7 @@ local FarmState = {
     NoClip = false,
     UseTool = true,
     Distance = 8,
-    ScanRadius = 350,
+    ScanRadius = 500,
     AttackCooldown = 0.12,
     TargetName = "Auto",
     AutoQuest = true,
@@ -1694,6 +1780,10 @@ local FarmState = {
     QuestName = nil,
     QuestLevel = nil,
     QuestPosition = nil,
+    MobPosition = nil,
+    CurrentSea = nil,
+    LastQuestMove = 0,
+    LastMobMove = 0,
     FarmAnchor = nil,
     CurrentTarget = nil,
     CurrentTool = nil,
@@ -1775,48 +1865,135 @@ end
 
 
 --==================================================
--- LEVEL FARM / QUEST TEST
+-- LEVEL FARM / QUEST 2.6.4
+-- Separate QuestPos and MobPos, selected by Sea + current level
 --==================================================
 
--- First Sea quest table for this controlled test stage.
--- More seas can be added after this cycle is confirmed working.
 local QuestData = {
-    {Min=1, Max=9, Mob="Bandit", Quest="BanditQuest1", Level=1, Pos=CFrame.new(1060,16,1547)},
-    {Min=10, Max=14, Mob="Monkey", Quest="JungleQuest", Level=1, Pos=CFrame.new(-1602,37,153)},
-    {Min=15, Max=29, Mob="Gorilla", Quest="JungleQuest", Level=2, Pos=CFrame.new(-1602,37,153)},
-    {Min=30, Max=39, Mob="Pirate", Quest="BuggyQuest1", Level=1, Pos=CFrame.new(-1140,5,3828)},
-    {Min=40, Max=59, Mob="Brute", Quest="BuggyQuest1", Level=2, Pos=CFrame.new(-1140,5,3828)},
-    {Min=60, Max=74, Mob="Desert Bandit", Quest="DesertQuest", Level=1, Pos=CFrame.new(896,6,4390)},
-    {Min=75, Max=89, Mob="Desert Officer", Quest="DesertQuest", Level=2, Pos=CFrame.new(896,6,4390)},
-    {Min=90, Max=99, Mob="Snow Bandit", Quest="SnowQuest", Level=1, Pos=CFrame.new(1389,87,-1298)},
-    {Min=100, Max=119, Mob="Snowman", Quest="SnowQuest", Level=2, Pos=CFrame.new(1389,87,-1298)},
-    {Min=120, Max=149, Mob="Chief Petty Officer", Quest="MarineQuest2", Level=1, Pos=CFrame.new(-5035,29,4325)},
-    {Min=150, Max=174, Mob="Sky Bandit", Quest="SkyQuest", Level=1, Pos=CFrame.new(-4842,718,-2623)},
-    {Min=175, Max=189, Mob="Dark Master", Quest="SkyQuest", Level=2, Pos=CFrame.new(-4842,718,-2623)},
-    {Min=190, Max=209, Mob="Prisoner", Quest="PrisonerQuest", Level=1, Pos=CFrame.new(5308,2,475)},
-    {Min=210, Max=249, Mob="Dangerous Prisoner", Quest="PrisonerQuest", Level=2, Pos=CFrame.new(5308,2,475)},
-    {Min=250, Max=274, Mob="Toga Warrior", Quest="ColosseumQuest", Level=1, Pos=CFrame.new(-1577,7,-2984)},
-    {Min=275, Max=299, Mob="Gladiator", Quest="ColosseumQuest", Level=2, Pos=CFrame.new(-1577,7,-2984)},
-    {Min=300, Max=324, Mob="Military Soldier", Quest="MagmaQuest", Level=1, Pos=CFrame.new(-5316,12,8517)},
-    {Min=325, Max=374, Mob="Military Spy", Quest="MagmaQuest", Level=2, Pos=CFrame.new(-5316,12,8517)},
-    {Min=375, Max=399, Mob="Fishman Warrior", Quest="FishmanQuest", Level=1, Pos=CFrame.new(61122,18,1569)},
-    {Min=400, Max=449, Mob="Fishman Commando", Quest="FishmanQuest", Level=2, Pos=CFrame.new(61122,18,1569)},
-    {Min=450, Max=474, Mob="God's Guard", Quest="SkyExp1Quest", Level=1, Pos=CFrame.new(-4721,845,-1954)},
-    {Min=475, Max=524, Mob="Shanda", Quest="SkyExp1Quest", Level=2, Pos=CFrame.new(-7863,5545,-380)},
-    {Min=525, Max=549, Mob="Royal Squad", Quest="SkyExp2Quest", Level=1, Pos=CFrame.new(-7903,5635,-1411)},
-    {Min=550, Max=624, Mob="Royal Soldier", Quest="SkyExp2Quest", Level=2, Pos=CFrame.new(-7903,5635,-1411)},
-    {Min=625, Max=649, Mob="Galley Pirate", Quest="FountainQuest", Level=1, Pos=CFrame.new(5259,39,4050)},
-    {Min=650, Max=9999, Mob="Galley Captain", Quest="FountainQuest", Level=2, Pos=CFrame.new(5259,39,4050)}
+    {Sea=1, Min=1, Max=9, Mob="Bandit", Quest="BanditQuest1", Level=1, QuestPos=CFrame.new(1059.37195,15.449507,1550.4231), MobPos=CFrame.new(1045.962646,27.002508,1560.820312)},
+    {Sea=1, Min=10, Max=14, Mob="Monkey", Quest="JungleQuest", Level=1, QuestPos=CFrame.new(-1598.08911,35.550117,153.377838), MobPos=CFrame.new(-1448.518066,67.853012,11.465796)},
+    {Sea=1, Min=15, Max=29, Mob="Gorilla", Quest="JungleQuest", Level=2, QuestPos=CFrame.new(-1598.08911,35.550117,153.377838), MobPos=CFrame.new(-1129.883667,40.463547,-525.423706)},
+    {Sea=1, Min=30, Max=39, Mob="Pirate", Quest="BuggyQuest1", Level=1, QuestPos=CFrame.new(-1141.07483,4.100018,3831.5498), MobPos=CFrame.new(-1103.513428,13.752052,3896.091064)},
+    {Sea=1, Min=40, Max=59, Mob="Brute", Quest="BuggyQuest1", Level=2, QuestPos=CFrame.new(-1141.07483,4.100018,3831.5498), MobPos=CFrame.new(-1140.08374,14.809885,4322.921387)},
+    {Sea=1, Min=60, Max=74, Mob="Desert Bandit", Quest="DesertQuest", Level=1, QuestPos=CFrame.new(894.488647,5.140007,4392.43359), MobPos=CFrame.new(924.799805,6.448675,4481.585938)},
+    {Sea=1, Min=75, Max=89, Mob="Desert Officer", Quest="DesertQuest", Level=2, QuestPos=CFrame.new(894.488647,5.140007,4392.43359), MobPos=CFrame.new(1608.282227,8.614224,4371.007324)},
+    {Sea=1, Min=90, Max=99, Mob="Snow Bandit", Quest="SnowQuest", Level=1, QuestPos=CFrame.new(1389.74451,88.151932,-1298.90796), MobPos=CFrame.new(1354.3479,87.272774,-1393.946533)},
+    {Sea=1, Min=100, Max=119, Mob="Snowman", Quest="SnowQuest", Level=2, QuestPos=CFrame.new(1389.74451,88.151932,-1298.90796), MobPos=CFrame.new(1201.641235,144.57959,-1550.067017)},
+    {Sea=1, Min=120, Max=149, Mob="Chief Petty Officer", Quest="MarineQuest2", Level=1, QuestPos=CFrame.new(-5039.58643,27.350039,4324.68018), MobPos=CFrame.new(-4881.230957,22.652044,4273.752441)},
+    {Sea=1, Min=150, Max=174, Mob="Sky Bandit", Quest="SkyQuest", Level=1, QuestPos=CFrame.new(-4839.53027,716.368591,-2619.44165), MobPos=CFrame.new(-4953.207031,295.744202,-2899.229004)},
+    {Sea=1, Min=175, Max=189, Mob="Dark Master", Quest="SkyQuest", Level=2, QuestPos=CFrame.new(-4839.53027,716.368591,-2619.44165), MobPos=CFrame.new(-5259.844727,391.397675,-2229.0354)},
+    {Sea=1, Min=190, Max=209, Mob="Prisoner", Quest="PrisonerQuest", Level=1, QuestPos=CFrame.new(5308.93115,1.655175,475.120514), MobPos=CFrame.new(5098.973633,-0.320406,474.237335)},
+    {Sea=1, Min=210, Max=249, Mob="Dangerous Prisoner", Quest="PrisonerQuest", Level=2, QuestPos=CFrame.new(5308.93115,1.655175,475.120514), MobPos=CFrame.new(5654.563477,15.633402,866.299194)},
+    {Sea=1, Min=250, Max=274, Mob="Toga Warrior", Quest="ColosseumQuest", Level=1, QuestPos=CFrame.new(-1580.04663,6.350003,-2986.47534), MobPos=CFrame.new(-1820.214844,51.683857,-2740.665039)},
+    {Sea=1, Min=275, Max=299, Mob="Gladiator", Quest="ColosseumQuest", Level=2, QuestPos=CFrame.new(-1580.04663,6.350003,-2986.47534), MobPos=CFrame.new(-1292.838135,56.380882,-3339.031494)},
+    {Sea=1, Min=300, Max=324, Mob="Military Soldier", Quest="MagmaQuest", Level=1, QuestPos=CFrame.new(-5313.37012,10.950008,8515.29395), MobPos=CFrame.new(-5411.164551,11.081554,8454.292969)},
+    {Sea=1, Min=325, Max=374, Mob="Military Spy", Quest="MagmaQuest", Level=2, QuestPos=CFrame.new(-5313.37012,10.950008,8515.29395), MobPos=CFrame.new(-5802.868164,86.262413,8828.859375)},
+    {Sea=1, Min=375, Max=399, Mob="Fishman Warrior", Quest="FishmanQuest", Level=1, QuestPos=CFrame.new(61122.652344,18.497442,1569.39978), MobPos=CFrame.new(60878.300781,18.48283,1543.757446)},
+    {Sea=1, Min=400, Max=449, Mob="Fishman Commando", Quest="FishmanQuest", Level=2, QuestPos=CFrame.new(61122.652344,18.497442,1569.39978), MobPos=CFrame.new(61922.632812,18.48283,1493.934326)},
+    {Sea=1, Min=450, Max=474, Mob="God's Guard", Quest="SkyExp1Quest", Level=1, QuestPos=CFrame.new(-4721.88867,843.874695,-1949.96643), MobPos=CFrame.new(-4710.042969,845.276978,-1927.307983)},
+    {Sea=1, Min=475, Max=524, Mob="Shanda", Quest="SkyExp1Quest", Level=2, QuestPos=CFrame.new(-7859.09814,5544.19043,-381.476196), MobPos=CFrame.new(-7678.489746,5566.403809,-497.215607)},
+    {Sea=1, Min=525, Max=549, Mob="Royal Squad", Quest="SkyExp2Quest", Level=1, QuestPos=CFrame.new(-7906.81592,5634.6626,-1411.99194), MobPos=CFrame.new(-7624.252441,5658.133301,-1467.354248)},
+    {Sea=1, Min=550, Max=624, Mob="Royal Soldier", Quest="SkyExp2Quest", Level=2, QuestPos=CFrame.new(-7906.81592,5634.6626,-1411.99194), MobPos=CFrame.new(-7836.753418,5645.664062,-1790.623657)},
+    {Sea=1, Min=625, Max=649, Mob="Galley Pirate", Quest="FountainQuest", Level=1, QuestPos=CFrame.new(5259.81982,37.350017,4050.0293), MobPos=CFrame.new(5551.021973,78.901352,3930.412842)},
+    {Sea=1, Min=650, Max=699, Mob="Galley Captain", Quest="FountainQuest", Level=2, QuestPos=CFrame.new(5259.81982,37.350017,4050.0293), MobPos=CFrame.new(5441.95166,42.50206,4950.09375)},
+    {Sea=2, Min=700, Max=724, Mob="Raider", Quest="Area1Quest", Level=1, QuestPos=CFrame.new(-429.543518,71.769997,1836.18188), MobPos=CFrame.new(-728.326721,52.77932,2345.770508)},
+    {Sea=2, Min=725, Max=774, Mob="Mercenary", Quest="Area1Quest", Level=2, QuestPos=CFrame.new(-429.543518,71.769997,1836.18188), MobPos=CFrame.new(-1004.324402,80.158867,1424.619385)},
+    {Sea=2, Min=775, Max=799, Mob="Swan Pirate", Quest="Area2Quest", Level=1, QuestPos=CFrame.new(638.43811,71.769989,918.282898), MobPos=CFrame.new(1068.664307,137.614288,1322.106079)},
+    {Sea=2, Min=800, Max=874, Mob="Factory Staff", Quest="Area2Quest", Level=2, QuestPos=CFrame.new(632.698608,73.105591,918.666321), MobPos=CFrame.new(73.078674,81.863441,-27.470673)},
+    {Sea=2, Min=875, Max=899, Mob="Marine Lieutenant", Quest="MarineQuest3", Level=1, QuestPos=CFrame.new(-2440.79639,71.714073,-3216.06812), MobPos=CFrame.new(-2821.372314,75.897278,-3070.089111)},
+    {Sea=2, Min=900, Max=949, Mob="Marine Captain", Quest="MarineQuest3", Level=2, QuestPos=CFrame.new(-2440.79639,71.714073,-3216.06812), MobPos=CFrame.new(-1861.231079,80.176582,-3254.69751)},
+    {Sea=2, Min=950, Max=974, Mob="Zombie", Quest="ZombieQuest", Level=1, QuestPos=CFrame.new(-5497.06152,47.5923,-795.237061), MobPos=CFrame.new(-5657.776855,78.969734,-928.687012)},
+    {Sea=2, Min=975, Max=999, Mob="Vampire", Quest="ZombieQuest", Level=2, QuestPos=CFrame.new(-5497.06152,47.5923,-795.237061), MobPos=CFrame.new(-6037.667969,32.184639,-1340.65979)},
+    {Sea=2, Min=1000, Max=1049, Mob="Snow Trooper", Quest="SnowMountainQuest", Level=1, QuestPos=CFrame.new(609.858826,400.119904,-5372.25928), MobPos=CFrame.new(549.147339,427.387054,-5563.69873)},
+    {Sea=2, Min=1050, Max=1099, Mob="Winter Warrior", Quest="SnowMountainQuest", Level=2, QuestPos=CFrame.new(609.858826,400.119904,-5372.25928), MobPos=CFrame.new(1142.745117,475.639801,-5199.416504)},
+    {Sea=2, Min=1100, Max=1124, Mob="Lab Subordinate", Quest="IceSideQuest", Level=1, QuestPos=CFrame.new(-6064.06885,15.242286,-4902.97852), MobPos=CFrame.new(-5707.47168,15.95171,-4513.39209)},
+    {Sea=2, Min=1125, Max=1174, Mob="Horned Warrior", Quest="IceSideQuest", Level=2, QuestPos=CFrame.new(-6064.06885,15.242286,-4902.97852), MobPos=CFrame.new(-6341.366699,15.951771,-5723.162109)},
+    {Sea=2, Min=1175, Max=1199, Mob="Magma Ninja", Quest="FireSideQuest", Level=1, QuestPos=CFrame.new(-5428.03174,15.062292,-5299.43457), MobPos=CFrame.new(-5449.672852,76.658745,-5808.200684)},
+    {Sea=2, Min=1200, Max=1249, Mob="Lava Pirate", Quest="FireSideQuest", Level=2, QuestPos=CFrame.new(-5428.03174,15.062292,-5299.43457), MobPos=CFrame.new(-5213.331543,49.737881,-4701.451172)},
+    {Sea=2, Min=1250, Max=1274, Mob="Ship Deckhand", Quest="ShipQuest1", Level=1, QuestPos=CFrame.new(1037.80127,125.092171,32911.6016), MobPos=CFrame.new(1212.011108,150.792053,33059.246094)},
+    {Sea=2, Min=1275, Max=1299, Mob="Ship Engineer", Quest="ShipQuest1", Level=2, QuestPos=CFrame.new(1037.80127,125.092171,32911.6016), MobPos=CFrame.new(919.478638,43.544014,32779.96875)},
+    {Sea=2, Min=1300, Max=1324, Mob="Ship Steward", Quest="ShipQuest2", Level=1, QuestPos=CFrame.new(968.80957,125.092171,33244.125), MobPos=CFrame.new(919.438538,129.556,33436.035156)},
+    {Sea=2, Min=1325, Max=1349, Mob="Ship Officer", Quest="ShipQuest2", Level=2, QuestPos=CFrame.new(968.80957,125.092171,33244.125), MobPos=CFrame.new(1036.017944,181.439041,33315.726562)},
+    {Sea=2, Min=1350, Max=1374, Mob="Arctic Warrior", Quest="FrostQuest", Level=1, QuestPos=CFrame.new(5667.6582,26.799782,-6486.08984), MobPos=CFrame.new(5966.246094,62.97002,-6179.382812)},
+    {Sea=2, Min=1375, Max=1424, Mob="Snow Lurker", Quest="FrostQuest", Level=2, QuestPos=CFrame.new(5667.6582,26.799782,-6486.08984), MobPos=CFrame.new(5407.07373,69.194374,-6880.880371)},
+    {Sea=2, Min=1425, Max=1449, Mob="Sea Soldier", Quest="ForgottenQuest", Level=1, QuestPos=CFrame.new(-3054.44458,235.544281,-10142.8193), MobPos=CFrame.new(-3028.223633,64.674515,-9775.426758)},
+    {Sea=2, Min=1450, Max=1499, Mob="Water Fighter", Quest="ForgottenQuest", Level=2, QuestPos=CFrame.new(-3054.44458,235.544281,-10142.8193), MobPos=CFrame.new(-3352.901367,285.015564,-10534.841797)},
+    {Sea=3, Min=1500, Max=1524, Mob="Pirate Millionaire", Quest="PiratePortQuest", Level=1, QuestPos=CFrame.new(-450.104645,107.681458,5950.72607), MobPos=CFrame.new(-245.996384,47.306152,5584.100586)},
+    {Sea=3, Min=1525, Max=1574, Mob="Pistol Billionaire", Quest="PiratePortQuest", Level=2, QuestPos=CFrame.new(-450.104645,107.681458,5950.72607), MobPos=CFrame.new(-54.811035,83.769875,5947.84082)},
+    {Sea=3, Min=1575, Max=1599, Mob="Dragon Crew Warrior", Quest="DragonCrewQuest", Level=1, QuestPos=CFrame.new(6750.493164,127.449165,-711.030884), MobPos=CFrame.new(6709.76367,52.344299,-1139.02966)},
+    {Sea=3, Min=1600, Max=1624, Mob="Dragon Crew Archer", Quest="DragonCrewQuest", Level=2, QuestPos=CFrame.new(6750.493164,127.449165,-711.030884), MobPos=CFrame.new(6668.76172,481.376923,329.12207)},
+    {Sea=3, Min=1625, Max=1649, Mob="Hydra Enforcer", Quest="VenomCrewQuest", Level=1, QuestPos=CFrame.new(5206.401855,1004.10498,748.350464), MobPos=CFrame.new(4547.11523,1003.10217,334.194824)},
+    {Sea=3, Min=1650, Max=1699, Mob="Venomous Assailant", Quest="VenomCrewQuest", Level=2, QuestPos=CFrame.new(5206.401855,1004.10498,748.350464), MobPos=CFrame.new(4674.92676,1134.82654,996.308838)},
+    {Sea=3, Min=1700, Max=1724, Mob="Marine Commodore", Quest="MarineTreeIsland", Level=1, QuestPos=CFrame.new(2481.092285,74.270493,-6779.640625), MobPos=CFrame.new(2577.25391,75.610001,-7739.87207)},
+    {Sea=3, Min=1725, Max=1774, Mob="Marine Rear Admiral", Quest="MarineTreeIsland", Level=2, QuestPos=CFrame.new(2481.092285,74.270493,-6779.640625), MobPos=CFrame.new(3761.81006,123.912003,-6823.52197)},
+    {Sea=3, Min=1775, Max=1799, Mob="Fishman Raider", Quest="DeepForestIsland3", Level=1, QuestPos=CFrame.new(-10581.6563,330.872955,-8761.18652), MobPos=CFrame.new(-10407.526367,331.762634,-8368.516602)},
+    {Sea=3, Min=1800, Max=1824, Mob="Fishman Captain", Quest="DeepForestIsland3", Level=2, QuestPos=CFrame.new(-10581.6563,330.872955,-8761.18652), MobPos=CFrame.new(-10994.701172,352.381409,-9002.110352)},
+    {Sea=3, Min=1825, Max=1849, Mob="Forest Pirate", Quest="DeepForestIsland", Level=1, QuestPos=CFrame.new(-13234.04,331.488495,-7625.40137), MobPos=CFrame.new(-13274.478516,332.378143,-7769.580566)},
+    {Sea=3, Min=1850, Max=1899, Mob="Mythological Pirate", Quest="DeepForestIsland", Level=2, QuestPos=CFrame.new(-13234.04,331.488495,-7625.40137), MobPos=CFrame.new(-13680.607422,501.081543,-6991.189453)},
+    {Sea=3, Min=1900, Max=1924, Mob="Jungle Pirate", Quest="DeepForestIsland2", Level=1, QuestPos=CFrame.new(-12680.3818,389.971039,-9902.01953), MobPos=CFrame.new(-12256.160156,331.738281,-10485.836914)},
+    {Sea=3, Min=1925, Max=1974, Mob="Musketeer Pirate", Quest="DeepForestIsland2", Level=2, QuestPos=CFrame.new(-12680.3818,389.971039,-9902.01953), MobPos=CFrame.new(-13457.904297,391.545654,-9859.177734)},
+    {Sea=3, Min=1975, Max=1999, Mob="Reborn Skeleton", Quest="HauntedQuest1", Level=1, QuestPos=CFrame.new(-9479.2168,141.215088,5566.09277), MobPos=CFrame.new(-8763.723633,165.722992,6159.861816)},
+    {Sea=3, Min=2000, Max=2024, Mob="Living Zombie", Quest="HauntedQuest1", Level=2, QuestPos=CFrame.new(-9479.2168,141.215088,5566.09277), MobPos=CFrame.new(-10144.131836,138.626678,5838.088867)},
+    {Sea=3, Min=2025, Max=2049, Mob="Demonic Soul", Quest="HauntedQuest2", Level=1, QuestPos=CFrame.new(-9516.99316,172.017181,6078.46533), MobPos=CFrame.new(-9505.87207,172.104828,6158.993164)},
+    {Sea=3, Min=2050, Max=2074, Mob="Posessed Mummy", Quest="HauntedQuest2", Level=2, QuestPos=CFrame.new(-9516.99316,172.017181,6078.46533), MobPos=CFrame.new(-9582.022461,6.251527,6205.478516)},
+    {Sea=3, Min=2075, Max=2099, Mob="Peanut Scout", Quest="NutsIslandQuest", Level=1, QuestPos=CFrame.new(-2104.390869,38.104168,-10194.21875), MobPos=CFrame.new(-2143.241943,47.721985,-10029.995117)},
+    {Sea=3, Min=2100, Max=2124, Mob="Peanut President", Quest="NutsIslandQuest", Level=2, QuestPos=CFrame.new(-2104.390869,38.104168,-10194.21875), MobPos=CFrame.new(-1859.354004,38.103168,-10422.429688)},
+    {Sea=3, Min=2125, Max=2149, Mob="Ice Cream Chef", Quest="IceCreamIslandQuest", Level=1, QuestPos=CFrame.new(-820.648254,65.819527,-10965.795898), MobPos=CFrame.new(-872.246582,65.819572,-10919.957031)},
+    {Sea=3, Min=2150, Max=2199, Mob="Ice Cream Commander", Quest="IceCreamIslandQuest", Level=2, QuestPos=CFrame.new(-820.648254,65.819527,-10965.795898), MobPos=CFrame.new(-558.061035,112.048958,-11290.774414)},
+    {Sea=3, Min=2200, Max=2224, Mob="Cookie Crafter", Quest="CakeQuest1", Level=1, QuestPos=CFrame.new(-2021.32007,37.798225,-12028.7295), MobPos=CFrame.new(-2374.136719,37.798264,-12125.308594)},
+    {Sea=3, Min=2225, Max=2249, Mob="Cake Guard", Quest="CakeQuest1", Level=2, QuestPos=CFrame.new(-2021.32007,37.798225,-12028.7295), MobPos=CFrame.new(-1598.307007,43.773197,-12244.581055)},
+    {Sea=3, Min=2250, Max=2274, Mob="Baking Staff", Quest="CakeQuest2", Level=1, QuestPos=CFrame.new(-1927.91602,37.798134,-12842.5391), MobPos=CFrame.new(-1887.809937,77.618507,-12998.350586)},
+    {Sea=3, Min=2275, Max=2299, Mob="Head Baker", Quest="CakeQuest2", Level=2, QuestPos=CFrame.new(-1927.91602,37.798134,-12842.5391), MobPos=CFrame.new(-2216.188232,82.884521,-12869.293945)},
+    {Sea=3, Min=2300, Max=2324, Mob="Cocoa Warrior", Quest="ChocQuest1", Level=1, QuestPos=CFrame.new(233.228363,29.876001,-12201.233398), MobPos=CFrame.new(-21.553284,80.574997,-12352.387695)},
+    {Sea=3, Min=2325, Max=2349, Mob="Chocolate Bar Battler", Quest="ChocQuest1", Level=2, QuestPos=CFrame.new(233.228363,29.876001,-12201.233398), MobPos=CFrame.new(582.590576,77.188095,-12463.162109)},
+    {Sea=3, Min=2350, Max=2374, Mob="Sweet Thief", Quest="ChocQuest2", Level=1, QuestPos=CFrame.new(150.506638,30.693693,-12774.50293), MobPos=CFrame.new(165.188477,76.058853,-12600.836914)},
+    {Sea=3, Min=2375, Max=2399, Mob="Candy Rebel", Quest="ChocQuest2", Level=2, QuestPos=CFrame.new(150.506638,30.693693,-12774.50293), MobPos=CFrame.new(134.865631,77.247681,-12876.547852)},
+    {Sea=3, Min=2400, Max=2424, Mob="Candy Pirate", Quest="CandyQuest1", Level=1, QuestPos=CFrame.new(-1150.040039,20.378935,-14446.334961), MobPos=CFrame.new(-1310.500366,26.016523,-14562.404297)},
+    {Sea=3, Min=2425, Max=2449, Mob="Snow Demon", Quest="CandyQuest1", Level=2, QuestPos=CFrame.new(-1150.040039,20.378935,-14446.334961), MobPos=CFrame.new(-880.200623,71.247765,-14538.609375)},
+    {Sea=3, Min=2450, Max=2474, Mob="Isle Outlaw", Quest="TikiQuest1", Level=1, QuestPos=CFrame.new(-16547.748047,61.135334,-173.413605), MobPos=CFrame.new(-16442.814453,116.139,-264.463776)},
+    {Sea=3, Min=2475, Max=2524, Mob="Island Boy", Quest="TikiQuest1", Level=2, QuestPos=CFrame.new(-16547.748047,61.135334,-173.413605), MobPos=CFrame.new(-16901.261719,84.067566,-192.889069)},
+    {Sea=3, Min=2525, Max=2550, Mob="Isle Champion", Quest="TikiQuest2", Level=2, QuestPos=CFrame.new(-16539.078125,55.686329,1051.573853), MobPos=CFrame.new(-16641.679688,235.782547,1031.282959)},
+    {Sea=3, Min=2550, Max=2574, Mob="Serpent Hunter", Quest="TikiQuest3", Level=1, QuestPos=CFrame.new(-16665.1914,104.596405,1579.69434), MobPos=CFrame.new(-16521.0625,106.09285,1488.78467)},
+    {Sea=3, Min=2575, Max=9999, Mob="Skull Slayer", Quest="TikiQuest3", Level=2, QuestPos=CFrame.new(-16665.1914,104.596405,1579.69434), MobPos=CFrame.new(-16855.043,122.457253,1478.15308)},
 }
+
+local function GetCurrentSeaNumber()
+    if game.PlaceId == 2753915549 then return 1 end
+    if game.PlaceId == 4442272183 then return 2 end
+    if game.PlaceId == 7449423635 then return 3 end
+
+    -- Fallback for custom/test places: infer from current level.
+    local level = PlayerService:GetLevel()
+    if level < 700 then return 1 end
+    if level < 1500 then return 2 end
+    return 3
+end
 
 local function GetLevelFarmQuest()
     local level = PlayerService:GetLevel()
+    local sea = GetCurrentSeaNumber()
+
+    local best = nil
     for _, q in ipairs(QuestData) do
-        if level >= q.Min and level <= q.Max then
-            return q
+        if q.Sea == sea and level >= q.Min and level <= q.Max then
+            best = q
+            break
         end
     end
-    return nil
+
+    -- If the reference table has a small gap, use the newest quest already
+    -- unlocked in the current Sea instead of jumping to another Sea.
+    if not best then
+        for _, q in ipairs(QuestData) do
+            if q.Sea == sea and q.Min <= level then
+                if not best or q.Min > best.Min then
+                    best = q
+                end
+            end
+        end
+    end
+
+    return best
 end
 
 local function GetQuestRemote()
@@ -1824,15 +2001,58 @@ local function GetQuestRemote()
     return remotes and remotes:FindFirstChild("CommF_")
 end
 
-local function QuestVisible()
+local function GetQuestFrame()
     local gui = LocalPlayer:FindFirstChild("PlayerGui")
     local main = gui and gui:FindFirstChild("Main")
-    local quest = main and main:FindFirstChild("Quest")
+    return main and main:FindFirstChild("Quest")
+end
+
+local function QuestVisible()
+    local quest = GetQuestFrame()
     return quest and quest.Visible == true
+end
+
+local function GetQuestText()
+    local quest = GetQuestFrame()
+    if not quest then return "" end
+
+    local parts = {}
+    for _, obj in ipairs(quest:GetDescendants()) do
+        if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text ~= "" then
+            table.insert(parts, obj.Text)
+        end
+    end
+
+    return string.lower(table.concat(parts, " "))
+end
+
+local function QuestMatches(q)
+    if not q or not QuestVisible() then return false end
+
+    local text = GetQuestText()
+    if text == "" then
+        -- Some custom UIs expose only visibility. Do not loop-abandon them.
+        return true
+    end
+
+    local mob = string.lower(q.Mob)
+    local simplified = mob:gsub("%s*%[.*%]", "")
+    return string.find(text, mob, 1, true) ~= nil
+        or string.find(text, simplified, 1, true) ~= nil
+end
+
+local function AbandonCurrentQuest()
+    local remote = GetQuestRemote()
+    if not remote then return false end
+
+    return pcall(function()
+        remote:InvokeServer("AbandonQuest")
+    end)
 end
 
 local function StartLevelQuest(q)
     if not q then return false end
+
     local remote = GetQuestRemote()
     local root = GetCharacterRoot()
     if not remote or not root then
@@ -1843,25 +2063,41 @@ local function StartLevelQuest(q)
     FarmState.QuestMob = q.Mob
     FarmState.QuestName = q.Quest
     FarmState.QuestLevel = q.Level
-    FarmState.QuestPosition = q.Pos
+    FarmState.QuestPosition = q.QuestPos
+    FarmState.MobPosition = q.MobPos
+    FarmState.CurrentSea = q.Sea
     FarmState.TargetName = q.Mob
 
-    if QuestVisible() then
-        FarmState.QuestStatus = "Quest active"
+    if QuestVisible() and QuestMatches(q) then
+        FarmState.QuestStatus = "Correct quest active"
         return true
     end
 
-    FarmState.QuestStatus = "Going to quest"
-    MovementService:GoTo(q.Pos, 3, "Quest NPC")
-    task.wait(0.35)
+    if QuestVisible() and not QuestMatches(q) then
+        FarmState.QuestStatus = "Replacing wrong quest"
+        AbandonCurrentQuest()
+        task.wait(0.25)
+    end
+
+    FarmState.QuestStatus = "Going to quest NPC"
+    MovementService:GoTo(q.QuestPos, 3, "Quest NPC")
+    task.wait(0.3)
 
     local ok = pcall(function()
         remote:InvokeServer("StartQuest", q.Quest, q.Level)
     end)
 
-    FarmState.QuestStatus = ok and "Quest requested" or "Quest request failed"
+    FarmState.QuestStatus = ok and ("Quest: " .. q.Mob) or "Quest request failed"
     task.wait(0.35)
     return ok
+end
+
+local function MoveToQuestMobArea(q)
+    if not q or not q.MobPos then return false end
+
+    FarmState.Status = "Going to mob area: " .. q.Mob
+    FarmState.LastMobMove = os.clock()
+    return MovementService:GoTo(q.MobPos, 18, "Mob Area")
 end
 
 
@@ -2118,19 +2354,26 @@ local function FarmStep()
         ApplyNoClip(true)
     end
 
+    local q = nil
+
     if FarmState.AutoQuest then
-        local q = GetLevelFarmQuest()
-        if q then
-            FarmState.TargetName = q.Mob
-            FarmState.QuestMob = q.Mob
-            if not QuestVisible() then
-                StartLevelQuest(q)
-                FarmState.CurrentTarget = nil
-                FarmState.FarmAnchor = nil
-                return
-            end
-        else
-            FarmState.QuestStatus = "No quest for level/sea"
+        q = GetLevelFarmQuest()
+
+        if not q then
+            FarmState.QuestStatus = "No quest for current Sea/level"
+            FarmState.Status = "Quest data unavailable"
+            return
+        end
+
+        FarmState.TargetName = q.Mob
+        FarmState.QuestMob = q.Mob
+        FarmState.MobPosition = q.MobPos
+
+        if not QuestVisible() or not QuestMatches(q) then
+            StartLevelQuest(q)
+            FarmState.CurrentTarget = nil
+            FarmState.FarmAnchor = nil
+            return
         end
     end
 
@@ -2142,7 +2385,18 @@ local function FarmStep()
     local target = FarmState.CurrentTarget
 
     if not target then
-        FarmState.Status = "Searching for target"
+        if q and q.MobPos then
+            local distanceToMobArea = (root.Position - q.MobPos.Position).Magnitude
+
+            if distanceToMobArea > math.max(FarmState.ScanRadius * 0.55, 180) then
+                MoveToQuestMobArea(q)
+                task.wait(0.2)
+                FarmState.CurrentTarget = GetNearestTarget()
+                return
+            end
+        end
+
+        FarmState.Status = "Waiting for " .. tostring(FarmState.TargetName)
         return
     end
 
@@ -2156,6 +2410,7 @@ local function FarmStep()
         AttackTarget(target)
     end
 end
+
 
 --==================================================
 -- FARM UI
@@ -2358,7 +2613,8 @@ FarmConnect(RunService.Heartbeat, function()
 
     FarmStatusValue.Text = FarmState.Status
     if QuestStatusValue then QuestStatusValue.Text = FarmState.QuestStatus or "Idle" end
-    if QuestMobValue then QuestMobValue.Text = FarmState.QuestMob or "Auto by level" end
+    if QuestMobValue then QuestMobValue.Text = FarmState.QuestMob or "Auto by level"
+        QuestSeaValue.Text = FarmState.CurrentSea and ("Sea " .. tostring(FarmState.CurrentSea)) or "Auto" end
 
     if FarmState.CurrentTarget
         and FarmState.CurrentTarget.Parent
@@ -2404,6 +2660,8 @@ Section(
 
 local QuestStatusCard, QuestStatusValue = Card(QuestPage, "QUEST STATUS", "Idle")
 local QuestMobCard, QuestMobValue = Card(QuestPage, "QUEST MOB", "Auto by level")
+local QuestSeaCard, QuestSeaValue = Card(QuestPage, "SEA", "Auto")
+local QuestRouteCard, QuestRouteValue = Card(QuestPage, "ROUTE", "Quest NPC -> Mob Spawn")
 
 
 Toggle(
