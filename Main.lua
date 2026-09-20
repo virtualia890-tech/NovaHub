@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.6.1
+    Version: 2.6.2
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.6.1",
+    Version = "2.6.2",
 
     Width = 920,
     Height = 590,
@@ -162,8 +162,86 @@ local Themes = {
 local Theme = Themes[Config.Theme]
 
 --==================================================
+-- MOVEMENT SERVICE 2.6.2
+--==================================================
+
+local MovementService = {
+    Active = false,
+    Target = nil
+}
+
+function MovementService:GetRoot()
+    local character = LocalPlayer.Character
+    return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+function MovementService:Stop()
+    self.Active = false
+    self.Target = nil
+end
+
+function MovementService:GoTo(targetCFrame, yOffset)
+    local root = self:GetRoot()
+    if not root or not targetCFrame then return false end
+
+    self.Active = true
+    self.Target = targetCFrame
+    local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
+
+    -- Controlled test movement. One service owns all teleports in this build.
+    pcall(function()
+        root.CFrame = destination
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+
+    self.Active = false
+    return true
+end
+
+--==================================================
 -- TELEPORT DIRECTORY
 --==================================================
+
+local IslandCFrames = {
+    ["First Sea"] = {
+        ["Bandit Island"] = CFrame.new(1060, 16, 1547),
+        ["Jungle"] = CFrame.new(-1602, 37, 153),
+        ["Pirate Village"] = CFrame.new(-1140, 5, 3828),
+        ["Desert"] = CFrame.new(896, 6, 4390),
+        ["Frozen Village"] = CFrame.new(1389, 87, -1298),
+        ["Marine Fortress"] = CFrame.new(-5035, 29, 4325),
+        ["Skylands"] = CFrame.new(-4842, 718, -2623),
+        ["Prison"] = CFrame.new(5308, 2, 475),
+        ["Colosseum"] = CFrame.new(-1577, 7, -2984),
+        ["Magma Village"] = CFrame.new(-5316, 12, 8517),
+        ["Underwater City"] = CFrame.new(61122, 18, 1569),
+        ["Fountain City"] = CFrame.new(5259, 39, 4050)
+    },
+    ["Second Sea"] = {
+        ["Kingdom of Rose"] = CFrame.new(-425, 73, 1836),
+        ["Green Zone"] = CFrame.new(-2448, 73, -3210),
+        ["Graveyard"] = CFrame.new(-5494, 49, -794),
+        ["Snow Mountain"] = CFrame.new(561, 402, -5297),
+        ["Hot and Cold"] = CFrame.new(-6026, 15, -5071),
+        ["Cursed Ship"] = CFrame.new(923, 126, 32852),
+        ["Ice Castle"] = CFrame.new(5400, 28, -6236),
+        ["Forgotten Island"] = CFrame.new(-3052, 237, -10148)
+    },
+    ["Third Sea"] = {
+        ["Port Town"] = CFrame.new(-290, 44, 5454),
+        ["Hydra Island"] = CFrame.new(5228, 604, 345),
+        ["Great Tree"] = CFrame.new(2276, 25, -6493),
+        ["Floating Turtle"] = CFrame.new(-13274, 332, -7621),
+        ["Haunted Castle"] = CFrame.new(-9515, 142, 5537),
+        ["Sea of Treats"] = CFrame.new(-2062, 38, -12032),
+        ["Tiki Outpost"] = CFrame.new(-16224, 9, 439),
+        ["Chocolate Land"] = CFrame.new(100, 25, -12300),
+        ["Cake Land"] = CFrame.new(-1900, 20, -11600),
+        ["Peanut Island"] = CFrame.new(-2100, 50, -10100),
+        ["Ice Cream Island"] = CFrame.new(-900, 65, -10900)
+    }
+}
 
 local TeleportLocations = {
     ["First Sea"] = {
@@ -1110,7 +1188,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.6.1 Level Farm + Quest Test",
+    Text = "2.6.2 Movement + Teleport",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1345,10 +1423,22 @@ local function BuildTeleport()
                 AddHoverEffect(button)
 
                 Connect(button.MouseButton1Click, function()
-                    Notify(
-                        "Teleport",
-                        locationName .. " selecionado."
-                    )
+                    local destination = IslandCFrames[seaName]
+                        and IslandCFrames[seaName][locationName]
+
+                    if not destination then
+                        Notify("Teleport", "Destino ainda não configurado: " .. locationName)
+                        return
+                    end
+
+                    FarmState.Enabled = false
+                    MovementService:Stop()
+
+                    if MovementService:GoTo(destination, 4) then
+                        Notify("Teleport", "Teleportado para " .. locationName .. ".")
+                    else
+                        Notify("Teleport", "Não foi possível teleportar.")
+                    end
                 end)
             end
         end
@@ -1587,7 +1677,7 @@ local function StartLevelQuest(q)
     end
 
     FarmState.QuestStatus = "Going to quest"
-    root.CFrame = q.Pos * CFrame.new(0, 3, 0)
+    MovementService:GoTo(q.Pos, 3)
     task.wait(0.35)
 
     local ok = pcall(function()
@@ -1788,9 +1878,7 @@ local function MoveToTarget(target)
 
     -- Stay above the mob instead of orbiting around it.
     local desired = targetRoot.CFrame * CFrame.new(0, FarmState.Distance, 0)
-    pcall(function()
-        root.CFrame = CFrame.new(desired.Position, targetRoot.Position)
-    end)
+    MovementService:GoTo(CFrame.new(desired.Position, targetRoot.Position), 0)
 
     -- Bring Mob is anchored to the farm location, never to the player.
     if FarmState.BringMobs and FarmState.FarmAnchor then
@@ -1833,6 +1921,7 @@ local function StopFarm()
     FarmState.CurrentTarget = nil
     FarmState.FarmAnchor = nil
     FarmState.Status = "Stopped"
+    MovementService:Stop()
 
     ApplyNoClip(false)
 end
