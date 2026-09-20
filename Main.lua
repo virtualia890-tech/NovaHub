@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.0
+    Version: 2.7.1
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.0",
+    Version = "2.7.1",
 
     Width = 920,
     Height = 590,
@@ -1376,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.7.0 Cake Prince + Bone",
+    Text = "2.7.1 Quest Flow + Special Farms",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1768,6 +1768,11 @@ local FarmState = {
     CakeStatus = "Checking...",
     BoneCount = "Checking...",
     BoneRotation = 1,
+    QuestOwnedByHub = false,
+    QuestSeenVisible = false,
+    QuestRoutePending = false,
+    QuestStartLevel = 0,
+    QuestStartedAt = 0,
 
     Enabled = false,
     AutoMastery = false,
@@ -2105,7 +2110,17 @@ local function StartLevelQuest(q)
         remote:InvokeServer("StartQuest", q.Quest, q.Level)
     end)
 
-    FarmState.QuestStatus = ok and ("Quest: " .. q.Mob) or "Quest request failed"
+    if ok then
+        FarmState.QuestOwnedByHub = true
+        FarmState.QuestSeenVisible = QuestVisible()
+        FarmState.QuestRoutePending = true
+        FarmState.QuestStartLevel = PlayerService:GetLevel()
+        FarmState.QuestStartedAt = os.clock()
+        FarmState.QuestStatus = "Quest accepted - going to mobs"
+    else
+        FarmState.QuestStatus = "Quest request failed"
+    end
+
     task.wait(0.35)
     return ok
 end
@@ -2358,7 +2373,7 @@ end
 
 
 --==================================================
--- SPECIAL FARMS 2.7.0
+-- SPECIAL FARMS 2.7.1
 -- Built directly on the tested 2.6.5 base.
 -- These modes DO NOT use quest farming.
 --==================================================
@@ -2631,11 +2646,54 @@ local function FarmStep()
         FarmState.QuestMob = q.Mob
         FarmState.MobPosition = q.MobPos
 
-        if not QuestVisible() or not QuestMatches(q) then
-            StartLevelQuest(q)
+        local visible = QuestVisible()
+        if visible then
+            FarmState.QuestSeenVisible = true
+        end
+
+        -- If the hub has just accepted a quest, NEVER go back to the NPC
+        -- on the next heartbeat. The next phase is always the mob area.
+        if FarmState.QuestOwnedByHub and FarmState.QuestRoutePending then
             FarmState.CurrentTarget = nil
             FarmState.FarmAnchor = nil
+            FarmState.QuestRoutePending = false
+            FarmState.QuestStatus = "Quest accepted - travelling to " .. q.Mob
+            MoveToQuestMobArea(q)
             return
+        end
+
+        -- Once the quest UI has actually been observed, its disappearance
+        -- means the quest finished/was removed and a new one can be requested.
+        if FarmState.QuestOwnedByHub and FarmState.QuestSeenVisible and not visible then
+            FarmState.QuestOwnedByHub = false
+            FarmState.QuestSeenVisible = false
+            FarmState.CurrentTarget = nil
+            FarmState.FarmAnchor = nil
+        end
+
+        -- Level changes may select a different quest bracket.
+        if FarmState.QuestOwnedByHub and FarmState.QuestStartLevel > 0 then
+            local nowLevel = PlayerService:GetLevel()
+            local ownedQuest = GetLevelFarmQuest()
+            if ownedQuest and ownedQuest.Mob ~= FarmState.QuestMob then
+                FarmState.QuestOwnedByHub = false
+                FarmState.QuestSeenVisible = false
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+            end
+        end
+
+        if not FarmState.QuestOwnedByHub then
+            if visible and QuestMatches(q) then
+                FarmState.QuestOwnedByHub = true
+                FarmState.QuestSeenVisible = true
+                FarmState.QuestStatus = "Correct quest active"
+            else
+                StartLevelQuest(q)
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+                return
+            end
         end
     end
 
@@ -2696,29 +2754,10 @@ local FarmDistanceCard, FarmDistanceValue = Card(
     tostring(FarmState.Distance)
 )
 
-Toggle(
+Section(
     FarmPage,
-    "Auto Farm",
-    "Find the nearest valid NPC and continuously process the farm loop.",
-    false,
-    function(enabled)
-        if enabled and (FarmState.AutoCakePrince or FarmState.AutoBone) then
-            StopSpecialFarms()
-        end
-
-        FarmState.Enabled = enabled
-        FarmState.StartedAt = enabled and os.clock() or 0
-
-        if enabled then
-            FarmState.Status = "Starting"
-            FarmState.CurrentTarget = nil
-            EquipFirstTool()
-            Notify("Auto Farm", "Farm engine iniciado.")
-        else
-            StopFarm()
-            Notify("Auto Farm", "Farm engine parado.")
-        end
-    end
+    "2.7.1 SPECIAL FARMS",
+    "NOVO: Cake Prince + Bones ficam no topo desta página"
 )
 
 Section(
@@ -2772,6 +2811,32 @@ Toggle(
             FarmState.SpecialStatus = "Idle"
             FarmState.SpecialTarget = "None"
             Notify("Auto Farm Bone", "Disabled")
+        end
+    end
+)
+
+
+Toggle(
+    FarmPage,
+    "Auto Farm",
+    "Find the nearest valid NPC and continuously process the farm loop.",
+    false,
+    function(enabled)
+        if enabled and (FarmState.AutoCakePrince or FarmState.AutoBone) then
+            StopSpecialFarms()
+        end
+
+        FarmState.Enabled = enabled
+        FarmState.StartedAt = enabled and os.clock() or 0
+
+        if enabled then
+            FarmState.Status = "Starting"
+            FarmState.CurrentTarget = nil
+            EquipFirstTool()
+            Notify("Auto Farm", "Farm engine iniciado.")
+        else
+            StopFarm()
+            Notify("Auto Farm", "Farm engine parado.")
         end
     end
 )
@@ -2915,7 +2980,7 @@ ActionButton(
 )
 
 --==================================================
--- SPECIAL FARM LOOP 2.7.0
+-- SPECIAL FARM LOOP 2.7.1
 --==================================================
 
 FarmConnect(RunService.Heartbeat, function()
