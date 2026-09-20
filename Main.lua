@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.6.4
+    Version: 2.6.5
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.6.4",
+    Version = "2.6.5",
 
     Width = 920,
     Height = 590,
@@ -162,7 +162,7 @@ local Themes = {
 local Theme = Themes[Config.Theme]
 
 --==================================================
--- MOVEMENT SERVICE 2.6.4
+-- MOVEMENT SERVICE 2.6.5
 -- Slower travel + safe cruise height
 --==================================================
 
@@ -170,7 +170,7 @@ local MovementService = {
     Active = false,
     Target = nil,
     Tween = nil,
-    Speed = 200,
+    Speed = 250,
     SafeHeight = 120,
     Status = "Idle",
     DestinationName = "None"
@@ -250,10 +250,19 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
         return false
     end
 
-    self:Stop()
+    -- Do not restart the same route every farm tick. Repeated GoTo calls
+    -- were cancelling the cruise while the character was still rising.
+    local requestedName = destinationName or "Target"
+    if self.Active then
+        if self.DestinationName == requestedName then
+            return false
+        end
+        self:Stop()
+    end
+
     self.Active = true
     self.Target = targetCFrame
-    self.DestinationName = destinationName or "Target"
+    self.DestinationName = requestedName
     self.Status = "Moving"
 
     if humanoid then
@@ -316,7 +325,7 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
 end
 
 --==================================================
--- WATER WALK 2.6.4
+-- WATER WALK 2.6.5
 --==================================================
 
 local WaterWalkService = {
@@ -1367,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.6.4 Sea Quest + Farm Test",
+    Text = "2.6.5 Farm Route Fix",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1684,17 +1693,6 @@ for index, seaName in ipairs({"Sea 1", "Sea 2", "Sea 3"}) do
         BuildTeleport()
     end)
 end
-
-Toggle(
-    TeleportPage,
-    "Water Walk",
-    "Cria uma superfície invisível sob o personagem quando estiver sobre a água.",
-    false,
-    function(enabled)
-        WaterWalkService:SetEnabled(enabled)
-        Notify("Water Walk", enabled and "Enabled" or "Disabled")
-    end
-)
 
 ActionButton(
     TeleportPage,
@@ -2080,8 +2078,20 @@ local function StartLevelQuest(q)
     end
 
     FarmState.QuestStatus = "Going to quest NPC"
-    MovementService:GoTo(q.QuestPos, 3, "Quest NPC")
-    task.wait(0.3)
+    local arrived = MovementService:GoTo(q.QuestPos, 3, "Quest NPC")
+
+    if not arrived then
+        FarmState.QuestStatus = "Could not reach quest NPC"
+        return false
+    end
+
+    task.wait(0.35)
+
+    local rootAfterMove = GetCharacterRoot()
+    if not rootAfterMove or (rootAfterMove.Position - q.QuestPos.Position).Magnitude > 90 then
+        FarmState.QuestStatus = "Quest NPC too far"
+        return false
+    end
 
     local ok = pcall(function()
         remote:InvokeServer("StartQuest", q.Quest, q.Level)
@@ -2094,6 +2104,7 @@ end
 
 local function MoveToQuestMobArea(q)
     if not q or not q.MobPos then return false end
+    if MovementService.Active then return false end
 
     FarmState.Status = "Going to mob area: " .. q.Mob
     FarmState.LastMobMove = os.clock()
@@ -2354,6 +2365,13 @@ local function FarmStep()
         ApplyNoClip(true)
     end
 
+    -- A route must finish before the farm state machine advances.
+    -- This prevents Quest NPC travel from being restarted every update.
+    if MovementService.Active then
+        FarmState.Status = MovementService.Status .. ": " .. tostring(MovementService.DestinationName)
+        return
+    end
+
     local q = nil
 
     if FarmState.AutoQuest then
@@ -2396,7 +2414,7 @@ local function FarmStep()
             end
         end
 
-        FarmState.Status = "Waiting for " .. tostring(FarmState.TargetName)
+        FarmState.Status = "At mob area - waiting for " .. tostring(FarmState.TargetName)
         return
     end
 
@@ -2726,6 +2744,24 @@ Toggle(
 --==================================================
 
 local MiscPage = PageService:Create("Misc")
+
+Section(
+    MiscPage,
+    "Movement Utilities",
+    "Utilidades gerais de movimentação"
+)
+
+Toggle(
+    MiscPage,
+    "Water Walk",
+    "Permite andar sobre a água sem afundar.",
+    false,
+    function(enabled)
+        WaterWalkService:SetEnabled(enabled)
+        Notify("Water Walk", enabled and "Enabled" or "Disabled")
+    end
+)
+
 
 Section(
     MiscPage,
