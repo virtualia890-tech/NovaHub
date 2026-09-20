@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.1
+    Version: 2.7.2
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.1",
+    Version = "2.7.2",
 
     Width = 920,
     Height = 590,
@@ -3788,3 +3788,318 @@ print(
     .. Config.Version
     .. " loaded."
 )
+
+-- ============================================================
+-- FLOQUITAVE 2.7.2 - ISOLATED FAST ATTACK + BOSS FARM MODULE
+-- Base: confirmed-working 2.7.1 checkpoint
+-- This block intentionally avoids modifying Level Farm,
+-- Cake Prince, Bone, Teleport, Quest and Movement internals.
+-- ============================================================
+
+do
+    local Players_272 = game:GetService("Players")
+    local ReplicatedStorage_272 = game:GetService("ReplicatedStorage")
+    local RunService_272 = game:GetService("RunService")
+    local VirtualUser_272 = game:GetService("VirtualUser")
+
+    local LP_272 = Players_272.LocalPlayer
+
+    local Boss272 = {
+        Enabled = false,
+        FastAttack = false,
+        Selected = "",
+        Distance = 8,
+        Status = "Idle",
+        Connection = nil,
+        LastAttack = 0,
+        AttackDelay = 0.12,
+    }
+
+    local BossLists272 = {
+        [2753915549] = {
+            "The Gorilla King","Bobby","Yeti","Mob Leader","Vice Admiral",
+            "Warden","Chief Warden","Swan","Magma Admiral","Fishman Lord",
+            "Wysper","Thunder God","Cyborg","Saber Expert"
+        },
+        [4442272183] = {
+            "Diamond","Jeremy","Fajita","Don Swan","Smoke Admiral",
+            "Cursed Captain","Darkbeard","Order","Awakened Ice Admiral","Tide Keeper"
+        },
+        [7449423635] = {
+            "Stone","Island Empress","Kilo Admiral","Captain Elephant",
+            "Beautiful Pirate","rip_indra True Form","Longma","Soul Reaper",
+            "Cake Queen","Cake Prince","Dough King"
+        }
+    }
+
+    local function root272()
+        local c = LP_272.Character
+        return c and c:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function alive272(model)
+        if not model or not model:IsA("Model") then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local rp = model:FindFirstChild("HumanoidRootPart")
+        return hum and rp and hum.Health > 0
+    end
+
+    local function findBoss272(name)
+        if not name or name == "" then return nil end
+        local enemies = workspace:FindFirstChild("Enemies")
+        if enemies then
+            for _,v in ipairs(enemies:GetChildren()) do
+                if v.Name == name and alive272(v) then
+                    return v
+                end
+            end
+        end
+        return nil
+    end
+
+    local function storedBoss272(name)
+        if not name or name == "" then return nil end
+        local direct = ReplicatedStorage_272:FindFirstChild(name)
+        if direct and direct:IsA("Model") then return direct end
+        for _,v in ipairs(ReplicatedStorage_272:GetChildren()) do
+            if v:IsA("Model") and v.Name == name then return v end
+        end
+        return nil
+    end
+
+    local function equip272()
+        local c = LP_272.Character
+        local backpack = LP_272:FindFirstChildOfClass("Backpack")
+        if not c or not backpack then return nil end
+
+        -- Prefer the same selected weapon/fighting-style logic already used
+        -- by the checkpoint when those values exist.
+        local wanted = nil
+        pcall(function()
+            if FarmState and FarmState.SelectedWeapon and FarmState.SelectedWeapon ~= "" then
+                wanted = FarmState.SelectedWeapon
+            end
+        end)
+
+        if wanted then
+            local tool = backpack:FindFirstChild(wanted) or c:FindFirstChild(wanted)
+            if tool and tool:IsA("Tool") then
+                if tool.Parent == backpack then
+                    local hum = c:FindFirstChildOfClass("Humanoid")
+                    if hum then hum:EquipTool(tool) end
+                end
+                return tool
+            end
+        end
+
+        local equipped = c:FindFirstChildOfClass("Tool")
+        if equipped then return equipped end
+        local first = backpack:FindFirstChildOfClass("Tool")
+        if first then
+            local hum = c:FindFirstChildOfClass("Humanoid")
+            if hum then hum:EquipTool(first) end
+        end
+        return first
+    end
+
+    local function fallbackAttack272()
+        local tool = equip272()
+        if tool then
+            pcall(function() tool:Activate() end)
+        end
+        pcall(function()
+            VirtualUser_272:CaptureController()
+            VirtualUser_272:Button1Down(Vector2.new(851,158), workspace.CurrentCamera.CFrame)
+            VirtualUser_272:Button1Up(Vector2.new(851,158), workspace.CurrentCamera.CFrame)
+        end)
+    end
+
+    local function fastAttack272(target)
+        if os.clock() - Boss272.LastAttack < Boss272.AttackDelay then return end
+        Boss272.LastAttack = os.clock()
+
+        local usedRemote = false
+        pcall(function()
+            local modules = ReplicatedStorage_272:FindFirstChild("Modules")
+            local net = modules and modules:FindFirstChild("Net")
+            if not net then return end
+
+            local registerAttack = net:FindFirstChild("RE/RegisterAttack")
+            local registerHit = net:FindFirstChild("RE/RegisterHit")
+            local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+
+            if registerAttack and registerAttack:IsA("RemoteEvent") then
+                registerAttack:FireServer(0)
+                usedRemote = true
+            end
+            if registerHit and registerHit:IsA("RemoteEvent") and targetRoot then
+                registerHit:FireServer(targetRoot, {})
+                usedRemote = true
+            end
+        end)
+
+        -- Safe fallback keeps the checkpoint's normal Tool activation path.
+        if not usedRemote then
+            fallbackAttack272()
+        else
+            equip272()
+        end
+    end
+
+    local function moveBoss272(target)
+        local myRoot = root272()
+        local tr = target and target:FindFirstChild("HumanoidRootPart")
+        if not myRoot or not tr then return end
+
+        -- Boss module uses a simple short-range CFrame follow so it does not
+        -- rewrite the checkpoint's MovementService.
+        local desired = tr.CFrame * CFrame.new(0, Boss272.Distance, 0)
+        pcall(function()
+            myRoot.CFrame = desired
+            myRoot.Velocity = Vector3.zero
+        end)
+    end
+
+    local function step272()
+        if not Boss272.Enabled then return end
+        if Boss272.Selected == "" then
+            Boss272.Status = "Select a boss"
+            return
+        end
+
+        local boss = findBoss272(Boss272.Selected)
+        if boss then
+            Boss272.Status = "Fighting: " .. Boss272.Selected
+            moveBoss272(boss)
+            if Boss272.FastAttack then
+                fastAttack272(boss)
+            else
+                fallbackAttack272()
+            end
+            return
+        end
+
+        if storedBoss272(Boss272.Selected) then
+            Boss272.Status = Boss272.Selected .. " waiting/spawning"
+        else
+            Boss272.Status = Boss272.Selected .. " not found"
+        end
+    end
+
+    -- Export a tiny API so the existing UI or later versions can control
+    -- this isolated module without touching its internals.
+    getgenv().Floquitave272 = {
+        State = Boss272,
+        Bosses = BossLists272[game.PlaceId] or {},
+        SetBoss = function(name)
+            Boss272.Selected = tostring(name or "")
+        end,
+        SetBossFarm = function(v)
+            Boss272.Enabled = v == true
+            if not Boss272.Enabled then Boss272.Status = "Idle" end
+        end,
+        SetFastAttack = function(v)
+            Boss272.FastAttack = v == true
+        end,
+        GetStatus = function()
+            return Boss272.Status
+        end,
+    }
+
+    Boss272.Connection = RunService_272.Heartbeat:Connect(function()
+        local ok = pcall(step272)
+        if not ok then
+            Boss272.Status = "Boss module error"
+        end
+    end)
+
+    -- Minimal standalone GUI, deliberately separate from the checkpoint UI.
+    -- This makes failures easy to isolate and avoids editing working tabs.
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "Floquitave272BossModule"
+    gui.ResetOnSpawn = false
+    gui.Parent = LP_272:WaitForChild("PlayerGui")
+
+    local frame = Instance.new("Frame")
+    frame.Name = "BossPanel"
+    frame.Size = UDim2.fromOffset(290, 190)
+    frame.Position = UDim2.new(1, -310, 0.5, -95)
+    frame.BackgroundColor3 = Color3.fromRGB(24,24,28)
+    frame.BorderSizePixel = 0
+    frame.Parent = gui
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -16, 0, 28)
+    title.Position = UDim2.fromOffset(8, 6)
+    title.BackgroundTransparency = 1
+    title.Text = "2.7.2 - FAST ATTACK + BOSS"
+    title.TextColor3 = Color3.new(1,1,1)
+    title.TextSize = 14
+    title.Font = Enum.Font.GothamBold
+    title.Parent = frame
+
+    local bossBox = Instance.new("TextBox")
+    bossBox.Size = UDim2.new(1, -16, 0, 32)
+    bossBox.Position = UDim2.fromOffset(8, 40)
+    bossBox.BackgroundColor3 = Color3.fromRGB(36,36,42)
+    bossBox.TextColor3 = Color3.new(1,1,1)
+    bossBox.PlaceholderText = "Boss name (ex: Cake Queen)"
+    bossBox.Text = ""
+    bossBox.ClearTextOnFocus = false
+    bossBox.Parent = frame
+    bossBox.FocusLost:Connect(function()
+        Boss272.Selected = bossBox.Text
+    end)
+
+    local bossBtn = Instance.new("TextButton")
+    bossBtn.Size = UDim2.new(0.5, -12, 0, 32)
+    bossBtn.Position = UDim2.fromOffset(8, 80)
+    bossBtn.BackgroundColor3 = Color3.fromRGB(44,44,52)
+    bossBtn.TextColor3 = Color3.new(1,1,1)
+    bossBtn.Text = "Boss Farm: OFF"
+    bossBtn.Parent = frame
+    bossBtn.MouseButton1Click:Connect(function()
+        Boss272.Enabled = not Boss272.Enabled
+        bossBtn.Text = "Boss Farm: " .. (Boss272.Enabled and "ON" or "OFF")
+    end)
+
+    local fastBtn = Instance.new("TextButton")
+    fastBtn.Size = UDim2.new(0.5, -12, 0, 32)
+    fastBtn.Position = UDim2.new(0.5, 4, 0, 80)
+    fastBtn.BackgroundColor3 = Color3.fromRGB(44,44,52)
+    fastBtn.TextColor3 = Color3.new(1,1,1)
+    fastBtn.Text = "Fast Attack: OFF"
+    fastBtn.Parent = frame
+    fastBtn.MouseButton1Click:Connect(function()
+        Boss272.FastAttack = not Boss272.FastAttack
+        fastBtn.Text = "Fast Attack: " .. (Boss272.FastAttack and "ON" or "OFF")
+    end)
+
+    local hint = Instance.new("TextLabel")
+    hint.Size = UDim2.new(1, -16, 0, 26)
+    hint.Position = UDim2.fromOffset(8, 118)
+    hint.BackgroundTransparency = 1
+    hint.TextColor3 = Color3.fromRGB(190,190,200)
+    hint.TextSize = 11
+    hint.TextXAlignment = Enum.TextXAlignment.Left
+    hint.Text = "Bosses for this sea: " .. tostring(#(BossLists272[game.PlaceId] or {}))
+    hint.Parent = frame
+
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1, -16, 0, 32)
+    status.Position = UDim2.fromOffset(8, 148)
+    status.BackgroundTransparency = 1
+    status.TextColor3 = Color3.fromRGB(220,220,225)
+    status.TextSize = 11
+    status.TextWrapped = true
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.Text = "Status: Idle"
+    status.Parent = frame
+
+    task.spawn(function()
+        while gui.Parent do
+            status.Text = "Status: " .. Boss272.Status
+            task.wait(0.25)
+        end
+    end)
+end
