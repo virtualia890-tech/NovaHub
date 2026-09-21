@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2f
+    Version: 2.7.2g
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2f",
+    Version = "2.7.2g",
 
     Width = 920,
     Height = 590,
@@ -3115,8 +3115,8 @@ local CombatPage = PageService:Create("Combat")
 
 Section(
     CombatPage,
-    "Boss Farm",
-    "Select a boss, refresh server status, and enable Auto Farm Boss."
+    "Auto Boss",
+    "Refresh the server, select a live boss, then enable Auto Farm Boss."
 )
 
 --==================================================
@@ -3780,102 +3780,101 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2f - BOSS FARM DROPDOWN
--- Encapsulated to avoid the 200-local-register limit.
+-- FLOQUITAVE 2.7.2g - LIVE BOSS SELECTOR
+-- Only LIVE bosses are shown in the dropdown.
+-- Encapsulated to protect the main chunk register limit.
 -- ============================================================
 task.spawn(function()
     local S = {
         Enabled = false,
         Selected = nil,
         Alive = {},
-        Status = "Select a boss",
-        Open = false
+        Open = false,
+        Status = "Press Refresh Boss"
     }
 
-    local ALL = {
-        {"SEA 1", {
-            "The Gorilla King","Bobby","Yeti","Mob Leader","Vice Admiral","Warden",
-            "Chief Warden","Swan","Magma Admiral","Fishman Lord","Wysper",
-            "Thunder God","Cyborg","Saber Expert"
-        }},
-        {"SEA 2", {
-            "Diamond","Jeremy","Fajita","Don Swan","Smoke Admiral","Cursed Captain",
-            "Darkbeard","Order","Awakened Ice Admiral","Tide Keeper"
-        }},
-        {"SEA 3", {
-            "Stone","Island Empress","Kilo Admiral","Captain Elephant","Beautiful Pirate",
-            "rip_indra True Form","Longma","Soul Reaper","Cake Queen","Cake Prince","Dough King"
-        }}
+    local KNOWN = {
+        "The Gorilla King","Bobby","Yeti","Mob Leader","Vice Admiral","Warden",
+        "Chief Warden","Swan","Magma Admiral","Fishman Lord","Wysper","Thunder God",
+        "Cyborg","Saber Expert",
+        "Diamond","Jeremy","Fajita","Don Swan","Smoke Admiral","Cursed Captain",
+        "Darkbeard","Order","Awakened Ice Admiral","Tide Keeper",
+        "Stone","Island Empress","Kilo Admiral","Captain Elephant","Beautiful Pirate",
+        "rip_indra True Form","Longma","Soul Reaper","Cake Queen","Cake Prince","Dough King"
     }
 
-    local function valid(m)
-        if not m or not m:IsA("Model") then return false end
-        local h = m:FindFirstChildOfClass("Humanoid")
-        return h and h.Health > 0 and m:FindFirstChild("HumanoidRootPart") ~= nil
+    local function valid(model)
+        if not model or not model:IsA("Model") then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local root = model:FindFirstChild("HumanoidRootPart")
+        return hum ~= nil and root ~= nil and hum.Health > 0
     end
 
-    local function find(name)
-        local enemies = workspace:FindFirstChild("Enemies")
-        if not enemies then return nil end
-        for _,m in ipairs(enemies:GetChildren()) do
-            if m.Name == name and valid(m) then return m end
+    local function enemies()
+        return workspace:FindFirstChild("Enemies")
+    end
+
+    local function findBoss(name)
+        local folder = enemies()
+        if not folder then return nil end
+        for _,model in ipairs(folder:GetChildren()) do
+            if model.Name == name and valid(model) then
+                return model
+            end
         end
         return nil
     end
 
-    local function refresh()
+    local function scan()
         table.clear(S.Alive)
-        for _,sea in ipairs(ALL) do
-            for _,name in ipairs(sea[2]) do
-                if find(name) then S.Alive[name] = true end
+        local folder = enemies()
+        if not folder then return end
+
+        local knownSet = {}
+        for _,name in ipairs(KNOWN) do knownSet[name] = true end
+
+        for _,model in ipairs(folder:GetChildren()) do
+            if knownSet[model.Name] and valid(model) then
+                table.insert(S.Alive, model.Name)
             end
         end
+
+        table.sort(S.Alive)
     end
 
-    local _, statusValue = Card(CombatPage, "BOSS STATUS", "Select a boss")
+    local _, statusValue = Card(CombatPage, "BOSS STATUS", "Press Refresh Boss")
 
-    -- Compact dropdown row.
-    local holder = Create("Frame", {
-        Size = UDim2.new(1,0,0,64),
+    -- Select Boss row, visually similar to the reference.
+    local selectorHolder = Create("Frame", {
+        Size = UDim2.new(1,0,0,48),
         BackgroundColor3 = Theme.Card,
         BorderSizePixel = 0
     }, CombatPage)
-    Corner(holder, 11)
-    Stroke(holder, Theme.Secondary, 0.3)
+    Corner(selectorHolder, 10)
+    Stroke(selectorHolder, Theme.Secondary, 0.3)
 
-    Create("TextLabel", {
-        Position = UDim2.new(0,14,0,9),
-        Size = UDim2.new(1,-28,0,18),
-        BackgroundTransparency = 1,
-        Text = "Select Boss",
+    local selector = Create("TextButton", {
+        Position = UDim2.new(0,10,0,7),
+        Size = UDim2.new(1,-20,0,34),
+        BackgroundColor3 = Theme.Secondary,
+        Text = "Select Boss:   ▼",
         Font = Enum.Font.GothamBold,
         TextSize = 12,
         TextColor3 = Theme.Text,
-        TextXAlignment = Enum.TextXAlignment.Left
-    }, holder)
-
-    local selectButton = Create("TextButton", {
-        Position = UDim2.new(0,14,0,30),
-        Size = UDim2.new(1,-28,0,25),
-        BackgroundColor3 = Theme.Secondary,
-        Text = "None  ▼",
-        Font = Enum.Font.Gotham,
-        TextSize = 11,
-        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left,
         AutoButtonColor = false
-    }, holder)
-    Corner(selectButton, 7)
+    }, selectorHolder)
+    Corner(selector, 7)
 
-    -- Dropdown is parented to CombatPage and expands only while open.
+    -- Expandable list directly below the selector.
     local menu = Create("Frame", {
         Size = UDim2.new(1,0,0,0),
-        AutomaticSize = Enum.AutomaticSize.None,
         BackgroundColor3 = Theme.Card,
         BorderSizePixel = 0,
-        Visible = false,
-        ClipsDescendants = true
+        ClipsDescendants = true,
+        Visible = false
     }, CombatPage)
-    Corner(menu, 11)
+    Corner(menu, 10)
     Stroke(menu, Theme.Secondary, 0.3)
 
     local scroll = Create("ScrollingFrame", {
@@ -3888,116 +3887,140 @@ task.spawn(function()
     }, menu)
 
     local layout = Create("UIListLayout", {
-        Padding = UDim.new(0,4),
+        Padding = UDim.new(0,3),
         SortOrder = Enum.SortOrder.LayoutOrder
     }, scroll)
 
-    local optionButtons = {}
-
-    local function updateOptions()
-        for name,btn in pairs(optionButtons) do
-            local alive = S.Alive[name]
-            local selected = S.Selected == name
-            btn.Text = (alive and "● " or "○ ") .. name .. (selected and "   ✓" or "")
-            btn.TextColor3 = alive and Theme.Text or Theme.SubText
-        end
-        selectButton.Text = (S.Selected or "None") .. "  ▼"
-        statusValue.Text = S.Status
+    local function closeMenu()
+        S.Open = false
+        menu.Visible = false
+        menu.Size = UDim2.new(1,0,0,0)
+        selector.Text = "Select Boss: " .. (S.Selected or "") .. "   ▼"
     end
 
-    local order = 0
-    for _,sea in ipairs(ALL) do
-        order += 1
-        local seaLabel = Create("TextLabel", {
-            Size = UDim2.new(1,0,0,24),
-            BackgroundTransparency = 1,
-            Text = sea[1],
-            Font = Enum.Font.GothamBold,
-            TextSize = 11,
-            TextColor3 = Theme.Accent,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            LayoutOrder = order
-        }, scroll)
+    local function rebuildMenu()
+        for _,child in ipairs(scroll:GetChildren()) do
+            if child:IsA("TextButton") or child:IsA("TextLabel") then
+                child:Destroy()
+            end
+        end
 
-        for _,name in ipairs(sea[2]) do
-            order += 1
-            local btn = Create("TextButton", {
-                Size = UDim2.new(1,-4,0,28),
-                BackgroundColor3 = Theme.Secondary,
-                Text = "○ "..name,
+        if #S.Alive == 0 then
+            Create("TextLabel", {
+                Size = UDim2.new(1,-4,0,30),
+                BackgroundTransparency = 1,
+                Text = "No live boss found",
                 Font = Enum.Font.Gotham,
                 TextSize = 11,
                 TextColor3 = Theme.SubText,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                AutoButtonColor = false,
-                LayoutOrder = order
+                TextXAlignment = Enum.TextXAlignment.Left
             }, scroll)
-            Corner(btn, 6)
-            optionButtons[name] = btn
+        else
+            for _,bossName in ipairs(S.Alive) do
+                local name = bossName
+                local option = Create("TextButton", {
+                    Size = UDim2.new(1,-4,0,30),
+                    BackgroundColor3 = Theme.Card,
+                    BorderSizePixel = 0,
+                    Text = name,
+                    Font = Enum.Font.GothamBold,
+                    TextSize = 11,
+                    TextColor3 = Theme.Text,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    AutoButtonColor = false
+                }, scroll)
+                Corner(option, 5)
+                AddHoverEffect(option)
 
-            Connect(btn.MouseButton1Click, function()
-                S.Selected = name
-                S.Status = S.Alive[name] and ("Selected / ALIVE: "..name) or ("Selected / not alive: "..name)
-                S.Open = false
-                menu.Visible = false
-                menu.Size = UDim2.new(1,0,0,0)
-                updateOptions()
-            end)
+                Connect(option.MouseButton1Click, function()
+                    S.Selected = name
+                    S.Status = "Selected: " .. name
+                    statusValue.Text = S.Status
+                    closeMenu()
+                end)
+            end
         end
+
+        task.defer(function()
+            scroll.CanvasSize = UDim2.new(0,0,0,layout.AbsoluteContentSize.Y + 8)
+        end)
     end
 
     Connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
         scroll.CanvasSize = UDim2.new(0,0,0,layout.AbsoluteContentSize.Y + 8)
     end)
 
-    Connect(selectButton.MouseButton1Click, function()
-        S.Open = not S.Open
-        menu.Visible = S.Open
-        menu.Size = S.Open and UDim2.new(1,0,0,260) or UDim2.new(1,0,0,0)
-        selectButton.Text = (S.Selected or "None") .. (S.Open and "  ▲" or "  ▼")
+    Connect(selector.MouseButton1Click, function()
+        if S.Open then
+            closeMenu()
+            return
+        end
+
+        rebuildMenu()
+        S.Open = true
+        menu.Visible = true
+        local wantedHeight = math.clamp((#S.Alive * 33) + 16, 50, 210)
+        menu.Size = UDim2.new(1,0,0,wantedHeight)
+        selector.Text = "Select Boss: " .. (S.Selected or "") .. "   ▲"
     end)
 
     ActionButton(CombatPage, "Refresh Boss", function()
-        refresh()
-        local count = 0
-        for _ in pairs(S.Alive) do count += 1 end
-        S.Status = count > 0 and ("Refresh: "..count.." boss(es) alive") or "Refresh: no live boss found"
-        updateOptions()
+        scan()
+
+        -- If selected boss died/disappeared, clear the selection.
+        if S.Selected and not findBoss(S.Selected) then
+            S.Selected = nil
+            S.Enabled = false
+        end
+
+        rebuildMenu()
+        S.Status = #S.Alive > 0
+            and ("Found " .. tostring(#S.Alive) .. " live boss(es)")
+            or "No live boss found"
+
+        statusValue.Text = S.Status
+        selector.Text = "Select Boss: " .. (S.Selected or "") .. "   ▼"
         Notify("Boss Farm", S.Status)
     end)
 
     Toggle(
         CombatPage,
         "Auto Farm Boss",
-        "Farm the selected boss",
+        "Automatically attack the selected live boss",
         false,
         function(enabled)
             S.Enabled = enabled
+
             if enabled then
-                S.Status = S.Selected and ("Auto Farm ON: "..S.Selected) or "Select a boss first"
+                if S.Selected then
+                    S.Status = "Auto Farm ON: " .. S.Selected
+                else
+                    S.Status = "Select a live boss first"
+                end
             else
                 S.Status = "Auto Farm Boss OFF"
                 MovementService:Stop()
             end
-            updateOptions()
+
+            statusValue.Text = S.Status
         end
     )
 
-    refresh()
-    updateOptions()
+    -- Initial scan so opening Select Boss already has useful data.
+    scan()
+    rebuildMenu()
 
     RunService.Heartbeat:Connect(function()
         if not S.Enabled or not S.Selected then return end
 
-        local target = find(S.Selected)
+        local target = findBoss(S.Selected)
         if not target then
-            S.Status = "Waiting for: "..S.Selected
+            S.Status = "Boss gone: press Refresh Boss"
             statusValue.Text = S.Status
             return
         end
 
-        S.Alive[S.Selected] = true
-        S.Status = "Farming: "..S.Selected
+        S.Status = "Farming: " .. S.Selected
         statusValue.Text = S.Status
         MoveToTarget(target)
         AttackTarget(target)
