@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3l
+    Version: 2.7.3m
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3l",
+    Version = "2.7.3m",
 
     Width = 920,
     Height = 590,
@@ -174,7 +174,9 @@ local MovementService = {
     SafeHeight = 120,
     Status = "Idle",
     DestinationName = "None",
-    TeleportPriority = false
+    TeleportPriority = false,
+    DebugStage = "Idle",
+    DebugCancelSource = "None"
 }
 
 function MovementService:GetRoot()
@@ -187,7 +189,11 @@ function MovementService:GetHumanoid()
     return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-function MovementService:Stop()
+function MovementService:Stop(reason)
+    if self.Active then
+        self.DebugCancelSource = tostring(reason or "Unknown Stop()")
+        warn("[Floquitave TP DEBUG] STOP while active | stage=" .. tostring(self.DebugStage) .. " | reason=" .. self.DebugCancelSource)
+    end
     self.Active = false
     self.Target = nil
     self.Status = "Stopped"
@@ -303,17 +309,23 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     local cruise = CFrame.new(destination.Position.X, cruiseY, destination.Position.Z)
 
     self.Status = "Rising"
+    self.DebugStage = "Rising"
+    warn("[Floquitave TP DEBUG] Rising | Y=" .. tostring(math.floor(cruiseY)) .. " | destination=" .. tostring(requestedName))
     local ok = self:TweenRoot(root, rise)
 
     if ok then
         root = self:GetRoot()
         self.Status = "Cruising"
+        self.DebugStage = "Cruising"
+        warn("[Floquitave TP DEBUG] Cruising | destination=" .. tostring(requestedName))
         ok = self:TweenRoot(root, cruise)
     end
 
     if ok then
         root = self:GetRoot()
         self.Status = "Descending"
+        self.DebugStage = "Descending"
+        warn("[Floquitave TP DEBUG] Descending | destination=" .. tostring(requestedName))
         ok = self:TweenRoot(root, destination)
     end
 
@@ -328,6 +340,8 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
 
     local remaining = (root.Position - destination.Position).Magnitude
     self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
+    self.DebugStage = self.Status
+    warn("[Floquitave TP DEBUG] Finished | status=" .. tostring(self.Status) .. " | remaining=" .. tostring(math.floor(remaining)))
     return remaining <= 60
 end
 
@@ -1613,7 +1627,7 @@ local function TeleportToIsland(seaName, locationName)
     SetTeleportStatus("Teleportando...", locationName)
 
     task.spawn(function()
-        MovementService:Stop()
+        MovementService:Stop("Teleport Directory new route")
         MovementService.DestinationName = locationName
         MovementService.TeleportPriority = true
 
@@ -3820,7 +3834,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3l - TELEPORT PRIORITY FIX
+-- FLOQUITAVE 2.7.3m - TELEPORT DIAGNOSTIC
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
