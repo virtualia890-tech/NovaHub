@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2o
+    Version: 2.7.3a
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2o",
+    Version = "2.7.3a",
 
     Width = 920,
     Height = 590,
@@ -2678,54 +2678,47 @@ local function FarmStep()
         FarmState.MobPosition = q.MobPos
 
         local visible = QuestVisible()
-        if visible then
-            FarmState.QuestSeenVisible = true
-        end
 
-        -- If the hub has just accepted a quest, NEVER go back to the NPC
-        -- on the next heartbeat. The next phase is always the mob area.
-        if FarmState.QuestOwnedByHub and FarmState.QuestRoutePending then
+        -- Reference-style quest cycle:
+        -- no visible quest -> go back to NPC and request it again.
+        if not visible then
+            FarmState.QuestOwnedByHub = false
+            FarmState.QuestSeenVisible = false
+            FarmState.QuestRoutePending = false
+            FarmState.QuestStartedAt = 0
             FarmState.CurrentTarget = nil
             FarmState.FarmAnchor = nil
-            FarmState.QuestRoutePending = false
-            FarmState.QuestStatus = "Quest accepted - travelling to " .. q.Mob
-            MoveToQuestMobArea(q)
+
+            -- Small grace period after StartQuest because the UI may take a moment
+            -- to become visible on some executors/servers.
+            if FarmState.QuestStartedAt > 0 and os.clock() - FarmState.QuestStartedAt < 1.25 then
+                FarmState.QuestStatus = "Waiting quest UI"
+                MoveToQuestMobArea(q)
+                return
+            end
+
+            FarmState.QuestStatus = "No active quest - returning to NPC"
+            StartLevelQuest(q)
             return
         end
 
-        -- Once the quest UI has actually been observed, its disappearance
-        -- means the quest finished/was removed and a new one can be requested.
-        if FarmState.QuestOwnedByHub and FarmState.QuestSeenVisible and not visible then
-            FarmState.QuestOwnedByHub = false
-            FarmState.QuestSeenVisible = false
+        -- A visible but wrong quest is replaced immediately.
+        if not QuestMatches(q) then
+            FarmState.QuestStatus = "Wrong quest - replacing"
+            AbandonCurrentQuest()
+            FarmState.QuestStartedAt = 0
             FarmState.CurrentTarget = nil
             FarmState.FarmAnchor = nil
+            task.wait(0.20)
+            return
         end
 
-        -- Level changes may select a different quest bracket.
-        if FarmState.QuestOwnedByHub and FarmState.QuestStartLevel > 0 then
-            local nowLevel = PlayerService:GetLevel()
-            local ownedQuest = GetLevelFarmQuest()
-            if ownedQuest and ownedQuest.Mob ~= FarmState.QuestMob then
-                FarmState.QuestOwnedByHub = false
-                FarmState.QuestSeenVisible = false
-                FarmState.CurrentTarget = nil
-                FarmState.FarmAnchor = nil
-            end
-        end
-
-        if not FarmState.QuestOwnedByHub then
-            if visible and QuestMatches(q) then
-                FarmState.QuestOwnedByHub = true
-                FarmState.QuestSeenVisible = true
-                FarmState.QuestStatus = "Correct quest active"
-            else
-                StartLevelQuest(q)
-                FarmState.CurrentTarget = nil
-                FarmState.FarmAnchor = nil
-                return
-            end
-        end
+        -- The correct quest is active. From this point the mob farm runs until
+        -- the quest UI disappears; next FarmStep then returns to the NPC.
+        FarmState.QuestOwnedByHub = true
+        FarmState.QuestSeenVisible = true
+        FarmState.QuestRoutePending = false
+        FarmState.QuestStatus = "Quest active: " .. q.Mob
     end
 
     if not FarmState.CurrentTarget or not IsValidFarmTarget(FarmState.CurrentTarget) then
@@ -3826,7 +3819,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2o - BOSS TRAVEL + QUEST CYCLE FIX
+-- FLOQUITAVE 2.7.3a - BOSS ROUTE + QUEST LOOP REBUILD
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -3841,13 +3834,48 @@ task.spawn(function()
     }
 
     local KNOWN = {
-        "The Gorilla King","Bobby","Yeti","Mob Leader","Vice Admiral","Warden",
+        "The Gorilla King","Bobby","The Saw","Yeti","Mob Leader","Vice Admiral","Warden",
         "Chief Warden","Swan","Magma Admiral","Fishman Lord","Wysper","Thunder God",
-        "Cyborg","Saber Expert",
+        "Cyborg","Saber Expert","Ice Admiral","Greybeard",
         "Diamond","Jeremy","Fajita","Don Swan","Smoke Admiral","Cursed Captain",
         "Darkbeard","Order","Awakened Ice Admiral","Tide Keeper",
         "Stone","Island Empress","Kilo Admiral","Captain Elephant","Beautiful Pirate",
         "rip_indra True Form","Longma","Soul Reaper","Cake Queen","Cake Prince","Dough King"
+    }
+
+    -- Spawn routes taken from the supplied boss reference.
+    -- Unknown/custom bosses still fall back to their ReplicatedStorage model.
+    local BOSS_ROUTE = {
+        ["The Gorilla King"] = CFrame.new(-1088.75977,8.13463783,-488.559906),
+        ["Bobby"] = CFrame.new(-1087.37610,46.94941,4040.14624),
+        ["The Saw"] = CFrame.new(-784.89716,72.42738,1603.58228),
+        ["Yeti"] = CFrame.new(1218.79565,138.01184,-1488.02625),
+        ["Mob Leader"] = CFrame.new(-2844.73071,7.41805,5356.67236),
+        ["Vice Admiral"] = CFrame.new(-5006.54541,88.03208,4353.16211),
+        ["Saber Expert"] = CFrame.new(-1458.89502,29.88703,-50.63356),
+        ["Warden"] = CFrame.new(5278.04932,2.15167,944.10193),
+        ["Chief Warden"] = CFrame.new(5206.92578,0.99775,814.97675),
+        ["Swan"] = CFrame.new(5325.09619,7.03907,719.57068),
+        ["Magma Admiral"] = CFrame.new(-5765.89697,82.92065,8718.30469),
+        ["Fishman Lord"] = CFrame.new(61260.15234,30.95088,1193.43298),
+        ["Wysper"] = CFrame.new(-7866.13330,5576.43115,-546.74817),
+        ["Thunder God"] = CFrame.new(-7994.98438,5761.02539,-2088.64795),
+        ["Cyborg"] = CFrame.new(6094.02490,73.77005,3825.73486),
+        ["Ice Admiral"] = CFrame.new(1266.08948,26.17579,-1399.57678),
+        ["Greybeard"] = CFrame.new(-5081.34521,85.22164,4257.35889),
+
+        ["Cursed Captain"] = CFrame.new(916.92859,181.09277,33422),
+        ["Darkbeard"] = CFrame.new(3677.08203,62.75194,-3144.83325),
+        ["Order"] = CFrame.new(-6217.20215,28.04765,-5053.13574),
+
+        ["Stone"] = CFrame.new(-1027.65125,92.40417,6578.85303),
+        ["Island Empress"] = CFrame.new(5543.86328,668.97400,199.03418),
+        ["Kilo Admiral"] = CFrame.new(2764.22339,432.46155,-7144.45801),
+        ["Captain Elephant"] = CFrame.new(-13376.75781,433.28690,-8071.39258),
+        ["Longma"] = CFrame.new(-10171.70510,406.98200,-9552.31738),
+        ["Soul Reaper"] = CFrame.new(-9524.78906,315.80429,6655.71924),
+        ["rip_indra True Form"] = CFrame.new(-5415.39209,505.74133,-2814.01660),
+        ["Cake Prince"] = CFrame.new(-2103,70,-12165)
     }
 
     local function valid(model)
@@ -4086,12 +4114,6 @@ task.spawn(function()
     ActionButton(CombatPage, "Refresh Boss", function()
         scan()
 
-        -- If selected boss died/disappeared, clear the selection.
-        if S.Selected and not findBoss(S.Selected) then
-            S.Selected = nil
-            S.Enabled = false
-        end
-
         rebuildMenu()
         if #S.Alive > 0 then
             S.Status = "Found " .. tostring(#S.Alive) .. " boss(es)"
@@ -4189,17 +4211,45 @@ task.spawn(function()
         return nil
     end
 
+    local function bossDirectTravel(destination, label)
+        local me = GetCharacterRoot()
+        if not me or not destination then return false end
+
+        MovementService:Stop()
+        MovementService.Active = true
+        MovementService.DestinationName = label or "Boss"
+        MovementService.Status = "Boss travel"
+        MovementService:SetCollision(false)
+
+        local target = destination * CFrame.new(0, 12, 0)
+        local ok = MovementService:TweenRoot(me, target)
+
+        MovementService:SetCollision(true)
+        MovementService.Active = false
+        MovementService.Status = ok and "Arrived" or "Failed"
+        return ok
+    end
+
     local function travelToStoredBoss(name)
-        local model, root = storedBoss(name)
-        if not model or not root then return false end
+        local destination = nil
 
-        S.Status = "Travelling to spawn: " .. name
+        for base,cf in pairs(BOSS_ROUTE) do
+            if bossBaseMatches(base, name) then
+                destination = cf
+                break
+            end
+        end
+
+        if not destination then
+            local model, root = storedBoss(name)
+            destination = root and root.CFrame or nil
+        end
+
+        if not destination then return false end
+
+        S.Status = "Travelling to boss: " .. name
         statusValue.Text = S.Status
-
-        -- Reference-style behavior: ReplicatedStorage supplies the boss/spawn
-        -- position until the live Workspace.Enemies copy is streamed/created.
-        MovementService:GoTo(root.CFrame, 12, "Boss Spawn:" .. name)
-        return true
+        return bossDirectTravel(destination, "Boss Spawn:" .. name)
     end
 
     local function bossAttack(target)
@@ -4231,16 +4281,11 @@ task.spawn(function()
         local distance = (me.Position - tr.Position).Magnitude
 
         if distance > 42 then
-            -- Unique destination name avoids the stale "Farm Target" route state
-            -- used by normal farming.
-            MovementService:GoTo(
-                CFrame.new(
-                    (tr.CFrame * CFrame.new(0, FarmState.Distance, 0)).Position,
-                    tr.Position
-                ),
-                0,
-                "Boss Target:" .. target.Name
+            local destination = CFrame.new(
+                (tr.CFrame * CFrame.new(0, FarmState.Distance, 0)).Position,
+                tr.Position
             )
+            bossDirectTravel(destination, "Boss Target:" .. target.Name)
             return true
         end
 
