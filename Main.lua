@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2j
+    Version: 2.7.2k
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2j",
+    Version = "2.7.2k",
 
     Width = 920,
     Height = 590,
@@ -3780,16 +3780,17 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2j - BOSS ATTACK + AUTO KILL
+-- FLOQUITAVE 2.7.2k - BOSS FARM SEQUENTIAL FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
 task.spawn(function()
     local S = {
         Enabled = false,
-        AutoKill = false,
+        KillAll = false,
         Selected = nil,
         Alive = {},
+        KillAllIndex = 1,
         Open = false,
         Status = "Press Refresh Boss"
     }
@@ -3896,24 +3897,38 @@ task.spawn(function()
         )
     end
 
+    local routeTarget = nil
+    local routeAt = 0
+
     local function goAndAttackBoss(target)
         if not target or not liveModel(target) then return end
 
-        -- Reuse the stable movement/attack routines first.
-        MoveToTarget(target)
-
-        -- Keep weapon/style equipped and continuously attack once close.
         local myRoot = GetCharacterRoot and GetCharacterRoot()
         local targetRoot = bossRoot(target)
-        if myRoot and targetRoot then
-            local distance = (myRoot.Position - targetRoot.Position).Magnitude
-            if distance <= 70 then
-                EquipFirstTool()
-                AttackTarget(target)
+        if not myRoot or not targetRoot then return end
+
+        local distance = (myRoot.Position - targetRoot.Position).Magnitude
+
+        -- Do not restart the movement tween every Heartbeat.
+        -- Refresh the route only when target changes, the previous route ended,
+        -- or enough time elapsed for a moving boss.
+        if distance > 55 then
+            if routeTarget ~= target or not MovementService:IsMoving() or (os.clock() - routeAt) > 1.25 then
+                routeTarget = target
+                routeAt = os.clock()
+                MoveToTarget(target)
             end
-        else
-            AttackTarget(target)
+            return
         end
+
+        -- Close enough: stop the travel tween and use the same stable combat
+        -- routine already used by the normal farms.
+        if MovementService:IsMoving() then
+            MovementService:Stop()
+        end
+        routeTarget = target
+        EquipFirstTool()
+        AttackTarget(target)
     end
 
     local function addUnique(list, seen, name)
@@ -4111,6 +4126,7 @@ task.spawn(function()
             S.Enabled = enabled
 
             if enabled then
+                S.KillAll = false
                 if S.Selected then
                     S.Status = "Auto Farm ON: " .. S.Selected
                 else
@@ -4127,15 +4143,23 @@ task.spawn(function()
 
     Toggle(
         CombatPage,
-        "Auto Kill Boss",
-        "Continuously attack the selected boss when you are near it",
+        "Kill All Boss",
+        "Kill every detected boss one by one",
         false,
         function(enabled)
-            S.AutoKill = enabled
+            S.KillAll = enabled
+            S.KillAllIndex = 1
+            routeTarget = nil
+
             if enabled then
-                S.Status = S.Selected and ("Auto Kill ON: " .. S.Selected) or "Select a boss first"
+                -- Kill All has priority over the single selected-boss mode.
+                S.Enabled = false
+                S.Status = "Kill All Boss ON"
+                scan()
+                rebuildMenu()
             else
-                S.Status = "Auto Kill Boss OFF"
+                S.Status = "Kill All Boss OFF"
+                MovementService:Stop()
             end
             statusValue.Text = S.Status
         end
@@ -4145,30 +4169,67 @@ task.spawn(function()
     scan()
     rebuildMenu()
 
+    local lastAllRefresh = 0
+
     RunService.Heartbeat:Connect(function()
-        if not S.Selected or (not S.Enabled and not S.AutoKill) then return end
+        -- MODE 1: Kill All Boss.
+        -- Re-scan periodically, choose one active boss, kill it completely,
+        -- then advance to the next one.
+        if S.KillAll then
+            if os.clock() - lastAllRefresh > 1.5 then
+                lastAllRefresh = os.clock()
+                scan()
+            end
+
+            local active = {}
+            for _,bossName in ipairs(S.Alive) do
+                if findBoss(bossName) then
+                    table.insert(active, bossName)
+                end
+            end
+
+            if #active == 0 then
+                S.Status = "Kill All: waiting for live bosses"
+                statusValue.Text = S.Status
+                return
+            end
+
+            if S.KillAllIndex > #active then
+                S.KillAllIndex = 1
+            end
+
+            local bossName = active[S.KillAllIndex]
+            local target = findBoss(bossName)
+
+            if not target then
+                S.KillAllIndex += 1
+                routeTarget = nil
+                return
+            end
+
+            S.Status = "Kill All: " .. bossName .. " (" .. tostring(S.KillAllIndex) .. "/" .. tostring(#active) .. ")"
+            statusValue.Text = S.Status
+            goAndAttackBoss(target)
+
+            -- Once this boss dies/disappears, next Heartbeat's active list
+            -- naturally removes it. Keep the same index so the next entry
+            -- slides into its place; wrap only when needed.
+            return
+        end
+
+        -- MODE 2: normal selected boss farm.
+        if not S.Enabled or not S.Selected then return end
 
         local target = findBoss(S.Selected)
         if not target then
             S.Status = "Waiting for active boss: " .. S.Selected
             statusValue.Text = S.Status
+            routeTarget = nil
             return
         end
 
-        if S.Enabled then
-            S.Status = "Going to / farming: " .. S.Selected
-            statusValue.Text = S.Status
-            goAndAttackBoss(target)
-        elseif S.AutoKill then
-            S.Status = "Auto killing: " .. S.Selected
-            statusValue.Text = S.Status
-
-            local myRoot = GetCharacterRoot and GetCharacterRoot()
-            local targetRoot = bossRoot(target)
-            if myRoot and targetRoot and (myRoot.Position - targetRoot.Position).Magnitude <= 70 then
-                EquipFirstTool()
-                AttackTarget(target)
-            end
-        end
+        S.Status = "Farming: " .. S.Selected
+        statusValue.Text = S.Status
+        goAndAttackBoss(target)
     end)
 end)
