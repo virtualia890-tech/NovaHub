@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3n
+    Version: 2.7.3o
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3n",
+    Version = "2.7.3o",
 
     Width = 920,
     Height = 590,
@@ -170,13 +170,10 @@ local MovementService = {
     Active = false,
     Target = nil,
     Tween = nil,
-    Speed = 150,
+    Speed = 200,
     SafeHeight = 120,
     Status = "Idle",
-    DestinationName = "None",
-    TeleportPriority = false,
-    DebugStage = "Idle",
-    DebugCancelSource = "None"
+    DestinationName = "None"
 }
 
 function MovementService:GetRoot()
@@ -189,11 +186,7 @@ function MovementService:GetHumanoid()
     return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-function MovementService:Stop(reason)
-    if self.Active then
-        self.DebugCancelSource = tostring(reason or "Unknown Stop()")
-        warn("[Floquitave TP DEBUG] STOP while active | stage=" .. tostring(self.DebugStage) .. " | reason=" .. self.DebugCancelSource)
-    end
+function MovementService:Stop()
     self.Active = false
     self.Target = nil
     self.Status = "Stopped"
@@ -249,13 +242,6 @@ function MovementService:TweenRoot(root, destination)
 end
 
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
-    local requestedName = destinationName or "Target"
-
-    -- Teleport Directory owns the route until it finishes.
-    if self.TeleportPriority and requestedName ~= self.DestinationName then
-        return false
-    end
-
     local root = self:GetRoot()
     local humanoid = self:GetHumanoid()
 
@@ -266,6 +252,7 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
 
     -- Do not restart the same route every farm tick. Repeated GoTo calls
     -- were cancelling the cruise while the character was still rising.
+    local requestedName = destinationName or "Target"
     if self.Active then
         if self.DestinationName == requestedName then
             return false
@@ -309,23 +296,17 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     local cruise = CFrame.new(destination.Position.X, cruiseY, destination.Position.Z)
 
     self.Status = "Rising"
-    self.DebugStage = "Rising"
-    warn("[Floquitave TP DEBUG] Rising | Y=" .. tostring(math.floor(cruiseY)) .. " | destination=" .. tostring(requestedName))
     local ok = self:TweenRoot(root, rise)
 
     if ok then
         root = self:GetRoot()
         self.Status = "Cruising"
-        self.DebugStage = "Cruising"
-        warn("[Floquitave TP DEBUG] Cruising | destination=" .. tostring(requestedName))
         ok = self:TweenRoot(root, cruise)
     end
 
     if ok then
         root = self:GetRoot()
         self.Status = "Descending"
-        self.DebugStage = "Descending"
-        warn("[Floquitave TP DEBUG] Descending | destination=" .. tostring(requestedName))
         ok = self:TweenRoot(root, destination)
     end
 
@@ -340,8 +321,6 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
 
     local remaining = (root.Position - destination.Position).Magnitude
     self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
-    self.DebugStage = self.Status
-    warn("[Floquitave TP DEBUG] Finished | status=" .. tostring(self.Status) .. " | remaining=" .. tostring(math.floor(remaining)))
     return remaining <= 60
 end
 
@@ -1397,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.7.1 Quest Flow + Special Farms",
+    Text = "2.6.5 Farm Route Fix",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -1627,13 +1606,7 @@ local function TeleportToIsland(seaName, locationName)
     SetTeleportStatus("Teleportando...", locationName)
 
     task.spawn(function()
-        MovementService:Stop("Teleport Directory new route")
-        MovementService.DestinationName = locationName
-        MovementService.TeleportPriority = true
-
         local ok = MovementService:GoTo(destination, 5, locationName)
-
-        MovementService.TeleportPriority = false
         SetTeleportStatus(MovementService.Status, locationName)
 
         if ok then
@@ -3834,7 +3807,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3n - SPEED ONLY
+-- FLOQUITAVE 2.7.3o - TELEPORT FULL ROLLBACK
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
