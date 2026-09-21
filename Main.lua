@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2i
+    Version: 2.7.2j
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2i",
+    Version = "2.7.2j",
 
     Width = 920,
     Height = 590,
@@ -3780,13 +3780,14 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2i - REFERENCE BOSS DETECTION
+-- FLOQUITAVE 2.7.2j - BOSS ATTACK + AUTO KILL
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
 task.spawn(function()
     local S = {
         Enabled = false,
+        AutoKill = false,
         Selected = nil,
         Alive = {},
         Open = false,
@@ -3840,14 +3841,13 @@ task.spawn(function()
         if not model or not model:IsA("Model") then return false end
         local hum = model:FindFirstChildOfClass("Humanoid")
         local root = model:FindFirstChild("HumanoidRootPart")
+            or model:FindFirstChild("UpperTorso")
+            or model:FindFirstChild("Torso")
         return hum ~= nil and root ~= nil and hum.Health > 0
     end
 
     local function bossBaseMatches(modelName, selectedName)
         if modelName == selectedName then return true end
-
-        -- Allows a UI selection such as "Stone [Lv. 1550] [Boss]"
-        -- to still match a model named "Stone", and vice versa.
         for _,base in ipairs(KNOWN) do
             local a = string.sub(modelName, 1, #base) == base
             local b = string.sub(selectedName, 1, #base) == base
@@ -3857,20 +3857,63 @@ task.spawn(function()
     end
 
     local function findBoss(name)
-        local folder = enemies()
-        if not folder or not name then return nil end
+        if not name then return nil end
 
-        for _,model in ipairs(folder:GetDescendants()) do
-            if model:IsA("Model") and bossBaseMatches(model.Name, name) and liveModel(model) then
+        -- First use the normal enemy container.
+        local folder = enemies()
+        if folder then
+            for _,model in ipairs(folder:GetDescendants()) do
+                if model:IsA("Model") and bossBaseMatches(model.Name, name) and liveModel(model) then
+                    return model
+                end
+            end
+            for _,model in ipairs(folder:GetChildren()) do
+                if model:IsA("Model") and bossBaseMatches(model.Name, name) and liveModel(model) then
+                    return model
+                end
+            end
+        end
+
+        -- Fallback for custom Sea 1 / Sea 2 / Sea 3 structures:
+        -- find the live replicated boss anywhere in Workspace.
+        for _,model in ipairs(workspace:GetDescendants()) do
+            if model:IsA("Model")
+                and bossBaseMatches(model.Name, name)
+                and liveModel(model)
+                and not Players:GetPlayerFromCharacter(model) then
                 return model
             end
         end
-        for _,model in ipairs(folder:GetChildren()) do
-            if model:IsA("Model") and bossBaseMatches(model.Name, name) and liveModel(model) then
-                return model
-            end
-        end
+
         return nil
+    end
+
+    local function bossRoot(model)
+        return model and (
+            model:FindFirstChild("HumanoidRootPart")
+            or model:FindFirstChild("UpperTorso")
+            or model:FindFirstChild("Torso")
+        )
+    end
+
+    local function goAndAttackBoss(target)
+        if not target or not liveModel(target) then return end
+
+        -- Reuse the stable movement/attack routines first.
+        MoveToTarget(target)
+
+        -- Keep weapon/style equipped and continuously attack once close.
+        local myRoot = GetCharacterRoot and GetCharacterRoot()
+        local targetRoot = bossRoot(target)
+        if myRoot and targetRoot then
+            local distance = (myRoot.Position - targetRoot.Position).Magnitude
+            if distance <= 70 then
+                EquipFirstTool()
+                AttackTarget(target)
+            end
+        else
+            AttackTarget(target)
+        end
     end
 
     local function addUnique(list, seen, name)
@@ -4041,8 +4084,8 @@ task.spawn(function()
 
         -- If selected boss died/disappeared, clear the selection.
         if S.Selected and not findBoss(S.Selected) then
-            S.Selected = nil
-            S.Enabled = false
+            -- Keep the selection. The boss may be represented in ReplicatedStorage
+            -- and become active in Workspace shortly after.
         end
 
         rebuildMenu()
@@ -4082,12 +4125,28 @@ task.spawn(function()
         end
     )
 
+    Toggle(
+        CombatPage,
+        "Auto Kill Boss",
+        "Continuously attack the selected boss when you are near it",
+        false,
+        function(enabled)
+            S.AutoKill = enabled
+            if enabled then
+                S.Status = S.Selected and ("Auto Kill ON: " .. S.Selected) or "Select a boss first"
+            else
+                S.Status = "Auto Kill Boss OFF"
+            end
+            statusValue.Text = S.Status
+        end
+    )
+
     -- Initial scan so opening Select Boss already has useful data.
     scan()
     rebuildMenu()
 
     RunService.Heartbeat:Connect(function()
-        if not S.Enabled or not S.Selected then return end
+        if not S.Selected or (not S.Enabled and not S.AutoKill) then return end
 
         local target = findBoss(S.Selected)
         if not target then
@@ -4096,9 +4155,20 @@ task.spawn(function()
             return
         end
 
-        S.Status = "Farming: " .. S.Selected
-        statusValue.Text = S.Status
-        MoveToTarget(target)
-        AttackTarget(target)
+        if S.Enabled then
+            S.Status = "Going to / farming: " .. S.Selected
+            statusValue.Text = S.Status
+            goAndAttackBoss(target)
+        elseif S.AutoKill then
+            S.Status = "Auto killing: " .. S.Selected
+            statusValue.Text = S.Status
+
+            local myRoot = GetCharacterRoot and GetCharacterRoot()
+            local targetRoot = bossRoot(target)
+            if myRoot and targetRoot and (myRoot.Position - targetRoot.Position).Magnitude <= 70 then
+                EquipFirstTool()
+                AttackTarget(target)
+            end
+        end
     end)
 end)
