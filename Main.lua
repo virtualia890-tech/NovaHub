@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3k
+    Version: 2.7.3l
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3k",
+    Version = "2.7.3l",
 
     Width = 920,
     Height = 590,
@@ -173,7 +173,8 @@ local MovementService = {
     Speed = 200,
     SafeHeight = 120,
     Status = "Idle",
-    DestinationName = "None"
+    DestinationName = "None",
+    TeleportPriority = false
 }
 
 function MovementService:GetRoot()
@@ -242,50 +243,92 @@ function MovementService:TweenRoot(root, destination)
 end
 
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
+    local requestedName = destinationName or "Target"
+
+    -- Teleport Directory owns the route until it finishes.
+    if self.TeleportPriority and requestedName ~= self.DestinationName then
+        return false
+    end
+
     local root = self:GetRoot()
+    local humanoid = self:GetHumanoid()
+
     if not root or not targetCFrame then
         self.Status = "Character unavailable"
         return false
     end
 
-    self:Stop()
+    -- Do not restart the same route every farm tick. Repeated GoTo calls
+    -- were cancelling the cruise while the character was still rising.
+    if self.Active then
+        if self.DestinationName == requestedName then
+            return false
+        end
+        self:Stop()
+    end
+
     self.Active = true
-    self.DestinationName = destinationName or "Target"
+    self.Target = targetCFrame
+    self.DestinationName = requestedName
+    self.Status = "Moving"
 
-    local finalTarget = targetCFrame * CFrame.new(0, yOffset or 0)
+    if humanoid then
+        humanoid.Sit = false
+    end
 
-    -- Calculate ONE cruise height before movement starts.
-    -- Nothing recalculates Y while travelling, preventing vertical flick.
-    local fixedY = math.max(root.Position.Y, finalTarget.Position.Y) + 70
+    pcall(function()
+        root.Anchored = false
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+
+    local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
+    local totalDistance = (root.Position - destination.Position).Magnitude
+
+    -- Farm/short movement stays direct. Long island travel rises first,
+    -- crosses at a fixed safe altitude, then descends at the destination.
+    if totalDistance <= 260 then
+        self:SetCollision(false)
+        local ok = self:TweenRoot(root, destination)
+        self:SetCollision(true)
+        self.Active = false
+        self.Status = ok and "Arrived" or "Failed"
+        return ok
+    end
 
     self:SetCollision(false)
 
-    -- Phase 1: one vertical rise. X/Z stay exactly where they started.
+    local cruiseY = math.max(root.Position.Y, destination.Position.Y) + self.SafeHeight
+    local rise = CFrame.new(root.Position.X, cruiseY, root.Position.Z)
+    local cruise = CFrame.new(destination.Position.X, cruiseY, destination.Position.Z)
+
     self.Status = "Rising"
-    local rise = CFrame.new(root.Position.X, fixedY, root.Position.Z)
-    if not self:TweenRoot(root, rise) or not self.Active then
-        self:SetCollision(true)
-        self.Active = false
-        return false
+    local ok = self:TweenRoot(root, rise)
+
+    if ok then
+        root = self:GetRoot()
+        self.Status = "Cruising"
+        ok = self:TweenRoot(root, cruise)
     end
 
-    -- Phase 2: one horizontal tween. Y is mathematically fixed for the whole trip.
-    self.Status = "Travelling"
-    local cruise = CFrame.new(finalTarget.Position.X, fixedY, finalTarget.Position.Z)
-    if not self:TweenRoot(root, cruise) or not self.Active then
-        self:SetCollision(true)
-        self.Active = false
-        return false
+    if ok then
+        root = self:GetRoot()
+        self.Status = "Descending"
+        ok = self:TweenRoot(root, destination)
     end
-
-    -- Phase 3: one final descent only after horizontal travel finishes.
-    self.Status = "Descending"
-    local ok = self:TweenRoot(root, finalTarget)
 
     self:SetCollision(true)
     self.Active = false
-    self.Status = ok and "Arrived" or "Stopped"
-    return ok
+
+    root = self:GetRoot()
+    if not ok or not root then
+        self.Status = "Failed"
+        return false
+    end
+
+    local remaining = (root.Position - destination.Position).Magnitude
+    self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
+    return remaining <= 60
 end
 
 --==================================================
@@ -1570,7 +1613,13 @@ local function TeleportToIsland(seaName, locationName)
     SetTeleportStatus("Teleportando...", locationName)
 
     task.spawn(function()
+        MovementService:Stop()
+        MovementService.DestinationName = locationName
+        MovementService.TeleportPriority = true
+
         local ok = MovementService:GoTo(destination, 5, locationName)
+
+        MovementService.TeleportPriority = false
         SetTeleportStatus(MovementService.Status, locationName)
 
         if ok then
@@ -3771,7 +3820,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3k - FIXED HEIGHT TELEPORT HOTFIX
+-- FLOQUITAVE 2.7.3l - TELEPORT PRIORITY FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -4166,6 +4215,7 @@ task.spawn(function()
     local function bossDirectTravel(destination, label)
         local me = GetCharacterRoot()
         if not me or not destination then return false end
+        if MovementService.TeleportPriority then return false end
 
         MovementService:Stop()
         MovementService.Active = true
@@ -4241,7 +4291,8 @@ task.spawn(function()
             return true
         end
 
-        MovementService:Stop()
+        if MovementService.TeleportPriority then return false end
+            MovementService:Stop()
 
         -- Keep the player in the same above-target position used by the working
         -- normal/special farms, but without normal-farm target validation.
