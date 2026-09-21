@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3j
+    Version: 2.7.3k
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3j",
+    Version = "2.7.3k",
 
     Width = 920,
     Height = 590,
@@ -263,7 +263,7 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     -- Phase 1: one vertical rise. X/Z stay exactly where they started.
     self.Status = "Rising"
     local rise = CFrame.new(root.Position.X, fixedY, root.Position.Z)
-    if not self:TweenTo(root, rise) or not self.Active then
+    if not self:TweenRoot(root, rise) or not self.Active then
         self:SetCollision(true)
         self.Active = false
         return false
@@ -272,7 +272,7 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     -- Phase 2: one horizontal tween. Y is mathematically fixed for the whole trip.
     self.Status = "Travelling"
     local cruise = CFrame.new(finalTarget.Position.X, fixedY, finalTarget.Position.Z)
-    if not self:TweenTo(root, cruise) or not self.Active then
+    if not self:TweenRoot(root, cruise) or not self.Active then
         self:SetCollision(true)
         self.Active = false
         return false
@@ -280,7 +280,7 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
 
     -- Phase 3: one final descent only after horizontal travel finishes.
     self.Status = "Descending"
-    local ok = self:TweenTo(root, finalTarget)
+    local ok = self:TweenRoot(root, finalTarget)
 
     self:SetCollision(true)
     self.Active = false
@@ -3771,7 +3771,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3j - FIXED HEIGHT TELEPORT
+-- FLOQUITAVE 2.7.3k - FIXED HEIGHT TELEPORT HOTFIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
