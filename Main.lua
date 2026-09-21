@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3g
+    Version: 2.7.3h
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3g",
+    Version = "2.7.3h",
 
     Width = 920,
     Height = 590,
@@ -241,7 +241,7 @@ function MovementService:TweenRoot(root, destination)
 end
 
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
-    local root = GetCharacterRoot()
+    local root = self:GetRoot()
     if not root or not targetCFrame then
         self.Status = "Character unavailable"
         return false
@@ -255,13 +255,13 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     local finalTarget = targetCFrame * CFrame.new(0, offset, 0)
     local travelHeight = math.max(root.Position.Y, finalTarget.Position.Y) + 70
 
-    SetCharacterCollision(false)
+    self:SetCollision(false)
 
     -- 1) Sobe primeiro.
     self.Status = "Rising"
     local riseTarget = CFrame.new(root.Position.X, travelHeight, root.Position.Z)
     if not self:TweenRoot(root, riseTarget) or not self.Active then
-        SetCharacterCollision(true)
+        self:SetCollision(true)
         return false
     end
 
@@ -269,7 +269,7 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     self.Status = "Travelling"
     local cruiseTarget = CFrame.new(finalTarget.Position.X, travelHeight, finalTarget.Position.Z)
     if not self:TweenRoot(root, cruiseTarget) or not self.Active then
-        SetCharacterCollision(true)
+        self:SetCollision(true)
         return false
     end
 
@@ -277,7 +277,7 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     self.Status = "Descending"
     local ok = self:TweenRoot(root, finalTarget)
 
-    SetCharacterCollision(true)
+    self:SetCollision(true)
     self.Active = false
     self.Status = ok and "Arrived" or "Stopped"
     return ok
@@ -3766,7 +3766,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3g - TELEPORT 200 + HEIGHT
+-- FLOQUITAVE 2.7.3h - TELEPORT 200 HOTFIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
