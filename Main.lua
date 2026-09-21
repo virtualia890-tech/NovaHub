@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2b
+    Version: 2.7.2c
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2b",
+    Version = "2.7.2c",
 
     Width = 920,
     Height = 590,
@@ -3108,122 +3108,26 @@ Toggle(
 )
 
 --==================================================
--- 2.7.2b - FAST ATTACK + BOSS FARM (minimal patch)
---==================================================
-
-local BossFarm272 = {
-    Enabled = false, FastAttack = false, BossName = "",
-    Status = "Idle", Target = nil, LastAttack = 0, AttackCooldown = 0.10
-}
-
-local function FindBoss272(name)
-    if type(name) ~= "string" or name == "" then return nil end
-    for _, container in ipairs(FindEnemyContainers()) do
-        for _, enemy in ipairs(container:GetChildren()) do
-            if enemy:IsA("Model") and enemy.Name == name and IsValidFarmTarget(enemy) then
-                return enemy
-            end
-        end
-    end
-    return nil
-end
-
-local function FastAttack272(target)
-    if not IsValidFarmTarget(target) then return false end
-    local tool = FarmState.CurrentTool
-    if not tool or not tool.Parent then tool = EquipFirstTool() end
-    if not tool then
-        BossFarm272.Status = "No fighting style equipped"
-        return false
-    end
-    local now = os.clock()
-    if now - BossFarm272.LastAttack < BossFarm272.AttackCooldown then return true end
-    BossFarm272.LastAttack = now
-    pcall(function() tool:Activate() end)
-    return true
-end
-
-local function BossFarmStep272()
-    if not BossFarm272.Enabled then return end
-    if BossFarm272.BossName == "" then
-        BossFarm272.Status = "Enter boss name"
-        return
-    end
-
-    local target = BossFarm272.Target
-    if not IsValidFarmTarget(target) or target.Name ~= BossFarm272.BossName then
-        target = FindBoss272(BossFarm272.BossName)
-        BossFarm272.Target = target
-    end
-
-    if not target then
-        BossFarm272.Status = "Waiting: " .. BossFarm272.BossName
-        return
-    end
-
-    BossFarm272.Status = "Fighting: " .. BossFarm272.BossName
-    MoveToTarget(target)
-    if BossFarm272.FastAttack then FastAttack272(target) else AttackTarget(target) end
-end
-
---==================================================
 -- COMBAT
 --==================================================
 
 local CombatPage = PageService:Create("Combat")
 
-Section(CombatPage, "Fast Attack + Boss Farm", "2.7.2b test on stable 2.7.1 base")
+Section(
+    CombatPage,
+    "Combat",
+    "Combat interface"
+)
 
-local BossStatusCard272, BossStatusValue272 = Card(CombatPage, "BOSS STATUS", "Idle")
-
-local BossNameHolder272 = Create("Frame", {
-    Size = UDim2.new(1, 0, 0, 70), BackgroundColor3 = Theme.Card, BorderSizePixel = 0
-}, CombatPage)
-Corner(BossNameHolder272, 11)
-Stroke(BossNameHolder272, Theme.Secondary, 0.3)
-
-Create("TextLabel", {
-    Position = UDim2.new(0,14,0,10), Size = UDim2.new(0.42,-14,0,20),
-    BackgroundTransparency = 1, Text = "Boss Name", Font = Enum.Font.GothamBold,
-    TextSize = 12, TextColor3 = Theme.Text, TextXAlignment = Enum.TextXAlignment.Left
-}, BossNameHolder272)
-
-local BossNameBox272 = Create("TextBox", {
-    Position = UDim2.new(0.42,0,0,10), Size = UDim2.new(0.58,-14,0,36),
-    BackgroundColor3 = Theme.Secondary, Text = "", PlaceholderText = "Ex: Cake Queen",
-    Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Text, ClearTextOnFocus = false
-}, BossNameHolder272)
-Corner(BossNameBox272, 8)
-
-Connect(BossNameBox272.FocusLost, function()
-    BossFarm272.BossName = BossNameBox272.Text
-    BossFarm272.Target = nil
-    BossFarm272.Status = BossFarm272.BossName ~= "" and ("Selected: "..BossFarm272.BossName) or "Enter boss name"
-end)
-
-Toggle(CombatPage, "Fast Attack", "Faster version of the existing tool attack", false, function(enabled)
-    BossFarm272.FastAttack = enabled
-    Notify("Fast Attack", enabled and "Enabled" or "Disabled")
-end)
-
-Toggle(CombatPage, "Auto Farm Boss", "Find boss by exact name and reuse stable movement", false, function(enabled)
-    BossFarm272.Enabled = enabled
-    BossFarm272.Target = nil
-    if enabled then
-        FarmState.AutoFarm = false
-        BossFarm272.Status = BossFarm272.BossName ~= "" and ("Searching: "..BossFarm272.BossName) or "Enter boss name"
-    else
-        BossFarm272.Status = "Idle"
-        MovementService:Stop()
+Toggle(
+    CombatPage,
+    "Combat Assist",
+    "Test toggle — interface only",
+    false,
+    function(enabled)
+        Notify("Combat", enabled and "Enabled" or "Disabled")
     end
-    Notify("Boss Farm", enabled and "Enabled" or "Disabled")
-end)
-
-Connect(RunService.Heartbeat, function()
-    local ok, err = pcall(BossFarmStep272)
-    if not ok then BossFarm272.Status = "Error: "..tostring(err) end
-    if BossStatusValue272 then BossStatusValue272.Text = BossFarm272.Status end
-end)
+)
 
 --==================================================
 -- MISC
@@ -3884,3 +3788,201 @@ print(
     .. Config.Version
     .. " loaded."
 )
+
+-- ============================================================
+-- FLOQUITAVE 2.7.2c
+-- FAST ATTACK + BOSS FARM - REGISTER SAFE MODULE
+-- Everything below is inside its own function scope so the
+-- already-large 2.7.1 main chunk does not gain local registers.
+-- ============================================================
+
+task.spawn(function()
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local player = Players.LocalPlayer
+
+    local state = {
+        boss = "",
+        bossFarm = false,
+        fastAttack = false,
+        status = "Idle",
+        lastAttack = 0
+    }
+
+    local function character()
+        return player.Character
+    end
+
+    local function root()
+        local c = character()
+        return c and c:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function validEnemy(m)
+        if not m or not m:IsA("Model") then return false end
+        local hum = m:FindFirstChildOfClass("Humanoid")
+        local rp = m:FindFirstChild("HumanoidRootPart")
+        return hum ~= nil and rp ~= nil and hum.Health > 0
+    end
+
+    local function findBoss(name)
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies or name == "" then return nil end
+        for _, enemy in ipairs(enemies:GetChildren()) do
+            if enemy.Name == name and validEnemy(enemy) then
+                return enemy
+            end
+        end
+        return nil
+    end
+
+    local function equipTool()
+        local c = character()
+        local backpack = player:FindFirstChildOfClass("Backpack")
+        if not c then return nil end
+
+        local equipped = c:FindFirstChildOfClass("Tool")
+        if equipped then return equipped end
+
+        if backpack then
+            local tool = backpack:FindFirstChildOfClass("Tool")
+            local hum = c:FindFirstChildOfClass("Humanoid")
+            if tool and hum then
+                hum:EquipTool(tool)
+                return tool
+            end
+        end
+        return nil
+    end
+
+    local function attack()
+        local now = os.clock()
+        local delayTime = state.fastAttack and 0.08 or 0.30
+        if now - state.lastAttack < delayTime then return end
+        state.lastAttack = now
+
+        local tool = equipTool()
+        if tool then
+            pcall(function()
+                tool:Activate()
+            end)
+        end
+    end
+
+    local function follow(target)
+        local myRoot = root()
+        local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+        if not myRoot or not targetRoot then return end
+
+        -- Small direct follow used only while the boss is alive.
+        -- It does not modify the checkpoint MovementService.
+        pcall(function()
+            myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 8, 0)
+        end)
+    end
+
+    local function farmStep()
+        if not state.bossFarm then return end
+
+        if state.boss == "" then
+            state.status = "Digite o nome do boss"
+            return
+        end
+
+        local boss = findBoss(state.boss)
+        if not boss then
+            state.status = "Aguardando: " .. state.boss
+            return
+        end
+
+        state.status = "Atacando: " .. state.boss
+        follow(boss)
+        attack()
+    end
+
+    -- Separate compact test panel. Keeping it inside this function is
+    -- intentional: it prevents new UI locals from entering the main chunk.
+    local old = player:WaitForChild("PlayerGui"):FindFirstChild("Floquitave272c")
+    if old then old:Destroy() end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "Floquitave272c"
+    gui.ResetOnSpawn = false
+    gui.Parent = player.PlayerGui
+
+    local panel = Instance.new("Frame")
+    panel.Size = UDim2.fromOffset(300, 205)
+    panel.Position = UDim2.new(1, -320, 0.5, -102)
+    panel.BackgroundColor3 = Color3.fromRGB(24,24,28)
+    panel.BorderSizePixel = 0
+    panel.Parent = gui
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1,-16,0,28)
+    title.Position = UDim2.fromOffset(8,6)
+    title.BackgroundTransparency = 1
+    title.Text = "2.7.2c  FAST ATTACK + BOSS"
+    title.TextColor3 = Color3.new(1,1,1)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 13
+    title.Parent = panel
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1,-16,0,34)
+    box.Position = UDim2.fromOffset(8,40)
+    box.BackgroundColor3 = Color3.fromRGB(38,38,44)
+    box.TextColor3 = Color3.new(1,1,1)
+    box.PlaceholderText = "Nome exato do boss"
+    box.Text = ""
+    box.ClearTextOnFocus = false
+    box.Parent = panel
+    box.FocusLost:Connect(function()
+        state.boss = box.Text
+        state.status = state.boss ~= "" and ("Selecionado: "..state.boss) or "Idle"
+    end)
+
+    local fast = Instance.new("TextButton")
+    fast.Size = UDim2.new(0.5,-12,0,34)
+    fast.Position = UDim2.fromOffset(8,82)
+    fast.BackgroundColor3 = Color3.fromRGB(42,42,50)
+    fast.TextColor3 = Color3.new(1,1,1)
+    fast.Text = "Fast Attack: OFF"
+    fast.Parent = panel
+    fast.MouseButton1Click:Connect(function()
+        state.fastAttack = not state.fastAttack
+        fast.Text = "Fast Attack: " .. (state.fastAttack and "ON" or "OFF")
+    end)
+
+    local farm = Instance.new("TextButton")
+    farm.Size = UDim2.new(0.5,-12,0,34)
+    farm.Position = UDim2.new(0.5,4,0,82)
+    farm.BackgroundColor3 = Color3.fromRGB(42,42,50)
+    farm.TextColor3 = Color3.new(1,1,1)
+    farm.Text = "Boss Farm: OFF"
+    farm.Parent = panel
+    farm.MouseButton1Click:Connect(function()
+        state.bossFarm = not state.bossFarm
+        farm.Text = "Boss Farm: " .. (state.bossFarm and "ON" or "OFF")
+        if not state.bossFarm then state.status = "Idle" end
+    end)
+
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1,-16,0,55)
+    status.Position = UDim2.fromOffset(8,128)
+    status.BackgroundTransparency = 1
+    status.TextColor3 = Color3.fromRGB(220,220,225)
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.TextYAlignment = Enum.TextYAlignment.Top
+    status.TextWrapped = true
+    status.TextSize = 12
+    status.Text = "Status: Idle"
+    status.Parent = panel
+
+    RunService.Heartbeat:Connect(function()
+        local ok, err = pcall(farmStep)
+        if not ok then
+            state.status = "Erro: " .. tostring(err)
+        end
+        status.Text = "Status: " .. state.status
+    end)
+end)
