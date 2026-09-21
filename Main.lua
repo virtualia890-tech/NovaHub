@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3a
+    Version: 2.7.3b
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3a",
+    Version = "2.7.3b",
 
     Width = 920,
     Height = 590,
@@ -2040,18 +2040,9 @@ end
 
 local function QuestVisible()
     local quest = GetQuestFrame()
-    if not quest or quest.Visible ~= true then return false end
-
-    -- A child can have Visible=true while a parent container is hidden.
-    local parent = quest.Parent
-    while parent and parent ~= LocalPlayer.PlayerGui do
-        if parent:IsA("GuiObject") and parent.Visible == false then
-            return false
-        end
-        parent = parent.Parent
-    end
-
-    return true
+    -- Match the reference behavior: the Quest frame itself is the authority.
+    -- Do not reject it because an ancestor/container reports Visible=false.
+    return quest ~= nil and quest.Visible == true
 end
 
 local function GetQuestText()
@@ -2682,20 +2673,23 @@ local function FarmStep()
         -- Reference-style quest cycle:
         -- no visible quest -> go back to NPC and request it again.
         if not visible then
+            -- IMPORTANT: check the post-StartQuest grace BEFORE clearing the timestamp.
+            -- 2.7.3a cleared QuestStartedAt first, so this branch could never run and
+            -- the account kept requesting the quest at the NPC.
+            if FarmState.QuestStartedAt > 0 and os.clock() - FarmState.QuestStartedAt < 2.50 then
+                FarmState.QuestOwnedByHub = true
+                FarmState.QuestRoutePending = false
+                FarmState.QuestStatus = "Quest accepted - travelling to mobs"
+                MoveToQuestMobArea(q)
+                return
+            end
+
             FarmState.QuestOwnedByHub = false
             FarmState.QuestSeenVisible = false
             FarmState.QuestRoutePending = false
             FarmState.QuestStartedAt = 0
             FarmState.CurrentTarget = nil
             FarmState.FarmAnchor = nil
-
-            -- Small grace period after StartQuest because the UI may take a moment
-            -- to become visible on some executors/servers.
-            if FarmState.QuestStartedAt > 0 and os.clock() - FarmState.QuestStartedAt < 1.25 then
-                FarmState.QuestStatus = "Waiting quest UI"
-                MoveToQuestMobArea(q)
-                return
-            end
 
             FarmState.QuestStatus = "No active quest - returning to NPC"
             StartLevelQuest(q)
@@ -3819,7 +3813,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3a - BOSS ROUTE + QUEST LOOP REBUILD
+-- FLOQUITAVE 2.7.3b - BOSS HEIGHT + QUEST TIMING FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -3845,6 +3839,8 @@ task.spawn(function()
 
     -- Spawn routes taken from the supplied boss reference.
     -- Unknown/custom bosses still fall back to their ReplicatedStorage model.
+    local BOSS_SAFE_HEIGHT = 16
+
     local BOSS_ROUTE = {
         ["The Gorilla King"] = CFrame.new(-1088.75977,8.13463783,-488.559906),
         ["Bobby"] = CFrame.new(-1087.37610,46.94941,4040.14624),
@@ -4221,7 +4217,7 @@ task.spawn(function()
         MovementService.Status = "Boss travel"
         MovementService:SetCollision(false)
 
-        local target = destination * CFrame.new(0, 12, 0)
+        local target = destination * CFrame.new(0, BOSS_SAFE_HEIGHT, 0)
         local ok = MovementService:TweenRoot(me, target)
 
         MovementService:SetCollision(true)
@@ -4282,7 +4278,7 @@ task.spawn(function()
 
         if distance > 42 then
             local destination = CFrame.new(
-                (tr.CFrame * CFrame.new(0, FarmState.Distance, 0)).Position,
+                (tr.CFrame * CFrame.new(0, BOSS_SAFE_HEIGHT, 0)).Position,
                 tr.Position
             )
             bossDirectTravel(destination, "Boss Target:" .. target.Name)
@@ -4295,7 +4291,7 @@ task.spawn(function()
         -- normal/special farms, but without normal-farm target validation.
         pcall(function()
             me.CFrame = CFrame.new(
-                (tr.CFrame * CFrame.new(0, FarmState.Distance, 0)).Position,
+                (tr.CFrame * CFrame.new(0, BOSS_SAFE_HEIGHT, 0)).Position,
                 tr.Position
             )
         end)
