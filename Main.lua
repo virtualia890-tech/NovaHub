@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3m
+    Version: 2.7.3n
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3m",
+    Version = "2.7.3n",
 
     Width = 920,
     Height = 590,
@@ -170,7 +170,7 @@ local MovementService = {
     Active = false,
     Target = nil,
     Tween = nil,
-    Speed = 200,
+    Speed = 150,
     SafeHeight = 120,
     Status = "Idle",
     DestinationName = "None",
@@ -3834,7 +3834,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3m - TELEPORT DIAGNOSTIC
+-- FLOQUITAVE 2.7.3n - SPEED ONLY
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
