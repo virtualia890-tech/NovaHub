@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2d
+    Version: 2.7.2e
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2d",
+    Version = "2.7.2e",
 
     Width = 920,
     Height = 590,
@@ -1376,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.7.2d Boss Farm",
+    Text = "2.7.1 Quest Flow + Special Farms",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -3790,193 +3790,136 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2d - BOSS FARM / HUB INTEGRATED
--- Register-safe: all new locals live inside this spawned closure.
--- Fast Attack option removed: the checkpoint attack is already fast.
+-- FLOQUITAVE 2.7.2e - COMPACT BOSS FARM
+-- Nested scope avoids the main-chunk local-register limit.
 -- ============================================================
-
 task.spawn(function()
-    local state = {
-        Selected = nil,
-        Target = nil,
+    local S = {
         Enabled = false,
-        Status = "No boss selected",
+        Selected = nil,
         Alive = {},
-        LastScan = 0
+        Status = "Refresh and select a boss"
     }
 
-    local bossesBySea = {
-        [1] = {
-            "The Gorilla King", "Bobby", "Yeti", "Mob Leader", "Vice Admiral",
-            "Warden", "Chief Warden", "Swan", "Magma Admiral", "Fishman Lord",
-            "Wysper", "Thunder God", "Cyborg", "Saber Expert"
+    local ALL = {
+        ["Sea 1"] = {
+            "The Gorilla King","Bobby","Yeti","Mob Leader","Vice Admiral","Warden",
+            "Chief Warden","Swan","Magma Admiral","Fishman Lord","Wysper",
+            "Thunder God","Cyborg","Saber Expert"
         },
-        [2] = {
-            "Diamond", "Jeremy", "Fajita", "Don Swan", "Smoke Admiral",
-            "Cursed Captain", "Darkbeard", "Order", "Awakened Ice Admiral",
-            "Tide Keeper"
+        ["Sea 2"] = {
+            "Diamond","Jeremy","Fajita","Don Swan","Smoke Admiral","Cursed Captain",
+            "Darkbeard","Order","Awakened Ice Admiral","Tide Keeper"
         },
-        [3] = {
-            "Stone", "Island Empress", "Kilo Admiral", "Captain Elephant",
-            "Beautiful Pirate", "rip_indra True Form", "Longma", "Soul Reaper",
-            "Cake Queen", "Cake Prince", "Dough King"
+        ["Sea 3"] = {
+            "Stone","Island Empress","Kilo Admiral","Captain Elephant","Beautiful Pirate",
+            "rip_indra True Form","Longma","Soul Reaper","Cake Queen","Cake Prince","Dough King"
         }
     }
 
-    local function currentSea()
-        if game.PlaceId == 2753915549 then return 1 end
-        if game.PlaceId == 4442272183 then return 2 end
-        if game.PlaceId == 7449423635 then return 3 end
-        return 0
+    local function valid(m)
+        if not m or not m:IsA("Model") then return false end
+        local h = m:FindFirstChildOfClass("Humanoid")
+        return h and h.Health > 0 and m:FindFirstChild("HumanoidRootPart") ~= nil
     end
 
-    local function validBoss(model)
-        if not model or not model:IsA("Model") then return false end
-        local hum = model:FindFirstChildOfClass("Humanoid")
-        local root = model:FindFirstChild("HumanoidRootPart")
-        return hum ~= nil and root ~= nil and hum.Health > 0
+    local function enemyContainer()
+        return workspace:FindFirstChild("Enemies")
     end
 
-    local function findLiveBoss(name)
-        for _, container in ipairs(FindEnemyContainers()) do
-            for _, model in ipairs(container:GetChildren()) do
-                if model.Name == name and validBoss(model) then
-                    return model
-                end
-            end
+    local function find(name)
+        local c = enemyContainer()
+        if not c then return nil end
+        for _,m in ipairs(c:GetChildren()) do
+            if m.Name == name and valid(m) then return m end
         end
         return nil
     end
 
-    local function refreshAlive()
-        table.clear(state.Alive)
-        local list = bossesBySea[currentSea()] or {}
-        for _, name in ipairs(list) do
-            if findLiveBoss(name) then
-                state.Alive[name] = true
+    local function refresh()
+        table.clear(S.Alive)
+        for _,names in pairs(ALL) do
+            for _,name in ipairs(names) do
+                if find(name) then S.Alive[name] = true end
             end
-        end
-        state.LastScan = os.clock()
-    end
-
-    Section(
-        CombatPage,
-        "Boss Farm",
-        "Select a boss from the current Sea. Refresh checks which bosses are alive."
-    )
-
-    local statusCard, statusValue = Card(CombatPage, "BOSS FARM", "No boss selected")
-    local aliveCard, aliveValue = Card(CombatPage, "ALIVE BOSSES", "Press Refresh Boss")
-
-    local listHolder = Create("Frame", {
-        Size = UDim2.new(1, 0, 0, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        BackgroundTransparency = 1
-    }, CombatPage)
-
-    local listLayout = Create("UIListLayout", {
-        Padding = UDim.new(0, 6),
-        SortOrder = Enum.SortOrder.LayoutOrder
-    }, listHolder)
-
-    local bossButtons = {}
-
-    local function updateVisuals()
-        local aliveNames = {}
-        for _, name in ipairs(bossesBySea[currentSea()] or {}) do
-            if state.Alive[name] then
-                table.insert(aliveNames, name)
-            end
-        end
-
-        if #aliveNames == 0 then
-            aliveValue.Text = "No live boss found"
-        else
-            aliveValue.Text = table.concat(aliveNames, " • ")
-        end
-
-        statusValue.Text = state.Status
-
-        for name, button in pairs(bossButtons) do
-            local prefix = state.Alive[name] and "[ALIVE] " or "[--] "
-            if state.Selected == name then
-                prefix = state.Alive[name] and "[SELECTED / ALIVE] " or "[SELECTED] "
-            end
-            button.Text = prefix .. name
         end
     end
 
-    local function selectBoss(name)
-        state.Selected = name
-        state.Target = findLiveBoss(name)
+    Section(CombatPage, "Boss Farm", "Refresh bosses, select one, then enable Auto Farm Boss.")
 
-        if state.Target then
-            state.Enabled = true
-            state.Status = "Selected: " .. name .. " - attacking"
-        else
-            state.Enabled = false
-            state.Status = "Selected: " .. name .. " - not alive"
+    local _, status = Card(CombatPage, "BOSS STATUS", "Refresh and select a boss")
+    local _, alive = Card(CombatPage, "ALIVE", "Press Refresh Boss")
+
+    -- Compact selector: one normal-sized row cycles through currently alive bosses.
+    local selector = ActionButton(CombatPage, "Selected Boss: None", function()
+        local names = {}
+        for _,sea in ipairs({"Sea 1","Sea 2","Sea 3"}) do
+            for _,name in ipairs(ALL[sea]) do
+                if S.Alive[name] then table.insert(names, name) end
+            end
         end
 
-        updateVisuals()
-    end
+        if #names == 0 then
+            S.Selected = nil
+            S.Status = "No live boss found - press Refresh Boss"
+            return
+        end
+
+        local idx = 0
+        for i,name in ipairs(names) do
+            if name == S.Selected then idx = i break end
+        end
+        idx = (idx % #names) + 1
+        S.Selected = names[idx]
+        S.Status = "Selected: " .. S.Selected
+        selector.Text = "Selected Boss: " .. S.Selected
+    end)
 
     ActionButton(CombatPage, "Refresh Boss", function()
-        refreshAlive()
-
-        if state.Selected then
-            state.Target = findLiveBoss(state.Selected)
-            if state.Target then
-                state.Enabled = true
-                state.Status = "Selected: " .. state.Selected .. " - attacking"
-            else
-                state.Enabled = false
-                state.Status = "Selected: " .. state.Selected .. " - not alive"
+        refresh()
+        local names = {}
+        for _,sea in ipairs({"Sea 1","Sea 2","Sea 3"}) do
+            for _,name in ipairs(ALL[sea]) do
+                if S.Alive[name] then table.insert(names, name) end
             end
-        else
-            state.Status = "Boss list refreshed"
         end
-
-        updateVisuals()
-        Notify("Boss Farm", "Boss list refreshed")
+        alive.Text = #names > 0 and table.concat(names, " • ") or "No live boss found"
+        S.Status = "Boss list refreshed"
+        status.Text = S.Status
     end)
 
-    for _, name in ipairs(bossesBySea[currentSea()] or {}) do
-        bossButtons[name] = ActionButton(listHolder, "[--] " .. name, function()
-            selectBoss(name)
-        end)
-    end
+    Toggle(
+        CombatPage,
+        "Auto Farm Boss",
+        "Attack the selected boss",
+        false,
+        function(on)
+            S.Enabled = on
+            if on then
+                S.Status = S.Selected and ("Farming: "..S.Selected) or "Select a boss first"
+            else
+                S.Status = "Boss Farm OFF"
+                MovementService:Stop()
+            end
+            status.Text = S.Status
+        end
+    )
 
-    ActionButton(CombatPage, "Stop Boss Farm", function()
-        state.Enabled = false
-        state.Target = nil
-        state.Status = state.Selected and ("Stopped: " .. state.Selected) or "Stopped"
-        MovementService:Stop()
-        updateVisuals()
-    end)
-
-    refreshAlive()
-    updateVisuals()
+    refresh()
 
     RunService.Heartbeat:Connect(function()
-        if not state.Enabled or not state.Selected then return end
+        if not S.Enabled or not S.Selected then return end
 
-        if not validBoss(state.Target) then
-            state.Target = findLiveBoss(state.Selected)
-
-            if not state.Target then
-                state.Enabled = false
-                state.Alive[state.Selected] = nil
-                state.Status = "Defeated / gone: " .. state.Selected
-                updateVisuals()
-                return
-            end
+        local target = find(S.Selected)
+        if not target then
+            S.Status = "Waiting for: " .. S.Selected
+            status.Text = S.Status
+            return
         end
 
-        -- Reuse the checkpoint's proven movement and attack paths.
-        MoveToTarget(state.Target)
-        AttackTarget(state.Target)
-        state.Status = "Attacking: " .. state.Selected
-        statusValue.Text = state.Status
+        S.Status = "Farming: " .. S.Selected
+        status.Text = S.Status
+        MoveToTarget(target)
+        AttackTarget(target)
     end)
 end)
