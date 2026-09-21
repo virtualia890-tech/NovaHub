@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2c
+    Version: 2.7.2d
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2c",
+    Version = "2.7.2d",
 
     Width = 920,
     Height = 590,
@@ -1376,7 +1376,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.7.1 Quest Flow + Special Farms",
+    Text = "2.7.2d Boss Farm",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -3790,199 +3790,193 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2c
--- FAST ATTACK + BOSS FARM - REGISTER SAFE MODULE
--- Everything below is inside its own function scope so the
--- already-large 2.7.1 main chunk does not gain local registers.
+-- FLOQUITAVE 2.7.2d - BOSS FARM / HUB INTEGRATED
+-- Register-safe: all new locals live inside this spawned closure.
+-- Fast Attack option removed: the checkpoint attack is already fast.
 -- ============================================================
 
 task.spawn(function()
-    local Players = game:GetService("Players")
-    local RunService = game:GetService("RunService")
-    local player = Players.LocalPlayer
-
     local state = {
-        boss = "",
-        bossFarm = false,
-        fastAttack = false,
-        status = "Idle",
-        lastAttack = 0
+        Selected = nil,
+        Target = nil,
+        Enabled = false,
+        Status = "No boss selected",
+        Alive = {},
+        LastScan = 0
     }
 
-    local function character()
-        return player.Character
+    local bossesBySea = {
+        [1] = {
+            "The Gorilla King", "Bobby", "Yeti", "Mob Leader", "Vice Admiral",
+            "Warden", "Chief Warden", "Swan", "Magma Admiral", "Fishman Lord",
+            "Wysper", "Thunder God", "Cyborg", "Saber Expert"
+        },
+        [2] = {
+            "Diamond", "Jeremy", "Fajita", "Don Swan", "Smoke Admiral",
+            "Cursed Captain", "Darkbeard", "Order", "Awakened Ice Admiral",
+            "Tide Keeper"
+        },
+        [3] = {
+            "Stone", "Island Empress", "Kilo Admiral", "Captain Elephant",
+            "Beautiful Pirate", "rip_indra True Form", "Longma", "Soul Reaper",
+            "Cake Queen", "Cake Prince", "Dough King"
+        }
+    }
+
+    local function currentSea()
+        if game.PlaceId == 2753915549 then return 1 end
+        if game.PlaceId == 4442272183 then return 2 end
+        if game.PlaceId == 7449423635 then return 3 end
+        return 0
     end
 
-    local function root()
-        local c = character()
-        return c and c:FindFirstChild("HumanoidRootPart")
+    local function validBoss(model)
+        if not model or not model:IsA("Model") then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local root = model:FindFirstChild("HumanoidRootPart")
+        return hum ~= nil and root ~= nil and hum.Health > 0
     end
 
-    local function validEnemy(m)
-        if not m or not m:IsA("Model") then return false end
-        local hum = m:FindFirstChildOfClass("Humanoid")
-        local rp = m:FindFirstChild("HumanoidRootPart")
-        return hum ~= nil and rp ~= nil and hum.Health > 0
-    end
-
-    local function findBoss(name)
-        local enemies = workspace:FindFirstChild("Enemies")
-        if not enemies or name == "" then return nil end
-        for _, enemy in ipairs(enemies:GetChildren()) do
-            if enemy.Name == name and validEnemy(enemy) then
-                return enemy
+    local function findLiveBoss(name)
+        for _, container in ipairs(FindEnemyContainers()) do
+            for _, model in ipairs(container:GetChildren()) do
+                if model.Name == name and validBoss(model) then
+                    return model
+                end
             end
         end
         return nil
     end
 
-    local function equipTool()
-        local c = character()
-        local backpack = player:FindFirstChildOfClass("Backpack")
-        if not c then return nil end
-
-        local equipped = c:FindFirstChildOfClass("Tool")
-        if equipped then return equipped end
-
-        if backpack then
-            local tool = backpack:FindFirstChildOfClass("Tool")
-            local hum = c:FindFirstChildOfClass("Humanoid")
-            if tool and hum then
-                hum:EquipTool(tool)
-                return tool
+    local function refreshAlive()
+        table.clear(state.Alive)
+        local list = bossesBySea[currentSea()] or {}
+        for _, name in ipairs(list) do
+            if findLiveBoss(name) then
+                state.Alive[name] = true
             end
         end
-        return nil
+        state.LastScan = os.clock()
     end
 
-    local function attack()
-        local now = os.clock()
-        local delayTime = state.fastAttack and 0.08 or 0.30
-        if now - state.lastAttack < delayTime then return end
-        state.lastAttack = now
+    Section(
+        CombatPage,
+        "Boss Farm",
+        "Select a boss from the current Sea. Refresh checks which bosses are alive."
+    )
 
-        local tool = equipTool()
-        if tool then
-            pcall(function()
-                tool:Activate()
-            end)
+    local statusCard, statusValue = Card(CombatPage, "BOSS FARM", "No boss selected")
+    local aliveCard, aliveValue = Card(CombatPage, "ALIVE BOSSES", "Press Refresh Boss")
+
+    local listHolder = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1
+    }, CombatPage)
+
+    local listLayout = Create("UIListLayout", {
+        Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder
+    }, listHolder)
+
+    local bossButtons = {}
+
+    local function updateVisuals()
+        local aliveNames = {}
+        for _, name in ipairs(bossesBySea[currentSea()] or {}) do
+            if state.Alive[name] then
+                table.insert(aliveNames, name)
+            end
+        end
+
+        if #aliveNames == 0 then
+            aliveValue.Text = "No live boss found"
+        else
+            aliveValue.Text = table.concat(aliveNames, " • ")
+        end
+
+        statusValue.Text = state.Status
+
+        for name, button in pairs(bossButtons) do
+            local prefix = state.Alive[name] and "[ALIVE] " or "[--] "
+            if state.Selected == name then
+                prefix = state.Alive[name] and "[SELECTED / ALIVE] " or "[SELECTED] "
+            end
+            button.Text = prefix .. name
         end
     end
 
-    local function follow(target)
-        local myRoot = root()
-        local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
-        if not myRoot or not targetRoot then return end
+    local function selectBoss(name)
+        state.Selected = name
+        state.Target = findLiveBoss(name)
 
-        -- Small direct follow used only while the boss is alive.
-        -- It does not modify the checkpoint MovementService.
-        pcall(function()
-            myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 8, 0)
+        if state.Target then
+            state.Enabled = true
+            state.Status = "Selected: " .. name .. " - attacking"
+        else
+            state.Enabled = false
+            state.Status = "Selected: " .. name .. " - not alive"
+        end
+
+        updateVisuals()
+    end
+
+    ActionButton(CombatPage, "Refresh Boss", function()
+        refreshAlive()
+
+        if state.Selected then
+            state.Target = findLiveBoss(state.Selected)
+            if state.Target then
+                state.Enabled = true
+                state.Status = "Selected: " .. state.Selected .. " - attacking"
+            else
+                state.Enabled = false
+                state.Status = "Selected: " .. state.Selected .. " - not alive"
+            end
+        else
+            state.Status = "Boss list refreshed"
+        end
+
+        updateVisuals()
+        Notify("Boss Farm", "Boss list refreshed")
+    end)
+
+    for _, name in ipairs(bossesBySea[currentSea()] or {}) do
+        bossButtons[name] = ActionButton(listHolder, "[--] " .. name, function()
+            selectBoss(name)
         end)
     end
 
-    local function farmStep()
-        if not state.bossFarm then return end
-
-        if state.boss == "" then
-            state.status = "Digite o nome do boss"
-            return
-        end
-
-        local boss = findBoss(state.boss)
-        if not boss then
-            state.status = "Aguardando: " .. state.boss
-            return
-        end
-
-        state.status = "Atacando: " .. state.boss
-        follow(boss)
-        attack()
-    end
-
-    -- Separate compact test panel. Keeping it inside this function is
-    -- intentional: it prevents new UI locals from entering the main chunk.
-    local old = player:WaitForChild("PlayerGui"):FindFirstChild("Floquitave272c")
-    if old then old:Destroy() end
-
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "Floquitave272c"
-    gui.ResetOnSpawn = false
-    gui.Parent = player.PlayerGui
-
-    local panel = Instance.new("Frame")
-    panel.Size = UDim2.fromOffset(300, 205)
-    panel.Position = UDim2.new(1, -320, 0.5, -102)
-    panel.BackgroundColor3 = Color3.fromRGB(24,24,28)
-    panel.BorderSizePixel = 0
-    panel.Parent = gui
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1,-16,0,28)
-    title.Position = UDim2.fromOffset(8,6)
-    title.BackgroundTransparency = 1
-    title.Text = "2.7.2c  FAST ATTACK + BOSS"
-    title.TextColor3 = Color3.new(1,1,1)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 13
-    title.Parent = panel
-
-    local box = Instance.new("TextBox")
-    box.Size = UDim2.new(1,-16,0,34)
-    box.Position = UDim2.fromOffset(8,40)
-    box.BackgroundColor3 = Color3.fromRGB(38,38,44)
-    box.TextColor3 = Color3.new(1,1,1)
-    box.PlaceholderText = "Nome exato do boss"
-    box.Text = ""
-    box.ClearTextOnFocus = false
-    box.Parent = panel
-    box.FocusLost:Connect(function()
-        state.boss = box.Text
-        state.status = state.boss ~= "" and ("Selecionado: "..state.boss) or "Idle"
+    ActionButton(CombatPage, "Stop Boss Farm", function()
+        state.Enabled = false
+        state.Target = nil
+        state.Status = state.Selected and ("Stopped: " .. state.Selected) or "Stopped"
+        MovementService:Stop()
+        updateVisuals()
     end)
 
-    local fast = Instance.new("TextButton")
-    fast.Size = UDim2.new(0.5,-12,0,34)
-    fast.Position = UDim2.fromOffset(8,82)
-    fast.BackgroundColor3 = Color3.fromRGB(42,42,50)
-    fast.TextColor3 = Color3.new(1,1,1)
-    fast.Text = "Fast Attack: OFF"
-    fast.Parent = panel
-    fast.MouseButton1Click:Connect(function()
-        state.fastAttack = not state.fastAttack
-        fast.Text = "Fast Attack: " .. (state.fastAttack and "ON" or "OFF")
-    end)
-
-    local farm = Instance.new("TextButton")
-    farm.Size = UDim2.new(0.5,-12,0,34)
-    farm.Position = UDim2.new(0.5,4,0,82)
-    farm.BackgroundColor3 = Color3.fromRGB(42,42,50)
-    farm.TextColor3 = Color3.new(1,1,1)
-    farm.Text = "Boss Farm: OFF"
-    farm.Parent = panel
-    farm.MouseButton1Click:Connect(function()
-        state.bossFarm = not state.bossFarm
-        farm.Text = "Boss Farm: " .. (state.bossFarm and "ON" or "OFF")
-        if not state.bossFarm then state.status = "Idle" end
-    end)
-
-    local status = Instance.new("TextLabel")
-    status.Size = UDim2.new(1,-16,0,55)
-    status.Position = UDim2.fromOffset(8,128)
-    status.BackgroundTransparency = 1
-    status.TextColor3 = Color3.fromRGB(220,220,225)
-    status.TextXAlignment = Enum.TextXAlignment.Left
-    status.TextYAlignment = Enum.TextYAlignment.Top
-    status.TextWrapped = true
-    status.TextSize = 12
-    status.Text = "Status: Idle"
-    status.Parent = panel
+    refreshAlive()
+    updateVisuals()
 
     RunService.Heartbeat:Connect(function()
-        local ok, err = pcall(farmStep)
-        if not ok then
-            state.status = "Erro: " .. tostring(err)
+        if not state.Enabled or not state.Selected then return end
+
+        if not validBoss(state.Target) then
+            state.Target = findLiveBoss(state.Selected)
+
+            if not state.Target then
+                state.Enabled = false
+                state.Alive[state.Selected] = nil
+                state.Status = "Defeated / gone: " .. state.Selected
+                updateVisuals()
+                return
+            end
         end
-        status.Text = "Status: " .. state.status
+
+        -- Reuse the checkpoint's proven movement and attack paths.
+        MoveToTarget(state.Target)
+        AttackTarget(state.Target)
+        state.Status = "Attacking: " .. state.Selected
+        statusValue.Text = state.Status
     end)
 end)
