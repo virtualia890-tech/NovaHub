@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3f
+    Version: 2.7.3g
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3f",
+    Version = "2.7.3g",
 
     Width = 920,
     Height = 590,
@@ -170,7 +170,7 @@ local MovementService = {
     Active = false,
     Target = nil,
     Tween = nil,
-    Speed = 250,
+    Speed = 200,
     Status = "Idle",
     DestinationName = "None"
 }
@@ -241,96 +241,46 @@ function MovementService:TweenRoot(root, destination)
 end
 
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
-    local root = self:GetRoot()
-    local humanoid = self:GetHumanoid()
-
+    local root = GetCharacterRoot()
     if not root or not targetCFrame then
         self.Status = "Character unavailable"
         return false
     end
 
     self:Stop()
-
     self.Active = true
-    self.Target = targetCFrame
     self.DestinationName = destinationName or "Target"
-    self.Status = "Moving"
 
-    if humanoid then
-        humanoid.Sit = false
-    end
+    local offset = yOffset or 0
+    local finalTarget = targetCFrame * CFrame.new(0, offset, 0)
+    local travelHeight = math.max(root.Position.Y, finalTarget.Position.Y) + 70
 
-    pcall(function()
-        root.Anchored = false
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end)
+    SetCharacterCollision(false)
 
-    local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
-    local distance = (root.Position - destination.Position).Magnitude
-
-    -- Short moves are instant; long island travel uses a controlled tween.
-    if distance <= 220 then
-        local ok = pcall(function()
-            root.CFrame = destination
-            root.AssemblyLinearVelocity = Vector3.zero
-        end)
-
-        self.Active = false
-        self.Status = ok and "Arrived" or "Failed"
-        return ok
-    end
-
-    self:SetCollision(false)
-
-    local duration = math.clamp(distance / self.Speed, 0.15, 45)
-    local tween = TweenService:Create(
-        root,
-        TweenInfo.new(duration, Enum.EasingStyle.Linear),
-        {CFrame = destination}
-    )
-
-    self.Tween = tween
-
-    local ok = pcall(function()
-        tween:Play()
-        tween.Completed:Wait()
-    end)
-
-    if self.Tween == tween then
-        self.Tween = nil
-    end
-
-    self:SetCollision(true)
-
-    if not ok then
-        self.Active = false
-        self.Status = "Failed"
+    -- 1) Sobe primeiro.
+    self.Status = "Rising"
+    local riseTarget = CFrame.new(root.Position.X, travelHeight, root.Position.Z)
+    if not self:TweenRoot(root, riseTarget) or not self.Active then
+        SetCharacterCollision(true)
         return false
     end
 
-    root = self:GetRoot()
-    if not root then
-        self.Active = false
-        self.Status = "Character unavailable"
+    -- 2) Mantém a mesma altura durante todo o percurso horizontal.
+    self.Status = "Travelling"
+    local cruiseTarget = CFrame.new(finalTarget.Position.X, travelHeight, finalTarget.Position.Z)
+    if not self:TweenRoot(root, cruiseTarget) or not self.Active then
+        SetCharacterCollision(true)
         return false
     end
 
-    local remaining = (root.Position - destination.Position).Magnitude
+    -- 3) Só desce ao chegar ao destino.
+    self.Status = "Descending"
+    local ok = self:TweenRoot(root, finalTarget)
 
-    -- Final correction for small replication drift.
-    if remaining <= 350 then
-        pcall(function()
-            root.CFrame = destination
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-        remaining = (root.Position - destination.Position).Magnitude
-    end
-
+    SetCharacterCollision(true)
     self.Active = false
-    self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
-    return remaining <= 60
+    self.Status = ok and "Arrived" or "Stopped"
+    return ok
 end
 
 --==================================================
@@ -3816,7 +3766,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3f - CLASSIC TELEPORT RESTORE
+-- FLOQUITAVE 2.7.3g - TELEPORT 200 + HEIGHT
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
