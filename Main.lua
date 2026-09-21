@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3i
+    Version: 2.7.3j
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3i",
+    Version = "2.7.3j",
 
     Width = 920,
     Height = 590,
@@ -243,85 +243,49 @@ end
 
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     local root = self:GetRoot()
-    local humanoid = self:GetHumanoid()
-
     if not root or not targetCFrame then
         self.Status = "Character unavailable"
         return false
     end
 
-    -- Do not restart the same route every farm tick. Repeated GoTo calls
-    -- were cancelling the cruise while the character was still rising.
-    local requestedName = destinationName or "Target"
-    if self.Active then
-        if self.DestinationName == requestedName then
-            return false
-        end
-        self:Stop()
-    end
-
+    self:Stop()
     self.Active = true
-    self.Target = targetCFrame
-    self.DestinationName = requestedName
-    self.Status = "Moving"
+    self.DestinationName = destinationName or "Target"
 
-    if humanoid then
-        humanoid.Sit = false
-    end
+    local finalTarget = targetCFrame * CFrame.new(0, yOffset or 0)
 
-    pcall(function()
-        root.Anchored = false
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end)
-
-    local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
-    local totalDistance = (root.Position - destination.Position).Magnitude
-
-    -- Farm/short movement stays direct. Long island travel rises first,
-    -- crosses at a fixed safe altitude, then descends at the destination.
-    if totalDistance <= 260 then
-        self:SetCollision(false)
-        local ok = self:TweenRoot(root, destination)
-        self:SetCollision(true)
-        self.Active = false
-        self.Status = ok and "Arrived" or "Failed"
-        return ok
-    end
+    -- Calculate ONE cruise height before movement starts.
+    -- Nothing recalculates Y while travelling, preventing vertical flick.
+    local fixedY = math.max(root.Position.Y, finalTarget.Position.Y) + 70
 
     self:SetCollision(false)
 
-    local cruiseY = math.max(root.Position.Y, destination.Position.Y) + self.SafeHeight
-    local rise = CFrame.new(root.Position.X, cruiseY, root.Position.Z)
-    local cruise = CFrame.new(destination.Position.X, cruiseY, destination.Position.Z)
-
+    -- Phase 1: one vertical rise. X/Z stay exactly where they started.
     self.Status = "Rising"
-    local ok = self:TweenRoot(root, rise)
-
-    if ok then
-        root = self:GetRoot()
-        self.Status = "Cruising"
-        ok = self:TweenRoot(root, cruise)
-    end
-
-    if ok then
-        root = self:GetRoot()
-        self.Status = "Descending"
-        ok = self:TweenRoot(root, destination)
-    end
-
-    self:SetCollision(true)
-    self.Active = false
-
-    root = self:GetRoot()
-    if not ok or not root then
-        self.Status = "Failed"
+    local rise = CFrame.new(root.Position.X, fixedY, root.Position.Z)
+    if not self:TweenTo(root, rise) or not self.Active then
+        self:SetCollision(true)
+        self.Active = false
         return false
     end
 
-    local remaining = (root.Position - destination.Position).Magnitude
-    self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
-    return remaining <= 60
+    -- Phase 2: one horizontal tween. Y is mathematically fixed for the whole trip.
+    self.Status = "Travelling"
+    local cruise = CFrame.new(finalTarget.Position.X, fixedY, finalTarget.Position.Z)
+    if not self:TweenTo(root, cruise) or not self.Active then
+        self:SetCollision(true)
+        self.Active = false
+        return false
+    end
+
+    -- Phase 3: one final descent only after horizontal travel finishes.
+    self.Status = "Descending"
+    local ok = self:TweenTo(root, finalTarget)
+
+    self:SetCollision(true)
+    self.Active = false
+    self.Status = ok and "Arrived" or "Stopped"
+    return ok
 end
 
 --==================================================
@@ -3807,7 +3771,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3i - KNOWN GOOD TELEPORT
+-- FLOQUITAVE 2.7.3j - FIXED HEIGHT TELEPORT
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
