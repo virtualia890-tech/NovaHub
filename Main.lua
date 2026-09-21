@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3d
+    Version: 2.7.3e
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3d",
+    Version = "2.7.3e",
 
     Width = 920,
     Height = 590,
@@ -170,12 +170,10 @@ local MovementService = {
     Active = false,
     Target = nil,
     Tween = nil,
-    Speed = 210,
-    SafeHeight = 90,
+    Speed = 250,
+    SafeHeight = 120,
     Status = "Idle",
-    DestinationName = "None",
-    ManualTeleport = false,
-    ManualDestination = nil
+    DestinationName = "None"
 }
 
 function MovementService:GetRoot()
@@ -252,15 +250,9 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
         return false
     end
 
-    -- Do not let farm/boss controllers steal an explicit Teleport Directory route.
-    local requestedName = destinationName or "Target"
-    if self.ManualTeleport and self.ManualDestination
-        and requestedName ~= self.ManualDestination then
-        return false
-    end
-
     -- Do not restart the same route every farm tick. Repeated GoTo calls
     -- were cancelling the cruise while the character was still rising.
+    local requestedName = destinationName or "Target"
     if self.Active then
         if self.DestinationName == requestedName then
             return false
@@ -1614,15 +1606,7 @@ local function TeleportToIsland(seaName, locationName)
     SetTeleportStatus("Teleportando...", locationName)
 
     task.spawn(function()
-        -- Manual teleport has priority over every automatic farm movement.
-        MovementService:Stop()
-        MovementService.ManualTeleport = true
-        MovementService.ManualDestination = locationName
-
         local ok = MovementService:GoTo(destination, 5, locationName)
-
-        MovementService.ManualTeleport = false
-        MovementService.ManualDestination = nil
         SetTeleportStatus(MovementService.Status, locationName)
 
         if ok then
@@ -2056,8 +2040,6 @@ end
 
 local function QuestVisible()
     local quest = GetQuestFrame()
-    -- Match the reference behavior: the Quest frame itself is the authority.
-    -- Do not reject it because an ancestor/container reports Visible=false.
     return quest ~= nil and quest.Visible == true
 end
 
@@ -2689,9 +2671,6 @@ local function FarmStep()
         -- Reference-style quest cycle:
         -- no visible quest -> go back to NPC and request it again.
         if not visible then
-            -- IMPORTANT: check the post-StartQuest grace BEFORE clearing the timestamp.
-            -- 2.7.3a cleared QuestStartedAt first, so this branch could never run and
-            -- the account kept requesting the quest at the NPC.
             if FarmState.QuestStartedAt > 0 and os.clock() - FarmState.QuestStartedAt < 2.50 then
                 FarmState.QuestOwnedByHub = true
                 FarmState.QuestRoutePending = false
@@ -2706,7 +2685,6 @@ local function FarmStep()
             FarmState.QuestStartedAt = 0
             FarmState.CurrentTarget = nil
             FarmState.FarmAnchor = nil
-
             FarmState.QuestStatus = "No active quest - returning to NPC"
             StartLevelQuest(q)
             return
@@ -3829,7 +3807,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3d - MOVEMENT LOCK + TELEPORT FIX
+-- FLOQUITAVE 2.7.3e - TELEPORT ROLLBACK
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -4225,11 +4203,6 @@ task.spawn(function()
         local me = GetCharacterRoot()
         if not me or not destination then return false end
 
-        -- Teleport Directory owns movement until its route finishes.
-        if MovementService.ManualTeleport then
-            return false
-        end
-
         MovementService:Stop()
         MovementService.Active = true
         MovementService.DestinationName = label or "Boss"
@@ -4302,10 +4275,6 @@ task.spawn(function()
             )
             bossDirectTravel(destination, "Boss Target:" .. target.Name)
             return true
-        end
-
-        if MovementService.ManualTeleport then
-            return false
         end
 
         MovementService:Stop()
