@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2m
+    Version: 2.7.2n
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2m",
+    Version = "2.7.2n",
 
     Width = 920,
     Height = 590,
@@ -3780,7 +3780,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2m - SAFE BOSS FARM FIX
+-- FLOQUITAVE 2.7.2n - DIRECT BOSS COMBAT FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -4070,6 +4070,12 @@ task.spawn(function()
 
             if enabled then
                 S.KillAll = false
+                FarmState.Enabled = false
+                FarmState.AutoCakePrince = false
+                FarmState.AutoBone = false
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+                MovementService:Stop()
                 if S.Selected then
                     S.Status = "Auto Farm ON: " .. S.Selected
                 else
@@ -4093,6 +4099,12 @@ task.spawn(function()
             S.KillAll = enabled
             if enabled then
                 S.Enabled = false
+                FarmState.Enabled = false
+                FarmState.AutoCakePrince = false
+                FarmState.AutoBone = false
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+                MovementService:Stop()
                 scan()
                 S.Status = "Kill All Boss ON"
             else
@@ -4103,6 +4115,80 @@ task.spawn(function()
         end
     )
 
+    -- Boss combat intentionally does NOT use AttackTarget().
+    -- AttackTarget() validates against FarmState.TargetName, which belongs to
+    -- the normal level farm and can reject a perfectly valid boss.
+    local function bossRoot(target)
+        return target and (
+            target:FindFirstChild("HumanoidRootPart")
+            or target:FindFirstChild("UpperTorso")
+            or target:FindFirstChild("Torso")
+        )
+    end
+
+    local function bossAlive(target)
+        if not target or not target.Parent then return false end
+        local hum = target:FindFirstChildOfClass("Humanoid")
+        return hum ~= nil and hum.Health > 0 and bossRoot(target) ~= nil
+    end
+
+    local function bossAttack(target)
+        if not bossAlive(target) then return false end
+
+        local tool = GetEquippedTool()
+        if not tool or not IsLikelyFightingStyle(tool) then
+            tool = EquipFirstTool()
+        end
+        if not tool then
+            S.Status = "Boss found - no fighting style equipped"
+            statusValue.Text = S.Status
+            return false
+        end
+
+        pcall(function()
+            tool:Activate()
+        end)
+        return true
+    end
+
+    local function bossMoveAndFight(target)
+        if not bossAlive(target) then return false end
+
+        local me = GetCharacterRoot()
+        local tr = bossRoot(target)
+        if not me or not tr then return false end
+
+        local distance = (me.Position - tr.Position).Magnitude
+
+        if distance > 42 then
+            -- Unique destination name avoids the stale "Farm Target" route state
+            -- used by normal farming.
+            MovementService:GoTo(
+                CFrame.new(
+                    (tr.CFrame * CFrame.new(0, FarmState.Distance, 0)).Position,
+                    tr.Position
+                ),
+                0,
+                "Boss Target:" .. target.Name
+            )
+            return true
+        end
+
+        MovementService:Stop()
+
+        -- Keep the player in the same above-target position used by the working
+        -- normal/special farms, but without normal-farm target validation.
+        pcall(function()
+            me.CFrame = CFrame.new(
+                (tr.CFrame * CFrame.new(0, FarmState.Distance, 0)).Position,
+                tr.Position
+            )
+        end)
+
+        bossAttack(target)
+        return true
+    end
+
     -- Initial scan so opening Select Boss already has useful data.
     scan()
     rebuildMenu()
@@ -4112,7 +4198,7 @@ task.spawn(function()
         local currentAll = nil
 
         while not State.Destroyed do
-            task.wait(0.15)
+            task.wait(0.20)
 
             if S.Enabled and S.Selected then
                 local target = findBoss(S.Selected)
@@ -4123,12 +4209,7 @@ task.spawn(function()
 
                     -- MoveToTarget is blocking while travelling. Calling it here,
                     -- instead of every Heartbeat, lets the tween actually finish.
-                    MoveToTarget(target)
-
-                    if target.Parent then
-                        EquipFirstTool()
-                        AttackTarget(target)
-                    end
+                    bossMoveAndFight(target)
                 else
                     S.Status = "Waiting for active boss: " .. S.Selected
                     statusValue.Text = S.Status
@@ -4154,12 +4235,7 @@ task.spawn(function()
                 if currentAll then
                     S.Status = "Kill All: " .. currentAll.Name
                     statusValue.Text = S.Status
-                    MoveToTarget(currentAll)
-
-                    if currentAll.Parent then
-                        EquipFirstTool()
-                        AttackTarget(currentAll)
-                    end
+                    bossMoveAndFight(currentAll)
                 else
                     S.Status = "Kill All: waiting for active boss"
                     statusValue.Text = S.Status
