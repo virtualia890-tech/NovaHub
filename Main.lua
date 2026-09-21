@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3c
+    Version: 2.7.3d
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3c",
+    Version = "2.7.3d",
 
     Width = 920,
     Height = 590,
@@ -170,10 +170,12 @@ local MovementService = {
     Active = false,
     Target = nil,
     Tween = nil,
-    Speed = 250,
-    SafeHeight = 120,
+    Speed = 210,
+    SafeHeight = 90,
     Status = "Idle",
-    DestinationName = "None"
+    DestinationName = "None",
+    ManualTeleport = false,
+    ManualDestination = nil
 }
 
 function MovementService:GetRoot()
@@ -250,9 +252,15 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
         return false
     end
 
+    -- Do not let farm/boss controllers steal an explicit Teleport Directory route.
+    local requestedName = destinationName or "Target"
+    if self.ManualTeleport and self.ManualDestination
+        and requestedName ~= self.ManualDestination then
+        return false
+    end
+
     -- Do not restart the same route every farm tick. Repeated GoTo calls
     -- were cancelling the cruise while the character was still rising.
-    local requestedName = destinationName or "Target"
     if self.Active then
         if self.DestinationName == requestedName then
             return false
@@ -1606,7 +1614,15 @@ local function TeleportToIsland(seaName, locationName)
     SetTeleportStatus("Teleportando...", locationName)
 
     task.spawn(function()
+        -- Manual teleport has priority over every automatic farm movement.
+        MovementService:Stop()
+        MovementService.ManualTeleport = true
+        MovementService.ManualDestination = locationName
+
         local ok = MovementService:GoTo(destination, 5, locationName)
+
+        MovementService.ManualTeleport = false
+        MovementService.ManualDestination = nil
         SetTeleportStatus(MovementService.Status, locationName)
 
         if ok then
@@ -3813,7 +3829,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3c - REMOVE BOSS HEIGHT
+-- FLOQUITAVE 2.7.3d - MOVEMENT LOCK + TELEPORT FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -4209,6 +4225,11 @@ task.spawn(function()
         local me = GetCharacterRoot()
         if not me or not destination then return false end
 
+        -- Teleport Directory owns movement until its route finishes.
+        if MovementService.ManualTeleport then
+            return false
+        end
+
         MovementService:Stop()
         MovementService.Active = true
         MovementService.DestinationName = label or "Boss"
@@ -4281,6 +4302,10 @@ task.spawn(function()
             )
             bossDirectTravel(destination, "Boss Target:" .. target.Name)
             return true
+        end
+
+        if MovementService.ManualTeleport then
+            return false
         end
 
         MovementService:Stop()
