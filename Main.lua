@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3h
+    Version: 2.7.3i
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3h",
+    Version = "2.7.3i",
 
     Width = 920,
     Height = 590,
@@ -171,6 +171,7 @@ local MovementService = {
     Target = nil,
     Tween = nil,
     Speed = 200,
+    SafeHeight = 120,
     Status = "Idle",
     DestinationName = "None"
 }
@@ -212,7 +213,7 @@ function MovementService:SetCollision(enabled)
 end
 
 function MovementService:TweenRoot(root, destination)
-    if not root or not root.Parent or not destination then return false end
+    if not root or not root.Parent then return false end
 
     local distance = (root.Position - destination.Position).Magnitude
     if distance <= 4 then
@@ -220,7 +221,7 @@ function MovementService:TweenRoot(root, destination)
         return true
     end
 
-    local duration = math.clamp(distance / self.Speed, 0.15, 45)
+    local duration = math.clamp(distance / self.Speed, 0.12, 60)
     local tween = TweenService:Create(
         root,
         TweenInfo.new(duration, Enum.EasingStyle.Linear),
@@ -237,50 +238,90 @@ function MovementService:TweenRoot(root, destination)
         self.Tween = nil
     end
 
-    return ok
+    return ok and self.Active
 end
 
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     local root = self:GetRoot()
+    local humanoid = self:GetHumanoid()
+
     if not root or not targetCFrame then
         self.Status = "Character unavailable"
         return false
     end
 
-    self:Stop()
-    self.Active = true
-    self.DestinationName = destinationName or "Target"
+    -- Do not restart the same route every farm tick. Repeated GoTo calls
+    -- were cancelling the cruise while the character was still rising.
+    local requestedName = destinationName or "Target"
+    if self.Active then
+        if self.DestinationName == requestedName then
+            return false
+        end
+        self:Stop()
+    end
 
-    local offset = yOffset or 0
-    local finalTarget = targetCFrame * CFrame.new(0, offset, 0)
-    local travelHeight = math.max(root.Position.Y, finalTarget.Position.Y) + 70
+    self.Active = true
+    self.Target = targetCFrame
+    self.DestinationName = requestedName
+    self.Status = "Moving"
+
+    if humanoid then
+        humanoid.Sit = false
+    end
+
+    pcall(function()
+        root.Anchored = false
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+
+    local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
+    local totalDistance = (root.Position - destination.Position).Magnitude
+
+    -- Farm/short movement stays direct. Long island travel rises first,
+    -- crosses at a fixed safe altitude, then descends at the destination.
+    if totalDistance <= 260 then
+        self:SetCollision(false)
+        local ok = self:TweenRoot(root, destination)
+        self:SetCollision(true)
+        self.Active = false
+        self.Status = ok and "Arrived" or "Failed"
+        return ok
+    end
 
     self:SetCollision(false)
 
-    -- 1) Sobe primeiro.
+    local cruiseY = math.max(root.Position.Y, destination.Position.Y) + self.SafeHeight
+    local rise = CFrame.new(root.Position.X, cruiseY, root.Position.Z)
+    local cruise = CFrame.new(destination.Position.X, cruiseY, destination.Position.Z)
+
     self.Status = "Rising"
-    local riseTarget = CFrame.new(root.Position.X, travelHeight, root.Position.Z)
-    if not self:TweenRoot(root, riseTarget) or not self.Active then
-        self:SetCollision(true)
-        return false
+    local ok = self:TweenRoot(root, rise)
+
+    if ok then
+        root = self:GetRoot()
+        self.Status = "Cruising"
+        ok = self:TweenRoot(root, cruise)
     end
 
-    -- 2) Mantém a mesma altura durante todo o percurso horizontal.
-    self.Status = "Travelling"
-    local cruiseTarget = CFrame.new(finalTarget.Position.X, travelHeight, finalTarget.Position.Z)
-    if not self:TweenRoot(root, cruiseTarget) or not self.Active then
-        self:SetCollision(true)
-        return false
+    if ok then
+        root = self:GetRoot()
+        self.Status = "Descending"
+        ok = self:TweenRoot(root, destination)
     end
-
-    -- 3) Só desce ao chegar ao destino.
-    self.Status = "Descending"
-    local ok = self:TweenRoot(root, finalTarget)
 
     self:SetCollision(true)
     self.Active = false
-    self.Status = ok and "Arrived" or "Stopped"
-    return ok
+
+    root = self:GetRoot()
+    if not ok or not root then
+        self.Status = "Failed"
+        return false
+    end
+
+    local remaining = (root.Position - destination.Position).Magnitude
+    self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
+    return remaining <= 60
 end
 
 --==================================================
@@ -3766,7 +3807,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3h - TELEPORT 200 HOTFIX
+-- FLOQUITAVE 2.7.3i - KNOWN GOOD TELEPORT
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
