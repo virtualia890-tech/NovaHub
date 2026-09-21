@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3e
+    Version: 2.7.3f
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3e",
+    Version = "2.7.3f",
 
     Width = 920,
     Height = 590,
@@ -171,7 +171,6 @@ local MovementService = {
     Target = nil,
     Tween = nil,
     Speed = 250,
-    SafeHeight = 120,
     Status = "Idle",
     DestinationName = "None"
 }
@@ -213,7 +212,7 @@ function MovementService:SetCollision(enabled)
 end
 
 function MovementService:TweenRoot(root, destination)
-    if not root or not root.Parent then return false end
+    if not root or not root.Parent or not destination then return false end
 
     local distance = (root.Position - destination.Position).Magnitude
     if distance <= 4 then
@@ -221,7 +220,7 @@ function MovementService:TweenRoot(root, destination)
         return true
     end
 
-    local duration = math.clamp(distance / self.Speed, 0.12, 60)
+    local duration = math.clamp(distance / self.Speed, 0.15, 45)
     local tween = TweenService:Create(
         root,
         TweenInfo.new(duration, Enum.EasingStyle.Linear),
@@ -238,7 +237,7 @@ function MovementService:TweenRoot(root, destination)
         self.Tween = nil
     end
 
-    return ok and self.Active
+    return ok
 end
 
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
@@ -250,19 +249,11 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
         return false
     end
 
-    -- Do not restart the same route every farm tick. Repeated GoTo calls
-    -- were cancelling the cruise while the character was still rising.
-    local requestedName = destinationName or "Target"
-    if self.Active then
-        if self.DestinationName == requestedName then
-            return false
-        end
-        self:Stop()
-    end
+    self:Stop()
 
     self.Active = true
     self.Target = targetCFrame
-    self.DestinationName = requestedName
+    self.DestinationName = destinationName or "Target"
     self.Status = "Moving"
 
     if humanoid then
@@ -276,14 +267,15 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
     end)
 
     local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
-    local totalDistance = (root.Position - destination.Position).Magnitude
+    local distance = (root.Position - destination.Position).Magnitude
 
-    -- Farm/short movement stays direct. Long island travel rises first,
-    -- crosses at a fixed safe altitude, then descends at the destination.
-    if totalDistance <= 260 then
-        self:SetCollision(false)
-        local ok = self:TweenRoot(root, destination)
-        self:SetCollision(true)
+    -- Short moves are instant; long island travel uses a controlled tween.
+    if distance <= 220 then
+        local ok = pcall(function()
+            root.CFrame = destination
+            root.AssemblyLinearVelocity = Vector3.zero
+        end)
+
         self.Active = false
         self.Status = ok and "Arrived" or "Failed"
         return ok
@@ -291,35 +283,52 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
 
     self:SetCollision(false)
 
-    local cruiseY = math.max(root.Position.Y, destination.Position.Y) + self.SafeHeight
-    local rise = CFrame.new(root.Position.X, cruiseY, root.Position.Z)
-    local cruise = CFrame.new(destination.Position.X, cruiseY, destination.Position.Z)
+    local duration = math.clamp(distance / self.Speed, 0.15, 45)
+    local tween = TweenService:Create(
+        root,
+        TweenInfo.new(duration, Enum.EasingStyle.Linear),
+        {CFrame = destination}
+    )
 
-    self.Status = "Rising"
-    local ok = self:TweenRoot(root, rise)
+    self.Tween = tween
 
-    if ok then
-        root = self:GetRoot()
-        self.Status = "Cruising"
-        ok = self:TweenRoot(root, cruise)
-    end
+    local ok = pcall(function()
+        tween:Play()
+        tween.Completed:Wait()
+    end)
 
-    if ok then
-        root = self:GetRoot()
-        self.Status = "Descending"
-        ok = self:TweenRoot(root, destination)
+    if self.Tween == tween then
+        self.Tween = nil
     end
 
     self:SetCollision(true)
-    self.Active = false
 
-    root = self:GetRoot()
-    if not ok or not root then
+    if not ok then
+        self.Active = false
         self.Status = "Failed"
         return false
     end
 
+    root = self:GetRoot()
+    if not root then
+        self.Active = false
+        self.Status = "Character unavailable"
+        return false
+    end
+
     local remaining = (root.Position - destination.Position).Magnitude
+
+    -- Final correction for small replication drift.
+    if remaining <= 350 then
+        pcall(function()
+            root.CFrame = destination
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+        remaining = (root.Position - destination.Position).Magnitude
+    end
+
+    self.Active = false
     self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
     return remaining <= 60
 end
@@ -3807,7 +3816,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3e - TELEPORT ROLLBACK
+-- FLOQUITAVE 2.7.3f - CLASSIC TELEPORT RESTORE
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
