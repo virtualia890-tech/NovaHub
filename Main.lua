@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3o
+    Version: 2.7.3p
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3o",
+    Version = "2.7.3p",
 
     Width = 920,
     Height = 590,
@@ -1606,7 +1606,136 @@ local function TeleportToIsland(seaName, locationName)
     SetTeleportStatus("Teleportando...", locationName)
 
     task.spawn(function()
-        local ok = MovementService:GoTo(destination, 5, locationName)
+        -- Teleport Directory experimental route:
+        -- 1 subida única -> 2 percurso em pequenos trechos com Y fixo -> 3 descida única.
+        -- Não altera Farm/Boss nem o GoTo global.
+        local root = MovementService:GetRoot()
+        local humanoid = MovementService:GetHumanoid()
+
+        if not root then
+            SetTeleportStatus("Character unavailable", locationName)
+            return
+        end
+
+        MovementService:Stop()
+        MovementService.Active = true
+        MovementService.Target = destination
+        MovementService.DestinationName = locationName
+
+        if humanoid then
+            humanoid.Sit = false
+        end
+
+        pcall(function()
+            root.Anchored = false
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        local finalTarget = destination * CFrame.new(0, 5, 0)
+        local fixedY = math.max(root.Position.Y, finalTarget.Position.Y) + 70
+        local ok = true
+
+        MovementService:SetCollision(false)
+
+        -- Fase 1: sobe apenas uma vez.
+        MovementService.Status = "Rising"
+        SetTeleportStatus("Subindo...", locationName)
+
+        local riseTarget = CFrame.new(root.Position.X, fixedY, root.Position.Z)
+        ok = MovementService:TweenRoot(root, riseTarget)
+
+        -- Fase 2: deslocamento horizontal segmentado.
+        if ok then
+            MovementService.Status = "Cruising"
+            SetTeleportStatus("Indo para " .. locationName .. "...", locationName)
+
+            root = MovementService:GetRoot()
+
+            if root then
+                local startPosition = root.Position
+                local horizontalTarget = Vector3.new(
+                    finalTarget.Position.X,
+                    fixedY,
+                    finalTarget.Position.Z
+                )
+
+                local delta = horizontalTarget - startPosition
+                local distance = delta.Magnitude
+
+                if distance > 1 then
+                    local direction = delta.Unit
+                    local segmentLength = 28
+                    local travelled = 0
+
+                    while travelled < distance and MovementService.Active do
+                        root = MovementService:GetRoot()
+                        if not root then
+                            ok = false
+                            break
+                        end
+
+                        travelled = math.min(travelled + segmentLength, distance)
+
+                        local nextPosition
+                        if travelled >= distance then
+                            nextPosition = horizontalTarget
+                        else
+                            nextPosition = startPosition + direction * travelled
+                            nextPosition = Vector3.new(
+                                nextPosition.X,
+                                fixedY,
+                                nextPosition.Z
+                            )
+                        end
+
+                        pcall(function()
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                        end)
+
+                        ok = MovementService:TweenRoot(
+                            root,
+                            CFrame.new(nextPosition.X, fixedY, nextPosition.Z)
+                        )
+
+                        if not ok then
+                            break
+                        end
+                    end
+                end
+            else
+                ok = false
+            end
+        end
+
+        -- Fase 3: só desce depois de concluir o percurso horizontal.
+        if ok and MovementService.Active then
+            root = MovementService:GetRoot()
+
+            if root then
+                MovementService.Status = "Descending"
+                SetTeleportStatus("Descendo...", locationName)
+                ok = MovementService:TweenRoot(root, finalTarget)
+            else
+                ok = false
+            end
+        end
+
+        MovementService:SetCollision(true)
+        MovementService.Active = false
+        MovementService.Tween = nil
+
+        root = MovementService:GetRoot()
+
+        if ok and root then
+            local remaining = (root.Position - finalTarget.Position).Magnitude
+            ok = remaining <= 60
+        else
+            ok = false
+        end
+
+        MovementService.Status = ok and "Arrived" or "Failed"
         SetTeleportStatus(MovementService.Status, locationName)
 
         if ok then
@@ -3807,7 +3936,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3o - TELEPORT FULL ROLLBACK
+-- FLOQUITAVE 2.7.3p - SEGMENTED TELEPORT TEST
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
