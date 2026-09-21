@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2g
+    Version: 2.7.2h
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2g",
+    Version = "2.7.2h",
 
     Width = 920,
     Height = 590,
@@ -3780,7 +3780,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2g - LIVE BOSS SELECTOR
+-- FLOQUITAVE 2.7.2h - BOSS DETECTION FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -3814,28 +3814,49 @@ task.spawn(function()
         return workspace:FindFirstChild("Enemies")
     end
 
+    -- Boss models can contain level / [Boss] suffixes instead of using
+    -- the short display name verbatim. Match the known boss at the
+    -- beginning of the model name instead of requiring exact equality.
+    local function bossNameMatches(modelName, bossName)
+        if modelName == bossName then return true end
+        if string.sub(modelName, 1, #bossName) ~= bossName then return false end
+
+        local nextChar = string.sub(modelName, #bossName + 1, #bossName + 1)
+        return nextChar == " " or nextChar == "[" or nextChar == ""
+    end
+
     local function findBoss(name)
         local folder = enemies()
         if not folder then return nil end
-        for _,model in ipairs(folder:GetChildren()) do
-            if model.Name == name and valid(model) then
+
+        -- Descendants also covers servers/games that organize enemies
+        -- into subfolders inside Workspace.Enemies.
+        for _,model in ipairs(folder:GetDescendants()) do
+            if model:IsA("Model") and bossNameMatches(model.Name, name) and valid(model) then
                 return model
             end
         end
+
+        -- Include direct children explicitly because GetDescendants()
+        -- behavior can differ in modified game structures.
+        for _,model in ipairs(folder:GetChildren()) do
+            if model:IsA("Model") and bossNameMatches(model.Name, name) and valid(model) then
+                return model
+            end
+        end
+
         return nil
     end
 
     local function scan()
         table.clear(S.Alive)
-        local folder = enemies()
-        if not folder then return end
 
-        local knownSet = {}
-        for _,name in ipairs(KNOWN) do knownSet[name] = true end
-
-        for _,model in ipairs(folder:GetChildren()) do
-            if knownSet[model.Name] and valid(model) then
-                table.insert(S.Alive, model.Name)
+        -- Scan from our known boss catalogue instead of comparing the raw
+        -- Workspace name directly. This handles names such as:
+        -- "Stone [Lv. ...] [Boss]".
+        for _,bossName in ipairs(KNOWN) do
+            if findBoss(bossName) then
+                table.insert(S.Alive, bossName)
             end
         end
 
@@ -3974,9 +3995,13 @@ task.spawn(function()
         end
 
         rebuildMenu()
-        S.Status = #S.Alive > 0
-            and ("Found " .. tostring(#S.Alive) .. " live boss(es)")
-            or "No live boss found"
+        if not enemies() then
+            S.Status = "Workspace.Enemies not found"
+        elseif #S.Alive > 0 then
+            S.Status = "Found " .. tostring(#S.Alive) .. " live boss(es)"
+        else
+            S.Status = "No live boss found"
+        end
 
         statusValue.Text = S.Status
         selector.Text = "Select Boss: " .. (S.Selected or "") .. "   ▼"
