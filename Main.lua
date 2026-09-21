@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2n
+    Version: 2.7.2o
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2n",
+    Version = "2.7.2o",
 
     Width = 920,
     Height = 590,
@@ -2014,13 +2014,44 @@ end
 
 local function GetQuestFrame()
     local gui = LocalPlayer:FindFirstChild("PlayerGui")
-    local main = gui and gui:FindFirstChild("Main")
-    return main and main:FindFirstChild("Quest")
+    if not gui then return nil end
+
+    local main = gui:FindFirstChild("Main")
+    local direct = main and main:FindFirstChild("Quest")
+    if direct and direct:IsA("GuiObject") then
+        return direct
+    end
+
+    if main then
+        local recursive = main:FindFirstChild("Quest", true)
+        if recursive and recursive:IsA("GuiObject") then
+            return recursive
+        end
+    end
+
+    for _,obj in ipairs(gui:GetDescendants()) do
+        if obj.Name == "Quest" and obj:IsA("GuiObject") then
+            return obj
+        end
+    end
+
+    return nil
 end
 
 local function QuestVisible()
     local quest = GetQuestFrame()
-    return quest and quest.Visible == true
+    if not quest or quest.Visible ~= true then return false end
+
+    -- A child can have Visible=true while a parent container is hidden.
+    local parent = quest.Parent
+    while parent and parent ~= LocalPlayer.PlayerGui do
+        if parent:IsA("GuiObject") and parent.Visible == false then
+            return false
+        end
+        parent = parent.Parent
+    end
+
+    return true
 end
 
 local function GetQuestText()
@@ -2728,6 +2759,21 @@ local function FarmStep()
 
     if FarmState.UseTool then
         AttackTarget(target)
+    end
+
+    -- Quest completion watchdog:
+    -- once the quest UI was observed, disappearance means the mission ended.
+    -- Release ownership immediately so the next FarmStep returns to the NPC.
+    if FarmState.AutoQuest and FarmState.QuestOwnedByHub and FarmState.QuestSeenVisible then
+        if not QuestVisible() then
+            FarmState.QuestOwnedByHub = false
+            FarmState.QuestSeenVisible = false
+            FarmState.QuestRoutePending = false
+            FarmState.CurrentTarget = nil
+            FarmState.FarmAnchor = nil
+            FarmState.QuestStatus = "Quest complete - requesting next quest"
+            FarmState.Status = "Quest complete"
+        end
     end
 end
 
@@ -3780,7 +3826,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2n - DIRECT BOSS COMBAT FIX
+-- FLOQUITAVE 2.7.2o - BOSS TRAVEL + QUEST CYCLE FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -4132,6 +4178,30 @@ task.spawn(function()
         return hum ~= nil and hum.Health > 0 and bossRoot(target) ~= nil
     end
 
+    local function storedBoss(name)
+        if not name then return nil end
+        for _,model in ipairs(RS:GetChildren()) do
+            if model:IsA("Model") and bossBaseMatches(model.Name, name) then
+                local root = bossRoot(model)
+                if root then return model, root end
+            end
+        end
+        return nil
+    end
+
+    local function travelToStoredBoss(name)
+        local model, root = storedBoss(name)
+        if not model or not root then return false end
+
+        S.Status = "Travelling to spawn: " .. name
+        statusValue.Text = S.Status
+
+        -- Reference-style behavior: ReplicatedStorage supplies the boss/spawn
+        -- position until the live Workspace.Enemies copy is streamed/created.
+        MovementService:GoTo(root.CFrame, 12, "Boss Spawn:" .. name)
+        return true
+    end
+
     local function bossAttack(target)
         if not bossAlive(target) then return false end
 
@@ -4196,6 +4266,8 @@ task.spawn(function()
     -- Low-frequency worker: avoids doing boss scans/movement every rendered frame.
     task.spawn(function()
         local currentAll = nil
+        local currentAllName = nil
+        local allIndex = 1
 
         while not State.Destroyed do
             task.wait(0.20)
@@ -4211,31 +4283,42 @@ task.spawn(function()
                     -- instead of every Heartbeat, lets the tween actually finish.
                     bossMoveAndFight(target)
                 else
-                    S.Status = "Waiting for active boss: " .. S.Selected
-                    statusValue.Text = S.Status
-                end
-
-            elseif S.KillAll then
-                if not currentAll or not currentAll.Parent
-                    or not currentAll:FindFirstChildOfClass("Humanoid")
-                    or currentAll:FindFirstChildOfClass("Humanoid").Health <= 0 then
-
-                    currentAll = nil
-                    scan()
-
-                    for _,bossName in ipairs(S.Alive) do
-                        local candidate = findBoss(bossName)
-                        if candidate then
-                            currentAll = candidate
-                            break
-                        end
+                    if not travelToStoredBoss(S.Selected) then
+                        S.Status = "Waiting for active boss: " .. S.Selected
+                        statusValue.Text = S.Status
                     end
                 end
 
+            elseif S.KillAll then
+                if currentAll and not bossAlive(currentAll) then
+                    currentAll = nil
+                    currentAllName = nil
+                    allIndex += 1
+                end
+
+                if not currentAllName then
+                    scan()
+                    if #S.Alive > 0 then
+                        if allIndex > #S.Alive then allIndex = 1 end
+                        currentAllName = S.Alive[allIndex]
+                    end
+                end
+
+                if currentAllName and not currentAll then
+                    currentAll = findBoss(currentAllName)
+                end
+
                 if currentAll then
-                    S.Status = "Kill All: " .. currentAll.Name
+                    S.Status = "Kill All: " .. currentAllName
                     statusValue.Text = S.Status
                     bossMoveAndFight(currentAll)
+                elseif currentAllName then
+                    if not travelToStoredBoss(currentAllName) then
+                        S.Status = "Kill All: waiting for " .. currentAllName
+                        statusValue.Text = S.Status
+                        currentAllName = nil
+                        allIndex += 1
+                    end
                 else
                     S.Status = "Kill All: waiting for active boss"
                     statusValue.Text = S.Status
