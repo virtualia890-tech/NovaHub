@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2k
+    Version: 2.7.3
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2k",
+    Version = "2.7.3",
 
     Width = 920,
     Height = 590,
@@ -3780,201 +3780,154 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2k - BOSS FARM SEQUENTIAL FIX
--- Only LIVE bosses are shown in the dropdown.
--- Encapsulated to protect the main chunk register limit.
+-- FLOQUITAVE 2.7.3 - CLEAN BOSS FARM
+-- Reference-derived behavior, rewritten for this hub.
+-- IMPORTANT: all locals remain inside this closure to protect the
+-- main Luau chunk from the 200-local-register limit.
 -- ============================================================
 task.spawn(function()
     local S = {
-        Enabled = false,
+        Single = false,
         KillAll = false,
         Selected = nil,
-        Alive = {},
-        KillAllIndex = 1,
+        VisibleBosses = {},
+        ActiveBosses = {},
         Open = false,
-        Status = "Press Refresh Boss"
+        Status = "Refresh Boss",
+        CurrentTarget = nil,
+        LastScan = 0,
+        ScanInterval = 1.0,
+        AttackInterval = 0.10,
+        LastAttack = 0
     }
-
-    local KNOWN = {
-        "The Gorilla King","Bobby","Yeti","Mob Leader","Vice Admiral","Warden",
-        "Chief Warden","Swan","Magma Admiral","Fishman Lord","Wysper","Thunder God",
-        "Cyborg","Saber Expert",
-        "Diamond","Jeremy","Fajita","Don Swan","Smoke Admiral","Cursed Captain",
-        "Darkbeard","Order","Awakened Ice Admiral","Tide Keeper",
-        "Stone","Island Empress","Kilo Admiral","Captain Elephant","Beautiful Pirate",
-        "rip_indra True Form","Longma","Soul Reaper","Cake Queen","Cake Prince","Dough King"
-    }
-
-    local function valid(model)
-        if not model or not model:IsA("Model") then return false end
-        local hum = model:FindFirstChildOfClass("Humanoid")
-        local root = model:FindFirstChild("HumanoidRootPart")
-        return hum ~= nil and root ~= nil and hum.Health > 0
-    end
-
-    local function enemies()
-        return workspace:FindFirstChild("Enemies")
-    end
 
     local RS = game:GetService("ReplicatedStorage")
 
-    local function normalizeBossName(raw)
-        -- Keep the exact replicated model name for selection/farming.
-        return tostring(raw or "")
-    end
+    -- Names taken from the supplied reference sources.
+    local KNOWN = {
+        "The Saw","The Gorilla King","Bobby","Yeti","Mob Leader","Vice Admiral",
+        "Warden","Chief Warden","Swan","Magma Admiral","Fishman Lord","Wysper",
+        "Thunder God","Cyborg","Saber Expert","Ice Admiral","Greybeard",
+        "Diamond","Jeremy","Fajita","Don Swan","Smoke Admiral","Cursed Captain",
+        "Darkbeard","Order","Awakened Ice Admiral","Tide Keeper",
+        "Stone","Island Empress","Kilo Admiral","Rocket Admiral","Captain Elephant",
+        "Beautiful Pirate","rip_indra True Form","Longma","Soul Reaper",
+        "Cake Queen","Cake Prince","Dough King"
+    }
 
-    local function looksLikeBoss(model)
-        if not model or not model:IsA("Model") then return false end
-
-        local n = string.lower(model.Name)
-        if string.find(n, "boss", 1, true) then return true end
-
-        -- Some boss templates use short names without "[Boss]" in the model name.
-        for _,base in ipairs(KNOWN) do
-            if model.Name == base or string.sub(model.Name, 1, #base) == base then
-                return true
-            end
-        end
-        return false
-    end
-
-    local function liveModel(model)
-        if not model or not model:IsA("Model") then return false end
-        local hum = model:FindFirstChildOfClass("Humanoid")
-        local root = model:FindFirstChild("HumanoidRootPart")
+    local function rootOf(model)
+        if not model then return nil end
+        return model:FindFirstChild("HumanoidRootPart")
             or model:FindFirstChild("UpperTorso")
             or model:FindFirstChild("Torso")
-        return hum ~= nil and root ~= nil and hum.Health > 0
     end
 
-    local function bossBaseMatches(modelName, selectedName)
-        if modelName == selectedName then return true end
-        for _,base in ipairs(KNOWN) do
-            local a = string.sub(modelName, 1, #base) == base
-            local b = string.sub(selectedName, 1, #base) == base
-            if a and b then return true end
-        end
-        return false
+    local function alive(model)
+        if not model or not model:IsA("Model") then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        return hum ~= nil and hum.Health > 0 and rootOf(model) ~= nil
     end
 
-    local function findBoss(name)
-        if not name then return nil end
+    local function matches(raw, baseName)
+        if raw == baseName then return true end
+        if string.sub(raw, 1, #baseName) ~= baseName then return false end
+        local c = string.sub(raw, #baseName + 1, #baseName + 1)
+        return c == "" or c == " " or c == "["
+    end
 
-        -- First use the normal enemy container.
-        local folder = enemies()
-        if folder then
-            for _,model in ipairs(folder:GetDescendants()) do
-                if model:IsA("Model") and bossBaseMatches(model.Name, name) and liveModel(model) then
-                    return model
-                end
-            end
-            for _,model in ipairs(folder:GetChildren()) do
-                if model:IsA("Model") and bossBaseMatches(model.Name, name) and liveModel(model) then
-                    return model
-                end
-            end
+    local function knownBase(raw)
+        for _,baseName in ipairs(KNOWN) do
+            if matches(raw, baseName) then return baseName end
         end
+        return nil
+    end
 
-        -- Fallback for custom Sea 1 / Sea 2 / Sea 3 structures:
-        -- find the live replicated boss anywhere in Workspace.
-        for _,model in ipairs(workspace:GetDescendants()) do
-            if model:IsA("Model")
-                and bossBaseMatches(model.Name, name)
-                and liveModel(model)
-                and not Players:GetPlayerFromCharacter(model) then
+    local function enemyFolder()
+        return workspace:FindFirstChild("Enemies")
+    end
+
+    -- Cheap active lookup: only Workspace.Enemies, never Workspace:GetDescendants().
+    local function activeBoss(baseName)
+        local folder = enemyFolder()
+        if not folder or not baseName then return nil end
+
+        for _,model in ipairs(folder:GetChildren()) do
+            if model:IsA("Model") and matches(model.Name, baseName) and alive(model) then
                 return model
             end
         end
 
+        -- Some custom copies group enemies one folder deeper.
+        for _,group in ipairs(folder:GetChildren()) do
+            if group:IsA("Folder") or group:IsA("Model") then
+                for _,model in ipairs(group:GetChildren()) do
+                    if model:IsA("Model") and matches(model.Name, baseName) and alive(model) then
+                        return model
+                    end
+                end
+            end
+        end
         return nil
     end
 
-    local function bossRoot(model)
-        return model and (
-            model:FindFirstChild("HumanoidRootPart")
-            or model:FindFirstChild("UpperTorso")
-            or model:FindFirstChild("Torso")
-        )
-    end
-
-    local routeTarget = nil
-    local routeAt = 0
-
-    local function goAndAttackBoss(target)
-        if not target or not liveModel(target) then return end
-
-        local myRoot = GetCharacterRoot and GetCharacterRoot()
-        local targetRoot = bossRoot(target)
-        if not myRoot or not targetRoot then return end
-
-        local distance = (myRoot.Position - targetRoot.Position).Magnitude
-
-        -- Do not restart the movement tween every Heartbeat.
-        -- Refresh the route only when target changes, the previous route ended,
-        -- or enough time elapsed for a moving boss.
-        if distance > 55 then
-            if routeTarget ~= target or not MovementService:IsMoving() or (os.clock() - routeAt) > 1.25 then
-                routeTarget = target
-                routeAt = os.clock()
-                MoveToTarget(target)
+    local function replicatedBoss(baseName)
+        if not baseName then return nil end
+        for _,obj in ipairs(RS:GetChildren()) do
+            if obj:IsA("Model") and matches(obj.Name, baseName) and rootOf(obj) then
+                return obj
             end
-            return
         end
-
-        -- Close enough: stop the travel tween and use the same stable combat
-        -- routine already used by the normal farms.
-        if MovementService:IsMoving() then
-            MovementService:Stop()
-        end
-        routeTarget = target
-        EquipFirstTool()
-        AttackTarget(target)
+        return nil
     end
 
     local function addUnique(list, seen, name)
-        name = normalizeBossName(name)
-        if name ~= "" and not seen[name] then
+        if name and not seen[name] then
             seen[name] = true
             table.insert(list, name)
         end
     end
 
-    local function scan()
-        table.clear(S.Alive)
+    -- ReplicatedStorage is used for discovery, as in the references.
+    -- Workspace.Enemies is separately cached as the actually attackable target.
+    local function scanBosses()
+        table.clear(S.VisibleBosses)
+        table.clear(S.ActiveBosses)
+
         local seen = {}
+        local folder = enemyFolder()
 
-        -- Reference-compatible detection:
-        -- 1) active bosses currently in Workspace.Enemies
-        local folder = enemies()
         if folder then
-            for _,model in ipairs(folder:GetDescendants()) do
-                if looksLikeBoss(model) and liveModel(model) then
-                    addUnique(S.Alive, seen, model.Name)
+            local function inspect(model)
+                if model:IsA("Model") and alive(model) then
+                    local baseName = knownBase(model.Name)
+                    if baseName then
+                        S.ActiveBosses[baseName] = model
+                        addUnique(S.VisibleBosses, seen, baseName)
+                    end
                 end
             end
-            for _,model in ipairs(folder:GetChildren()) do
-                if looksLikeBoss(model) and liveModel(model) then
-                    addUnique(S.Alive, seen, model.Name)
+
+            for _,obj in ipairs(folder:GetChildren()) do
+                inspect(obj)
+                if obj:IsA("Folder") or obj:IsA("Model") then
+                    for _,sub in ipairs(obj:GetChildren()) do inspect(sub) end
                 end
             end
         end
 
-        -- 2) replicated boss models. The reference hubs supplied by the user
-        -- also build/refresh their boss selector from ReplicatedStorage.
-        -- This catches bosses that the server exposes there even when the
-        -- Workspace copy is not currently streamed to this client.
-        for _,model in ipairs(RS:GetChildren()) do
-            if looksLikeBoss(model) then
-                addUnique(S.Alive, seen, model.Name)
+        for _,obj in ipairs(RS:GetChildren()) do
+            if obj:IsA("Model") then
+                local baseName = knownBase(obj.Name)
+                if baseName then addUnique(S.VisibleBosses, seen, baseName) end
             end
         end
 
-        table.sort(S.Alive)
+        table.sort(S.VisibleBosses)
+        S.LastScan = os.clock()
     end
 
-    local _, statusValue = Card(CombatPage, "BOSS STATUS", "Press Refresh Boss")
+    local _, statusValue = Card(CombatPage, "BOSS STATUS", "Refresh Boss")
 
-    -- Select Boss row, visually similar to the reference.
     local selectorHolder = Create("Frame", {
         Size = UDim2.new(1,0,0,48),
         BackgroundColor3 = Theme.Card,
@@ -3996,7 +3949,6 @@ task.spawn(function()
     }, selectorHolder)
     Corner(selector, 7)
 
-    -- Expandable list directly below the selector.
     local menu = Create("Frame", {
         Size = UDim2.new(1,0,0,0),
         BackgroundColor3 = Theme.Card,
@@ -4030,32 +3982,31 @@ task.spawn(function()
 
     local function rebuildMenu()
         for _,child in ipairs(scroll:GetChildren()) do
-            if child:IsA("TextButton") or child:IsA("TextLabel") then
-                child:Destroy()
-            end
+            if child:IsA("TextButton") or child:IsA("TextLabel") then child:Destroy() end
         end
 
-        if #S.Alive == 0 then
+        if #S.VisibleBosses == 0 then
             Create("TextLabel", {
                 Size = UDim2.new(1,-4,0,30),
                 BackgroundTransparency = 1,
-                Text = "No live boss found",
+                Text = "No boss found",
                 Font = Enum.Font.Gotham,
                 TextSize = 11,
                 TextColor3 = Theme.SubText,
                 TextXAlignment = Enum.TextXAlignment.Left
             }, scroll)
         else
-            for _,bossName in ipairs(S.Alive) do
+            for _,bossName in ipairs(S.VisibleBosses) do
                 local name = bossName
+                local activeNow = S.ActiveBosses[name] ~= nil
                 local option = Create("TextButton", {
                     Size = UDim2.new(1,-4,0,30),
                     BackgroundColor3 = Theme.Card,
                     BorderSizePixel = 0,
-                    Text = name,
+                    Text = (activeNow and "● " or "○ ") .. name,
                     Font = Enum.Font.GothamBold,
                     TextSize = 11,
-                    TextColor3 = Theme.Text,
+                    TextColor3 = activeNow and Theme.Text or Theme.SubText,
                     TextXAlignment = Enum.TextXAlignment.Left,
                     AutoButtonColor = false
                 }, scroll)
@@ -4064,7 +4015,8 @@ task.spawn(function()
 
                 Connect(option.MouseButton1Click, function()
                     S.Selected = name
-                    S.Status = "Selected: " .. name
+                    S.CurrentTarget = nil
+                    S.Status = activeNow and ("Selected / ACTIVE: "..name) or ("Selected: "..name)
                     statusValue.Text = S.Status
                     closeMenu()
                 end)
@@ -4081,62 +4033,41 @@ task.spawn(function()
     end)
 
     Connect(selector.MouseButton1Click, function()
-        if S.Open then
-            closeMenu()
-            return
-        end
-
+        if S.Open then closeMenu() return end
+        scanBosses()
         rebuildMenu()
         S.Open = true
         menu.Visible = true
-        local wantedHeight = math.clamp((#S.Alive * 33) + 16, 50, 210)
-        menu.Size = UDim2.new(1,0,0,wantedHeight)
+        menu.Size = UDim2.new(1,0,0,math.clamp((#S.VisibleBosses * 33)+16,50,210))
         selector.Text = "Select Boss: " .. (S.Selected or "") .. "   ▲"
     end)
 
     ActionButton(CombatPage, "Refresh Boss", function()
-        scan()
-
-        -- If selected boss died/disappeared, clear the selection.
-        if S.Selected and not findBoss(S.Selected) then
-            -- Keep the selection. The boss may be represented in ReplicatedStorage
-            -- and become active in Workspace shortly after.
-        end
-
+        scanBosses()
         rebuildMenu()
-        if #S.Alive > 0 then
-            S.Status = "Found " .. tostring(#S.Alive) .. " boss(es)"
-        elseif not enemies() then
-            S.Status = "Workspace.Enemies not found"
-        else
-            S.Status = "No boss found"
-        end
-
+        S.Status = #S.VisibleBosses > 0
+            and ("Found "..tostring(#S.VisibleBosses).." boss(es)")
+            or "No boss found"
         statusValue.Text = S.Status
-        selector.Text = "Select Boss: " .. (S.Selected or "") .. "   ▼"
         Notify("Boss Farm", S.Status)
     end)
 
     Toggle(
         CombatPage,
         "Auto Farm Boss",
-        "Automatically attack the selected live boss",
+        "Travel to and kill the selected boss",
         false,
         function(enabled)
-            S.Enabled = enabled
-
+            S.Single = enabled
             if enabled then
                 S.KillAll = false
-                if S.Selected then
-                    S.Status = "Auto Farm ON: " .. S.Selected
-                else
-                    S.Status = "Select a live boss first"
-                end
+                S.CurrentTarget = nil
+                S.Status = S.Selected and ("Auto Farm: "..S.Selected) or "Select a boss first"
             else
                 S.Status = "Auto Farm Boss OFF"
+                S.CurrentTarget = nil
                 MovementService:Stop()
             end
-
             statusValue.Text = S.Status
         end
     )
@@ -4144,92 +4075,143 @@ task.spawn(function()
     Toggle(
         CombatPage,
         "Kill All Boss",
-        "Kill every detected boss one by one",
+        "Kill active bosses one by one",
         false,
         function(enabled)
             S.KillAll = enabled
-            S.KillAllIndex = 1
-            routeTarget = nil
-
             if enabled then
-                -- Kill All has priority over the single selected-boss mode.
-                S.Enabled = false
+                S.Single = false
+                S.CurrentTarget = nil
+                scanBosses()
                 S.Status = "Kill All Boss ON"
-                scan()
-                rebuildMenu()
             else
                 S.Status = "Kill All Boss OFF"
+                S.CurrentTarget = nil
                 MovementService:Stop()
             end
             statusValue.Text = S.Status
         end
     )
 
-    -- Initial scan so opening Select Boss already has useful data.
-    scan()
+    local function chooseAllTarget()
+        -- Keep the current boss until dead. Do not switch every tick.
+        if S.CurrentTarget and alive(S.CurrentTarget) then
+            return S.CurrentTarget, knownBase(S.CurrentTarget.Name)
+        end
+
+        S.CurrentTarget = nil
+        for _,name in ipairs(S.VisibleBosses) do
+            local target = S.ActiveBosses[name]
+            if target and alive(target) then
+                S.CurrentTarget = target
+                return target, name
+            end
+        end
+        return nil, nil
+    end
+
+    local function fight(target, name)
+        if not target or not alive(target) then return end
+        local tr = rootOf(target)
+        local me = GetCharacterRoot()
+        if not tr or not me then return end
+
+        local distance = (me.Position - tr.Position).Magnitude
+
+        -- Reference behavior: travel to the boss/model position first.
+        -- Use one blocking route call, not a Heartbeat restart storm.
+        if distance > 45 then
+            S.Status = "Going to: "..name
+            statusValue.Text = S.Status
+            MovementService:GoTo(
+                CFrame.new((tr.CFrame * CFrame.new(0,30,0)).Position, tr.Position),
+                0,
+                "Boss:"..name
+            )
+            return
+        end
+
+        -- Close enough: stop travel, equip the same fighting style used by
+        -- the stable farms, stay above the boss, and attack at a controlled rate.
+        MovementService:Stop()
+        pcall(function()
+            tr.CanCollide = false
+        end)
+
+        local desired = tr.CFrame * CFrame.new(0,30,0)
+        pcall(function()
+            me.CFrame = CFrame.new(desired.Position, tr.Position)
+        end)
+
+        EquipFirstTool()
+
+        local now = os.clock()
+        if now - S.LastAttack >= S.AttackInterval then
+            S.LastAttack = now
+            AttackTarget(target)
+        end
+
+        S.Status = "Fighting: "..name
+        statusValue.Text = S.Status
+    end
+
+    scanBosses()
     rebuildMenu()
 
-    local lastAllRefresh = 0
+    -- Deliberately NOT Heartbeat. 10 checks/sec is enough for farming and
+    -- prevents Workspace scans/movement work from destroying FPS.
+    task.spawn(function()
+        while not State.Destroyed do
+            task.wait(0.10)
 
-    RunService.Heartbeat:Connect(function()
-        -- MODE 1: Kill All Boss.
-        -- Re-scan periodically, choose one active boss, kill it completely,
-        -- then advance to the next one.
-        if S.KillAll then
-            if os.clock() - lastAllRefresh > 1.5 then
-                lastAllRefresh = os.clock()
-                scan()
+            if not S.Single and not S.KillAll then
+                continue
             end
 
-            local active = {}
-            for _,bossName in ipairs(S.Alive) do
-                if findBoss(bossName) then
-                    table.insert(active, bossName)
+            if os.clock() - S.LastScan >= S.ScanInterval then
+                scanBosses()
+            end
+
+            if S.KillAll then
+                local target, name = chooseAllTarget()
+                if target then
+                    fight(target, name)
+                else
+                    S.Status = "Kill All: waiting for active boss"
+                    statusValue.Text = S.Status
+                end
+            elseif S.Single then
+                if not S.Selected then
+                    S.Status = "Select a boss first"
+                    statusValue.Text = S.Status
+                    continue
+                end
+
+                local target = S.ActiveBosses[S.Selected]
+                if not target or not alive(target) then
+                    target = activeBoss(S.Selected)
+                    S.ActiveBosses[S.Selected] = target
+                end
+
+                if target then
+                    S.CurrentTarget = target
+                    fight(target, S.Selected)
+                else
+                    -- If the reference/template exists in ReplicatedStorage,
+                    -- travel toward its replicated position while waiting for
+                    -- the active Workspace.Enemies instance.
+                    local template = replicatedBoss(S.Selected)
+                    local rr = rootOf(template)
+                    if rr then
+                        S.Status = "Going to spawn: "..S.Selected
+                        statusValue.Text = S.Status
+                        MovementService:GoTo(rr.CFrame * CFrame.new(5,10,2), 0, "BossSpawn:"..S.Selected)
+                    else
+                        S.Status = "Waiting for: "..S.Selected
+                        statusValue.Text = S.Status
+                    end
                 end
             end
-
-            if #active == 0 then
-                S.Status = "Kill All: waiting for live bosses"
-                statusValue.Text = S.Status
-                return
-            end
-
-            if S.KillAllIndex > #active then
-                S.KillAllIndex = 1
-            end
-
-            local bossName = active[S.KillAllIndex]
-            local target = findBoss(bossName)
-
-            if not target then
-                S.KillAllIndex += 1
-                routeTarget = nil
-                return
-            end
-
-            S.Status = "Kill All: " .. bossName .. " (" .. tostring(S.KillAllIndex) .. "/" .. tostring(#active) .. ")"
-            statusValue.Text = S.Status
-            goAndAttackBoss(target)
-
-            -- Once this boss dies/disappears, next Heartbeat's active list
-            -- naturally removes it. Keep the same index so the next entry
-            -- slides into its place; wrap only when needed.
-            return
         end
-
-        -- MODE 2: normal selected boss farm.
-        if not S.Enabled or not S.Selected then return end
-
-        local target = findBoss(S.Selected)
-        if not target then
-            S.Status = "Waiting for active boss: " .. S.Selected
-            statusValue.Text = S.Status
-            routeTarget = nil
-            return
-        end
-
-        S.Status = "Farming: " .. S.Selected
-        statusValue.Text = S.Status
-        goAndAttackBoss(target)
     end)
 end)
