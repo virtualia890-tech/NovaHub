@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3b
+    Version: 2.7.3c
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3b",
+    Version = "2.7.3c",
 
     Width = 920,
     Height = 590,
@@ -3813,7 +3813,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3b - BOSS HEIGHT + QUEST TIMING FIX
+-- FLOQUITAVE 2.7.3c - REMOVE BOSS HEIGHT
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -3839,8 +3839,6 @@ task.spawn(function()
 
     -- Spawn routes taken from the supplied boss reference.
     -- Unknown/custom bosses still fall back to their ReplicatedStorage model.
-    local BOSS_SAFE_HEIGHT = 16
-
     local BOSS_ROUTE = {
         ["The Gorilla King"] = CFrame.new(-1088.75977,8.13463783,-488.559906),
         ["Bobby"] = CFrame.new(-1087.37610,46.94941,4040.14624),
@@ -4217,7 +4215,7 @@ task.spawn(function()
         MovementService.Status = "Boss travel"
         MovementService:SetCollision(false)
 
-        local target = destination * CFrame.new(0, BOSS_SAFE_HEIGHT, 0)
+        local target = destination * CFrame.new(0, 12, 0)
         local ok = MovementService:TweenRoot(me, target)
 
         MovementService:SetCollision(true)
@@ -4278,7 +4276,7 @@ task.spawn(function()
 
         if distance > 42 then
             local destination = CFrame.new(
-                (tr.CFrame * CFrame.new(0, BOSS_SAFE_HEIGHT, 0)).Position,
+                (tr.CFrame * CFrame.new(0, FarmState.Distance, 0)).Position,
                 tr.Position
             )
             bossDirectTravel(destination, "Boss Target:" .. target.Name)
@@ -4291,7 +4289,7 @@ task.spawn(function()
         -- normal/special farms, but without normal-farm target validation.
         pcall(function()
             me.CFrame = CFrame.new(
-                (tr.CFrame * CFrame.new(0, BOSS_SAFE_HEIGHT, 0)).Position,
+                (tr.CFrame * CFrame.new(0, FarmState.Distance, 0)).Position,
                 tr.Position
             )
         end)
