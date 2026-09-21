@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.2h
+    Version: 2.7.2i
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.2h",
+    Version = "2.7.2i",
 
     Width = 920,
     Height = 590,
@@ -3780,7 +3780,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.2h - BOSS DETECTION FIX
+-- FLOQUITAVE 2.7.2i - REFERENCE BOSS DETECTION
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
@@ -3814,49 +3814,100 @@ task.spawn(function()
         return workspace:FindFirstChild("Enemies")
     end
 
-    -- Boss models can contain level / [Boss] suffixes instead of using
-    -- the short display name verbatim. Match the known boss at the
-    -- beginning of the model name instead of requiring exact equality.
-    local function bossNameMatches(modelName, bossName)
-        if modelName == bossName then return true end
-        if string.sub(modelName, 1, #bossName) ~= bossName then return false end
+    local RS = game:GetService("ReplicatedStorage")
 
-        local nextChar = string.sub(modelName, #bossName + 1, #bossName + 1)
-        return nextChar == " " or nextChar == "[" or nextChar == ""
+    local function normalizeBossName(raw)
+        -- Keep the exact replicated model name for selection/farming.
+        return tostring(raw or "")
+    end
+
+    local function looksLikeBoss(model)
+        if not model or not model:IsA("Model") then return false end
+
+        local n = string.lower(model.Name)
+        if string.find(n, "boss", 1, true) then return true end
+
+        -- Some boss templates use short names without "[Boss]" in the model name.
+        for _,base in ipairs(KNOWN) do
+            if model.Name == base or string.sub(model.Name, 1, #base) == base then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function liveModel(model)
+        if not model or not model:IsA("Model") then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local root = model:FindFirstChild("HumanoidRootPart")
+        return hum ~= nil and root ~= nil and hum.Health > 0
+    end
+
+    local function bossBaseMatches(modelName, selectedName)
+        if modelName == selectedName then return true end
+
+        -- Allows a UI selection such as "Stone [Lv. 1550] [Boss]"
+        -- to still match a model named "Stone", and vice versa.
+        for _,base in ipairs(KNOWN) do
+            local a = string.sub(modelName, 1, #base) == base
+            local b = string.sub(selectedName, 1, #base) == base
+            if a and b then return true end
+        end
+        return false
     end
 
     local function findBoss(name)
         local folder = enemies()
-        if not folder then return nil end
+        if not folder or not name then return nil end
 
-        -- Descendants also covers servers/games that organize enemies
-        -- into subfolders inside Workspace.Enemies.
         for _,model in ipairs(folder:GetDescendants()) do
-            if model:IsA("Model") and bossNameMatches(model.Name, name) and valid(model) then
+            if model:IsA("Model") and bossBaseMatches(model.Name, name) and liveModel(model) then
                 return model
             end
         end
-
-        -- Include direct children explicitly because GetDescendants()
-        -- behavior can differ in modified game structures.
         for _,model in ipairs(folder:GetChildren()) do
-            if model:IsA("Model") and bossNameMatches(model.Name, name) and valid(model) then
+            if model:IsA("Model") and bossBaseMatches(model.Name, name) and liveModel(model) then
                 return model
             end
         end
-
         return nil
+    end
+
+    local function addUnique(list, seen, name)
+        name = normalizeBossName(name)
+        if name ~= "" and not seen[name] then
+            seen[name] = true
+            table.insert(list, name)
+        end
     end
 
     local function scan()
         table.clear(S.Alive)
+        local seen = {}
 
-        -- Scan from our known boss catalogue instead of comparing the raw
-        -- Workspace name directly. This handles names such as:
-        -- "Stone [Lv. ...] [Boss]".
-        for _,bossName in ipairs(KNOWN) do
-            if findBoss(bossName) then
-                table.insert(S.Alive, bossName)
+        -- Reference-compatible detection:
+        -- 1) active bosses currently in Workspace.Enemies
+        local folder = enemies()
+        if folder then
+            for _,model in ipairs(folder:GetDescendants()) do
+                if looksLikeBoss(model) and liveModel(model) then
+                    addUnique(S.Alive, seen, model.Name)
+                end
+            end
+            for _,model in ipairs(folder:GetChildren()) do
+                if looksLikeBoss(model) and liveModel(model) then
+                    addUnique(S.Alive, seen, model.Name)
+                end
+            end
+        end
+
+        -- 2) replicated boss models. The reference hubs supplied by the user
+        -- also build/refresh their boss selector from ReplicatedStorage.
+        -- This catches bosses that the server exposes there even when the
+        -- Workspace copy is not currently streamed to this client.
+        for _,model in ipairs(RS:GetChildren()) do
+            if looksLikeBoss(model) then
+                addUnique(S.Alive, seen, model.Name)
             end
         end
 
@@ -3995,12 +4046,12 @@ task.spawn(function()
         end
 
         rebuildMenu()
-        if not enemies() then
+        if #S.Alive > 0 then
+            S.Status = "Found " .. tostring(#S.Alive) .. " boss(es)"
+        elseif not enemies() then
             S.Status = "Workspace.Enemies not found"
-        elseif #S.Alive > 0 then
-            S.Status = "Found " .. tostring(#S.Alive) .. " live boss(es)"
         else
-            S.Status = "No live boss found"
+            S.Status = "No boss found"
         end
 
         statusValue.Text = S.Status
@@ -4040,7 +4091,7 @@ task.spawn(function()
 
         local target = findBoss(S.Selected)
         if not target then
-            S.Status = "Boss gone: press Refresh Boss"
+            S.Status = "Waiting for active boss: " .. S.Selected
             statusValue.Text = S.Status
             return
         end
