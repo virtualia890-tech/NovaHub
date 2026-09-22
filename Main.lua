@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3u
+    Version: 2.7.3v
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3u",
+    Version = "2.7.3v",
 
     Width = 920,
     Height = 590,
@@ -3629,125 +3629,135 @@ task.spawn(function()
         return true
     end
 
-    -- UI is created inside this closure: no top-level locals added.
+    -- Simple Mastery UI.
     Section(
         FarmPage,
         "Mastery Farm",
-        "Haunted Castle Bones • Melee / Sword / Gun / Blox Fruit"
+        "Simple and functional • Bones / Haunted Castle"
     )
 
     local masteryStatusCard, masteryStatusValue =
         Card(FarmPage, "MASTERY STATUS", "Idle")
 
-    local masteryTypeButton =
-        ActionButton(
-            FarmPage,
-            "Mastery Type: Blox Fruit",
-            function()
-                local order = {
-                    "Melee",
-                    "Sword",
-                    "Gun",
-                    "Blox Fruit"
-                }
+    local methodHolder = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 52),
+        BackgroundColor3 = Theme.Card,
+        BorderSizePixel = 0
+    }, FarmPage)
 
-                local current = 1
+    Corner(methodHolder, 11)
+    Stroke(methodHolder, Theme.Secondary, 0.30)
 
-                for index, value in ipairs(order) do
-                    if value == M.Type then
-                        current = index
-                        break
-                    end
-                end
+    local methodButton = Create("TextButton", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false
+    }, methodHolder)
 
-                M.Type = order[(current % #order) + 1]
-                M.Target = nil
-                M.SkillIndex = 1
-                M.LastSkill = 0
+    local methodLabel = Create("TextLabel", {
+        Position = UDim2.new(0, 14, 0, 0),
+        Size = UDim2.new(1, -56, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "Select Method Farm Mastery: Blox Fruit",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, methodHolder)
 
-                masteryTypeButton.Text =
-                    "Mastery Type: " .. M.Type
+    local methodArrow = Create("TextLabel", {
+        Position = UDim2.new(1, -34, 0, 0),
+        Size = UDim2.new(0, 20, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "›",
+        Font = Enum.Font.GothamBold,
+        TextSize = 20,
+        TextColor3 = Theme.Text
+    }, methodHolder)
 
-                Notify(
-                    "Mastery",
-                    "Type: " .. M.Type
-                )
-            end
-        )
+    local methodList = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundColor3 = Theme.Card,
+        BorderSizePixel = 0,
+        Visible = false
+    }, FarmPage)
+
+    Corner(methodList, 11)
+    Stroke(methodList, Theme.Secondary, 0.30)
+
+    local methodLayout = Create("UIListLayout", {
+        Padding = UDim.new(0, 2),
+        SortOrder = Enum.SortOrder.LayoutOrder
+    }, methodList)
+
+    local methodPadding = Create("UIPadding", {
+        PaddingTop = UDim.new(0, 8),
+        PaddingBottom = UDim.new(0, 8),
+        PaddingLeft = UDim.new(0, 8),
+        PaddingRight = UDim.new(0, 8)
+    }, methodList)
+
+    local methodOpen = false
+    local methodOrder = {"Blox Fruit", "Gun", "Sword", "Melee"}
+
+    local function refreshMethodLabel()
+        methodLabel.Text = "Select Method Farm Mastery: " .. tostring(M.Type)
+        methodArrow.Text = methodOpen and "⌄" or "›"
+    end
+
+    local function selectMethod(value)
+        M.Type = value
+        M.Target = nil
+        M.SkillIndex = 1
+        M.LastSkill = 0
+        methodOpen = false
+        methodList.Visible = false
+        refreshMethodLabel()
+        Notify("Mastery", "Method: " .. value)
+    end
+
+    Connect(methodButton.MouseButton1Click, function()
+        methodOpen = not methodOpen
+        methodList.Visible = methodOpen
+        refreshMethodLabel()
+    end)
+
+    for _, option in ipairs(methodOrder) do
+        local item = Create("TextButton", {
+            Size = UDim2.new(1, 0, 0, 34),
+            BackgroundColor3 = Theme.Secondary,
+            BorderSizePixel = 0,
+            Text = option,
+            Font = Enum.Font.GothamBold,
+            TextSize = 12,
+            TextColor3 = Theme.Text,
+            AutoButtonColor = false
+        }, methodList)
+
+        Corner(item, 8)
+        AddHoverEffect(item)
+
+        Connect(item.MouseButton1Click, function()
+            selectMethod(option)
+        end)
+    end
+
+    refreshMethodLabel()
 
     ValueBox(
         FarmPage,
-        "Mastery Finisher HP %",
+        "Health %",
         M.KillPercent,
         function(value)
-            M.KillPercent =
-                math.clamp(value, 5, 90)
+            M.KillPercent = math.clamp(value, 5, 90)
         end
     )
 
     Toggle(
         FarmPage,
-        "Mastery Skill Z",
-        "Use Z with the selected mastery item.",
-        true,
-        function(enabled)
-            M.SkillZ = enabled
-        end
-    )
-
-    Toggle(
-        FarmPage,
-        "Mastery Skill X",
-        "Use X with the selected mastery item.",
-        true,
-        function(enabled)
-            M.SkillX = enabled
-        end
-    )
-
-    Toggle(
-        FarmPage,
-        "Mastery Skill C",
-        "Use C with the selected mastery item.",
-        true,
-        function(enabled)
-            M.SkillC = enabled
-        end
-    )
-
-    Toggle(
-        FarmPage,
-        "Mastery Skill V",
-        "Use V with the selected mastery item.",
-        true,
-        function(enabled)
-            M.SkillV = enabled
-        end
-    )
-
-    Toggle(
-        FarmPage,
-        "Mastery Skill F",
-        "Optional: some fruits use F for movement.",
-        false,
-        function(enabled)
-            M.SkillF = enabled
-        end
-    )
-
-    Toggle(
-        FarmPage,
-        "Hold Skills",
-        "Hold the selected skill briefly before releasing.",
-        false,
-        function(enabled)
-            M.HoldSkills = enabled
-        end
-    )
-
-    Toggle(
-        FarmPage,
-        "Auto Mastery",
+        "Farm Mastery",
         "Farm Reborn Skeleton, Living Zombie, Demonic Soul and Posessed Mummy.",
         false,
         function(enabled)
@@ -3758,7 +3768,6 @@ task.spawn(function()
             M.LastSkill = 0
 
             if enabled then
-                -- Prevent old farm controllers from competing with mastery movement.
                 FarmState.Enabled = false
                 FarmState.AutoCakePrince = false
                 FarmState.AutoBone = false
@@ -4611,7 +4620,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3u - MASTERY STABLE BONES
+-- FLOQUITAVE 2.7.3v - MASTERY SIMPLE UI
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
