@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3q
+    Version: 2.7.3r
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3q",
+    Version = "2.7.3r",
 
     Width = 920,
     Height = 590,
@@ -239,6 +239,121 @@ function MovementService:TweenRoot(root, destination)
     end
 
     return ok and self.Active
+end
+
+function MovementService:GoSegmented(targetCFrame, yOffset, destinationName)
+    local root = self:GetRoot()
+    local humanoid = self:GetHumanoid()
+
+    if not root or not targetCFrame then
+        self.Status = "Character unavailable"
+        return false
+    end
+
+    self:Stop()
+    self.Active = true
+    self.Target = targetCFrame
+    self.DestinationName = destinationName or "Segmented Target"
+
+    if humanoid then
+        humanoid.Sit = false
+    end
+
+    pcall(function()
+        root.Anchored = false
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+
+    local destination = targetCFrame * CFrame.new(0, yOffset or 3, 0)
+    local fixedY = math.max(root.Position.Y, destination.Position.Y) + 70
+    local ok = true
+
+    self:SetCollision(false)
+
+    self.Status = "Rising"
+    ok = self:TweenRoot(
+        root,
+        CFrame.new(root.Position.X, fixedY, root.Position.Z)
+    )
+
+    if ok and self.Active then
+        root = self:GetRoot()
+
+        if root then
+            self.Status = "Cruising"
+
+            local startPosition = root.Position
+            local horizontalTarget = Vector3.new(
+                destination.Position.X,
+                fixedY,
+                destination.Position.Z
+            )
+
+            local delta = horizontalTarget - startPosition
+            local total = delta.Magnitude
+
+            if total > 1 then
+                local direction = delta.Unit
+                local travelled = 0
+
+                while travelled < total and self.Active do
+                    root = self:GetRoot()
+                    if not root then
+                        ok = false
+                        break
+                    end
+
+                    travelled = math.min(travelled + 28, total)
+
+                    local nextPosition
+                    if travelled >= total then
+                        nextPosition = horizontalTarget
+                    else
+                        nextPosition = startPosition + direction * travelled
+                        nextPosition = Vector3.new(
+                            nextPosition.X,
+                            fixedY,
+                            nextPosition.Z
+                        )
+                    end
+
+                    pcall(function()
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                    end)
+
+                    ok = self:TweenRoot(
+                        root,
+                        CFrame.new(nextPosition.X, fixedY, nextPosition.Z)
+                    )
+
+                    if not ok then
+                        break
+                    end
+                end
+            end
+        else
+            ok = false
+        end
+    end
+
+    if ok and self.Active then
+        root = self:GetRoot()
+
+        if root then
+            self.Status = "Descending"
+            ok = self:TweenRoot(root, destination)
+        else
+            ok = false
+        end
+    end
+
+    self:SetCollision(true)
+    self.Active = false
+    self.Tween = nil
+    self.Status = ok and "Arrived" or "Failed"
+    return ok
 end
 
 function MovementService:GoTo(targetCFrame, yOffset, destinationName)
@@ -1902,12 +2017,21 @@ local FarmState = {
     QuestRoutePending = false,
     QuestStartLevel = 0,
     QuestStartedAt = 0,
-    QuestMissingSince = 0,
-    QuestLastProgress = 0,
-    QuestGoal = 0,
 
     Enabled = false,
     AutoMastery = false,
+    MasteryKillPercent = 40,
+    MasterySkillZ = true,
+    MasterySkillX = true,
+    MasterySkillC = true,
+    MasterySkillV = true,
+    MasterySkillF = false,
+    MasterySkillIndex = 1,
+    MasteryLastSkill = 0,
+    MasterySkillCooldown = 0.55,
+    MasteryPreviousAutoQuest = true,
+    MasteryStartedFarm = false,
+    MasteryStatus = "Idle",
     AutoTarget = true,
     BringMobs = false,
     FastAttack = false,
@@ -2232,9 +2356,6 @@ local function StartLevelQuest(q)
     FarmState.TargetName = q.Mob
 
     if QuestVisible() and QuestMatches(q) then
-        FarmState.QuestOwnedByHub = true
-        FarmState.QuestSeenVisible = true
-        FarmState.QuestMissingSince = 0
         FarmState.QuestStatus = "Correct quest active"
         return true
     end
@@ -2246,96 +2367,17 @@ local function StartLevelQuest(q)
     end
 
     FarmState.QuestStatus = "Going to quest NPC"
-
-    -- Isolated Level Farm route:
-    -- one rise -> fixed Y segmented travel -> one descent.
-    -- This does not modify the working Teleport Directory.
-    local destination = q.QuestPos * CFrame.new(0, 3, 0)
-    local distance = (root.Position - destination.Position).Magnitude
-    local arrived = false
-
-    MovementService:Stop()
-    MovementService.Active = true
-    MovementService.Target = q.QuestPos
-    MovementService.DestinationName = "Quest NPC"
-    MovementService:SetCollision(false)
-
-    if distance <= 220 then
-        MovementService.Status = "Quest travel"
-        arrived = MovementService:TweenRoot(root, destination)
-    else
-        local fixedY = math.max(root.Position.Y, destination.Position.Y) + 70
-
-        MovementService.Status = "Quest rising"
-        arrived = MovementService:TweenRoot(
-            root,
-            CFrame.new(root.Position.X, fixedY, root.Position.Z)
-        )
-
-        if arrived and MovementService.Active then
-            root = GetCharacterRoot()
-            local horizontalTarget = Vector3.new(
-                destination.Position.X,
-                fixedY,
-                destination.Position.Z
-            )
-            local startPosition = root and root.Position or horizontalTarget
-            local delta = horizontalTarget - startPosition
-            local total = delta.Magnitude
-
-            MovementService.Status = "Quest cruising"
-
-            if total > 1 then
-                local direction = delta.Unit
-                local travelled = 0
-
-                while travelled < total and MovementService.Active do
-                    root = GetCharacterRoot()
-                    if not root then
-                        arrived = false
-                        break
-                    end
-
-                    travelled = math.min(travelled + 28, total)
-                    local nextPosition = startPosition + direction * travelled
-                    nextPosition = Vector3.new(nextPosition.X, fixedY, nextPosition.Z)
-
-                    arrived = MovementService:TweenRoot(
-                        root,
-                        CFrame.new(nextPosition.X, fixedY, nextPosition.Z)
-                    )
-
-                    if not arrived then
-                        break
-                    end
-                end
-            end
-        end
-
-        if arrived and MovementService.Active then
-            root = GetCharacterRoot()
-            if root then
-                MovementService.Status = "Quest descending"
-                arrived = MovementService:TweenRoot(root, destination)
-            else
-                arrived = false
-            end
-        end
-    end
-
-    MovementService:SetCollision(true)
-    MovementService.Active = false
-    MovementService.Tween = nil
+    local arrived = MovementService:GoTo(q.QuestPos, 3, "Quest NPC")
 
     if not arrived then
         FarmState.QuestStatus = "Could not reach quest NPC"
         return false
     end
 
-    task.wait(0.20)
+    task.wait(0.35)
 
     local rootAfterMove = GetCharacterRoot()
-    if not rootAfterMove or (rootAfterMove.Position - q.QuestPos.Position).Magnitude > 15 then
+    if not rootAfterMove or (rootAfterMove.Position - q.QuestPos.Position).Magnitude > 90 then
         FarmState.QuestStatus = "Quest NPC too far"
         return false
     end
@@ -2347,15 +2389,11 @@ local function StartLevelQuest(q)
     if ok then
         FarmState.QuestOwnedByHub = true
         FarmState.QuestSeenVisible = QuestVisible()
-        FarmState.QuestRoutePending = false
+        FarmState.QuestRoutePending = true
         FarmState.QuestStartLevel = PlayerService:GetLevel()
         FarmState.QuestStartedAt = os.clock()
-        FarmState.QuestMissingSince = 0
-        FarmState.QuestLastProgress = 0
-        FarmState.QuestGoal = 0
         FarmState.QuestStatus = "Quest accepted - going to mobs"
     else
-        FarmState.QuestOwnedByHub = false
         FarmState.QuestStatus = "Quest request failed"
     end
 
@@ -2367,90 +2405,11 @@ local function MoveToQuestMobArea(q)
     if not q or not q.MobPos then return false end
     if MovementService.Active then return false end
 
-    local root = GetCharacterRoot()
-    if not root then return false end
-
     FarmState.Status = "Going to mob area: " .. q.Mob
     FarmState.LastMobMove = os.clock()
-
-    local destination = q.MobPos * CFrame.new(0, 18, 0)
-    local distance = (root.Position - destination.Position).Magnitude
-    local arrived = false
-
-    MovementService:Stop()
-    MovementService.Active = true
-    MovementService.Target = q.MobPos
-    MovementService.DestinationName = "Mob Area"
-    MovementService:SetCollision(false)
-
-    if distance <= 220 then
-        MovementService.Status = "Mob travel"
-        arrived = MovementService:TweenRoot(root, destination)
-    else
-        local fixedY = math.max(root.Position.Y, destination.Position.Y) + 70
-
-        MovementService.Status = "Mob rising"
-        arrived = MovementService:TweenRoot(
-            root,
-            CFrame.new(root.Position.X, fixedY, root.Position.Z)
-        )
-
-        if arrived and MovementService.Active then
-            root = GetCharacterRoot()
-            local horizontalTarget = Vector3.new(
-                destination.Position.X,
-                fixedY,
-                destination.Position.Z
-            )
-            local startPosition = root and root.Position or horizontalTarget
-            local delta = horizontalTarget - startPosition
-            local total = delta.Magnitude
-
-            MovementService.Status = "Mob cruising"
-
-            if total > 1 then
-                local direction = delta.Unit
-                local travelled = 0
-
-                while travelled < total and MovementService.Active do
-                    root = GetCharacterRoot()
-                    if not root then
-                        arrived = false
-                        break
-                    end
-
-                    travelled = math.min(travelled + 28, total)
-                    local nextPosition = startPosition + direction * travelled
-                    nextPosition = Vector3.new(nextPosition.X, fixedY, nextPosition.Z)
-
-                    arrived = MovementService:TweenRoot(
-                        root,
-                        CFrame.new(nextPosition.X, fixedY, nextPosition.Z)
-                    )
-
-                    if not arrived then
-                        break
-                    end
-                end
-            end
-        end
-
-        if arrived and MovementService.Active then
-            root = GetCharacterRoot()
-            if root then
-                MovementService.Status = "Mob descending"
-                arrived = MovementService:TweenRoot(root, destination)
-            else
-                arrived = false
-            end
-        end
-    end
-
-    MovementService:SetCollision(true)
-    MovementService.Active = false
-    MovementService.Tween = nil
-    return arrived
+    return MovementService:GoTo(q.MobPos, 18, "Mob Area")
 end
+
 
 local function IsValidFarmTarget(model)
     if not IsAlive(model) then
@@ -2601,17 +2560,139 @@ local function AttackTarget(target)
         return false
     end
 
-    local tool = FarmState.CurrentTool
+    local humanoid = target:FindFirstChildOfClass("Humanoid")
+    local targetRoot = GetTargetRoot(target)
 
-    if not tool or not tool.Parent then
-        tool = EquipFirstTool()
-    end
-
-    if not tool then
+    if not humanoid or not targetRoot or humanoid.Health <= 0 then
         return false
     end
 
     local now = os.clock()
+
+    -- Mastery mode:
+    -- weaken with melee, then switch to the equipped Blox Fruit and finish
+    -- with enabled skills once the NPC reaches the configured HP threshold.
+    if FarmState.AutoMastery then
+        local threshold = humanoid.MaxHealth * (FarmState.MasteryKillPercent / 100)
+
+        if humanoid.Health <= threshold then
+            local character = LocalPlayer.Character
+            local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+            local playerHumanoid = GetCharacterHumanoid()
+            local fruitTool = nil
+
+            if character then
+                local data = LocalPlayer:FindFirstChild("Data")
+                local fruitValue = data and data:FindFirstChild("DevilFruit")
+
+                if fruitValue and tostring(fruitValue.Value) ~= "" then
+                    fruitTool = character:FindFirstChild(tostring(fruitValue.Value))
+                    if not fruitTool and backpack then
+                        fruitTool = backpack:FindFirstChild(tostring(fruitValue.Value))
+                    end
+                end
+
+                if not fruitTool then
+                    for _, candidate in ipairs(character:GetChildren()) do
+                        if candidate:IsA("Tool") then
+                            local tip = string.lower(tostring(candidate.ToolTip or ""))
+                            if string.find(tip, "fruit", 1, true) then
+                                fruitTool = candidate
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+
+            if not fruitTool and backpack then
+                for _, candidate in ipairs(backpack:GetChildren()) do
+                    if candidate:IsA("Tool") then
+                        local tip = string.lower(tostring(candidate.ToolTip or ""))
+                        if string.find(tip, "fruit", 1, true) then
+                            fruitTool = candidate
+                            break
+                        end
+                    end
+                end
+            end
+
+            if fruitTool and playerHumanoid then
+                if fruitTool.Parent == backpack then
+                    pcall(function()
+                        playerHumanoid:EquipTool(fruitTool)
+                    end)
+                end
+
+                FarmState.CurrentTool = fruitTool
+                FarmState.MasteryStatus = "Finishing with " .. fruitTool.Name
+
+                pcall(function()
+                    local mousePos = fruitTool:FindFirstChild("MousePos")
+                    if mousePos then
+                        mousePos.Value = targetRoot.Position
+                    end
+                end)
+
+                if now - FarmState.MasteryLastSkill >= FarmState.MasterySkillCooldown then
+                    local skills = {
+                        {FarmState.MasterySkillZ, Enum.KeyCode.Z, "Z"},
+                        {FarmState.MasterySkillX, Enum.KeyCode.X, "X"},
+                        {FarmState.MasterySkillC, Enum.KeyCode.C, "C"},
+                        {FarmState.MasterySkillV, Enum.KeyCode.V, "V"},
+                        {FarmState.MasterySkillF, Enum.KeyCode.F, "F"}
+                    }
+
+                    local selected = nil
+
+                    for _ = 1, #skills do
+                        local index = ((FarmState.MasterySkillIndex - 1) % #skills) + 1
+                        FarmState.MasterySkillIndex = index + 1
+
+                        if skills[index][1] then
+                            selected = skills[index]
+                            break
+                        end
+                    end
+
+                    if selected then
+                        FarmState.MasteryLastSkill = now
+                        FarmState.MasteryStatus = "Using skill " .. selected[3]
+
+                        pcall(function()
+                            local input = game:GetService("VirtualInputManager")
+                            input:SendKeyEvent(true, selected[2], false, game)
+                            input:SendKeyEvent(false, selected[2], false, game)
+                        end)
+                    end
+                end
+
+                return true
+            end
+
+            -- No fruit found: fall back to melee instead of freezing the farm.
+            FarmState.MasteryStatus = "Fruit not found - using melee"
+        else
+            FarmState.MasteryStatus =
+                "Weakening NPC (" ..
+                tostring(math.floor((humanoid.Health / math.max(humanoid.MaxHealth, 1)) * 100)) ..
+                "%)"
+        end
+    end
+
+    local tool = FarmState.CurrentTool
+
+    if not tool
+        or not tool.Parent
+        or (FarmState.AutoMastery and not IsLikelyFightingStyle(tool))
+    then
+        tool = EquipFirstTool()
+    end
+
+    if not tool then
+        FarmState.Status = "No melee tool found"
+        return false
+    end
 
     if now - FarmState.LastAttack < FarmState.AttackCooldown then
         return true
@@ -2619,11 +2700,36 @@ local function AttackTarget(target)
 
     FarmState.LastAttack = now
 
-    -- Generic tool-based attack hook.
-    -- For a custom game, replace this block with the game's
-    -- server-authoritative attack RemoteEvent/function.
+    -- Multi-path M1 attack:
+    -- Tool:Activate for normal Roblox tools + input fallback for games whose
+    -- combat LocalScript listens for mouse input instead of Activate alone.
     pcall(function()
         tool:Activate()
+    end)
+
+    pcall(function()
+        local camera = workspace.CurrentCamera
+        local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
+        local x = math.floor(viewport.X / 2)
+        local y = math.floor(viewport.Y / 2)
+        local input = game:GetService("VirtualInputManager")
+
+        input:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        input:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+
+    pcall(function()
+        local camera = workspace.CurrentCamera
+        local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
+        local point = Vector2.new(
+            math.floor(viewport.X / 2),
+            math.floor(viewport.Y / 2)
+        )
+        local virtualUser = game:GetService("VirtualUser")
+
+        virtualUser:CaptureController()
+        virtualUser:Button1Down(point, camera and camera.CFrame or CFrame.new())
+        virtualUser:Button1Up(point, camera and camera.CFrame or CFrame.new())
     end)
 
     return true
@@ -2950,6 +3056,20 @@ local function FarmStep()
 
     local q = nil
 
+    -- Mastery farm uses the level table only to choose the correct mob/area.
+    -- It deliberately does NOT depend on the quest cycle.
+    if FarmState.AutoMastery and not FarmState.AutoQuest then
+        q = GetLevelFarmQuest()
+
+        if q then
+            FarmState.TargetName = q.Mob
+            FarmState.QuestMob = q.Mob
+            FarmState.MobPosition = q.MobPos
+            FarmState.CurrentSea = q.Sea
+            FarmState.QuestStatus = "Mastery mode - no quest"
+        end
+    end
+
     if FarmState.AutoQuest then
         q = GetLevelFarmQuest()
 
@@ -2965,82 +3085,45 @@ local function FarmStep()
 
         local visible = QuestVisible()
 
-        if visible then
-            FarmState.QuestMissingSince = 0
-
-            -- Remember visible quest progress, e.g. 1/8, 5/8, 8/8.
-            local questText = GetQuestText()
-            local currentProgress, goalProgress = string.match(
-                questText,
-                "(%d+)%s*/%s*(%d+)"
-            )
-
-            if currentProgress and goalProgress then
-                FarmState.QuestLastProgress = tonumber(currentProgress) or 0
-                FarmState.QuestGoal = tonumber(goalProgress) or 0
-            end
-
-            if not QuestMatches(q) then
-                FarmState.QuestStatus = "Wrong quest - replacing"
-                AbandonCurrentQuest()
-                FarmState.QuestOwnedByHub = false
-                FarmState.QuestSeenVisible = false
-                FarmState.QuestStartedAt = 0
-                FarmState.QuestMissingSince = 0
-                FarmState.CurrentTarget = nil
-                FarmState.FarmAnchor = nil
-                task.wait(0.20)
+        -- Reference-style quest cycle:
+        -- no visible quest -> go back to NPC and request it again.
+        if not visible then
+            if FarmState.QuestStartedAt > 0 and os.clock() - FarmState.QuestStartedAt < 2.50 then
+                FarmState.QuestOwnedByHub = true
+                FarmState.QuestRoutePending = false
+                FarmState.QuestStatus = "Quest accepted - travelling to mobs"
+                MoveToQuestMobArea(q)
                 return
             end
 
-            FarmState.QuestOwnedByHub = true
-            FarmState.QuestSeenVisible = true
+            FarmState.QuestOwnedByHub = false
+            FarmState.QuestSeenVisible = false
             FarmState.QuestRoutePending = false
-
-            if FarmState.QuestGoal > 0 then
-                FarmState.QuestStatus =
-                    "Quest active: " .. q.Mob .. " (" ..
-                    tostring(FarmState.QuestLastProgress) .. "/" ..
-                    tostring(FarmState.QuestGoal) .. ")"
-            else
-                FarmState.QuestStatus = "Quest active: " .. q.Mob
-            end
-        else
-            -- Once a quest is accepted, a brief Quest.Visible flicker must NOT
-            -- call StartQuest again, because that resets mission progress.
-            if FarmState.QuestOwnedByHub then
-                if FarmState.QuestMissingSince == 0 then
-                    FarmState.QuestMissingSince = os.clock()
-                end
-
-                local missingFor = os.clock() - FarmState.QuestMissingSince
-                local progressComplete =
-                    FarmState.QuestGoal > 0
-                    and FarmState.QuestLastProgress >= FarmState.QuestGoal
-
-                if not progressComplete and missingFor < 5.0 then
-                    FarmState.QuestStatus = "Quest UI updating - keep farming"
-                    -- Continue below and kill the next matching mob.
-                else
-                    FarmState.QuestOwnedByHub = false
-                    FarmState.QuestSeenVisible = false
-                    FarmState.QuestRoutePending = false
-                    FarmState.QuestStartedAt = 0
-                    FarmState.QuestMissingSince = 0
-                    FarmState.QuestLastProgress = 0
-                    FarmState.QuestGoal = 0
-                    FarmState.CurrentTarget = nil
-                    FarmState.FarmAnchor = nil
-                    FarmState.QuestStatus = "Quest complete - returning to NPC"
-                    StartLevelQuest(q)
-                    return
-                end
-            else
-                FarmState.QuestStatus = "No active quest - returning to NPC"
-                StartLevelQuest(q)
-                return
-            end
+            FarmState.QuestStartedAt = 0
+            FarmState.CurrentTarget = nil
+            FarmState.FarmAnchor = nil
+            FarmState.QuestStatus = "No active quest - returning to NPC"
+            StartLevelQuest(q)
+            return
         end
+
+        -- A visible but wrong quest is replaced immediately.
+        if not QuestMatches(q) then
+            FarmState.QuestStatus = "Wrong quest - replacing"
+            AbandonCurrentQuest()
+            FarmState.QuestStartedAt = 0
+            FarmState.CurrentTarget = nil
+            FarmState.FarmAnchor = nil
+            task.wait(0.20)
+            return
+        end
+
+        -- The correct quest is active. From this point the mob farm runs until
+        -- the quest UI disappears; next FarmStep then returns to the NPC.
+        FarmState.QuestOwnedByHub = true
+        FarmState.QuestSeenVisible = true
+        FarmState.QuestRoutePending = false
+        FarmState.QuestStatus = "Quest active: " .. q.Mob
     end
 
     if not FarmState.CurrentTarget or not IsValidFarmTarget(FarmState.CurrentTarget) then
@@ -3055,8 +3138,13 @@ local function FarmStep()
             local distanceToMobArea = (root.Position - q.MobPos.Position).Magnitude
 
             if distanceToMobArea > math.max(FarmState.ScanRadius * 0.55, 180) then
-                MoveToQuestMobArea(q)
-                task.wait(0.2)
+                if FarmState.AutoMastery and not FarmState.AutoQuest then
+                    FarmState.Status = "Mastery: travelling to " .. q.Mob
+                    MovementService:GoSegmented(q.MobPos, 18, "Mastery Mob Area")
+                else
+                    MoveToQuestMobArea(q)
+                end
+
                 FarmState.CurrentTarget = GetNearestTarget()
                 return
             end
@@ -3076,8 +3164,20 @@ local function FarmStep()
         AttackTarget(target)
     end
 
-    -- Quest completion is handled at the beginning of the next FarmStep
-    -- with a visibility grace window, so one-frame UI flickers do not reset progress.
+    -- Quest completion watchdog:
+    -- once the quest UI was observed, disappearance means the mission ended.
+    -- Release ownership immediately so the next FarmStep returns to the NPC.
+    if FarmState.AutoQuest and FarmState.QuestOwnedByHub and FarmState.QuestSeenVisible then
+        if not QuestVisible() then
+            FarmState.QuestOwnedByHub = false
+            FarmState.QuestSeenVisible = false
+            FarmState.QuestRoutePending = false
+            FarmState.CurrentTarget = nil
+            FarmState.FarmAnchor = nil
+            FarmState.QuestStatus = "Quest complete - requesting next quest"
+            FarmState.Status = "Quest complete"
+        end
+    end
 end
 
 
@@ -3192,12 +3292,100 @@ Toggle(
 
 Toggle(
     FarmPage,
-    "Auto Mastery",
-    "Keeps the mastery mode available for the game's custom attack hook.",
+    "Auto Mastery (Blox Fruit)",
+    "Farm sem quest: enfraquece o NPC com Melee e finaliza com skills da fruta para ganhar maestria.",
     false,
     function(enabled)
         FarmState.AutoMastery = enabled
-        Notify("Auto Mastery", enabled and "Enabled" or "Disabled")
+        FarmState.CurrentTarget = nil
+        FarmState.FarmAnchor = nil
+        FarmState.MasterySkillIndex = 1
+        FarmState.MasteryLastSkill = 0
+
+        if enabled then
+            StopSpecialFarms()
+
+            FarmState.MasteryPreviousAutoQuest = FarmState.AutoQuest
+            FarmState.AutoQuest = false
+            FarmState.MasteryStartedFarm = not FarmState.Enabled
+            FarmState.Enabled = true
+            FarmState.UseTool = true
+            FarmState.MasteryStatus = "Starting"
+            FarmState.Status = "Mastery starting"
+            EquipFirstTool()
+
+            Notify("Auto Mastery", "Blox Fruit mastery enabled.")
+        else
+            FarmState.AutoQuest = FarmState.MasteryPreviousAutoQuest
+            FarmState.MasteryStatus = "Idle"
+
+            if FarmState.MasteryStartedFarm then
+                StopFarm()
+            end
+
+            FarmState.MasteryStartedFarm = false
+            Notify("Auto Mastery", "Disabled")
+        end
+    end
+)
+
+ValueBox(
+    FarmPage,
+    "Mastery Finish HP %",
+    FarmState.MasteryKillPercent,
+    function(value)
+        FarmState.MasteryKillPercent = math.clamp(value, 5, 90)
+        Notify("Auto Mastery", "Fruit finisher at " .. tostring(FarmState.MasteryKillPercent) .. "% HP.")
+    end
+)
+
+Toggle(
+    FarmPage,
+    "Mastery Skill Z",
+    "Usa a skill Z na finalização.",
+    true,
+    function(enabled)
+        FarmState.MasterySkillZ = enabled
+    end
+)
+
+Toggle(
+    FarmPage,
+    "Mastery Skill X",
+    "Usa a skill X na finalização.",
+    true,
+    function(enabled)
+        FarmState.MasterySkillX = enabled
+    end
+)
+
+Toggle(
+    FarmPage,
+    "Mastery Skill C",
+    "Usa a skill C na finalização.",
+    true,
+    function(enabled)
+        FarmState.MasterySkillC = enabled
+    end
+)
+
+Toggle(
+    FarmPage,
+    "Mastery Skill V",
+    "Usa a skill V na finalização.",
+    true,
+    function(enabled)
+        FarmState.MasterySkillV = enabled
+    end
+)
+
+Toggle(
+    FarmPage,
+    "Mastery Skill F",
+    "Opcional. Fica desligada por padrão porque algumas frutas usam F para movimento.",
+    false,
+    function(enabled)
+        FarmState.MasterySkillF = enabled
     end
 )
 
@@ -4129,7 +4317,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3q - LEVEL FARM CYCLE FIX
+-- FLOQUITAVE 2.7.3r - MASTERY + ATTACK FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
