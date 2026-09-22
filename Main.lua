@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3p
+    Version: 2.7.3q
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3p",
+    Version = "2.7.3q",
 
     Width = 920,
     Height = 590,
@@ -1902,6 +1902,9 @@ local FarmState = {
     QuestRoutePending = false,
     QuestStartLevel = 0,
     QuestStartedAt = 0,
+    QuestMissingSince = 0,
+    QuestLastProgress = 0,
+    QuestGoal = 0,
 
     Enabled = false,
     AutoMastery = false,
@@ -2229,6 +2232,9 @@ local function StartLevelQuest(q)
     FarmState.TargetName = q.Mob
 
     if QuestVisible() and QuestMatches(q) then
+        FarmState.QuestOwnedByHub = true
+        FarmState.QuestSeenVisible = true
+        FarmState.QuestMissingSince = 0
         FarmState.QuestStatus = "Correct quest active"
         return true
     end
@@ -2240,17 +2246,96 @@ local function StartLevelQuest(q)
     end
 
     FarmState.QuestStatus = "Going to quest NPC"
-    local arrived = MovementService:GoTo(q.QuestPos, 3, "Quest NPC")
+
+    -- Isolated Level Farm route:
+    -- one rise -> fixed Y segmented travel -> one descent.
+    -- This does not modify the working Teleport Directory.
+    local destination = q.QuestPos * CFrame.new(0, 3, 0)
+    local distance = (root.Position - destination.Position).Magnitude
+    local arrived = false
+
+    MovementService:Stop()
+    MovementService.Active = true
+    MovementService.Target = q.QuestPos
+    MovementService.DestinationName = "Quest NPC"
+    MovementService:SetCollision(false)
+
+    if distance <= 220 then
+        MovementService.Status = "Quest travel"
+        arrived = MovementService:TweenRoot(root, destination)
+    else
+        local fixedY = math.max(root.Position.Y, destination.Position.Y) + 70
+
+        MovementService.Status = "Quest rising"
+        arrived = MovementService:TweenRoot(
+            root,
+            CFrame.new(root.Position.X, fixedY, root.Position.Z)
+        )
+
+        if arrived and MovementService.Active then
+            root = GetCharacterRoot()
+            local horizontalTarget = Vector3.new(
+                destination.Position.X,
+                fixedY,
+                destination.Position.Z
+            )
+            local startPosition = root and root.Position or horizontalTarget
+            local delta = horizontalTarget - startPosition
+            local total = delta.Magnitude
+
+            MovementService.Status = "Quest cruising"
+
+            if total > 1 then
+                local direction = delta.Unit
+                local travelled = 0
+
+                while travelled < total and MovementService.Active do
+                    root = GetCharacterRoot()
+                    if not root then
+                        arrived = false
+                        break
+                    end
+
+                    travelled = math.min(travelled + 28, total)
+                    local nextPosition = startPosition + direction * travelled
+                    nextPosition = Vector3.new(nextPosition.X, fixedY, nextPosition.Z)
+
+                    arrived = MovementService:TweenRoot(
+                        root,
+                        CFrame.new(nextPosition.X, fixedY, nextPosition.Z)
+                    )
+
+                    if not arrived then
+                        break
+                    end
+                end
+            end
+        end
+
+        if arrived and MovementService.Active then
+            root = GetCharacterRoot()
+            if root then
+                MovementService.Status = "Quest descending"
+                arrived = MovementService:TweenRoot(root, destination)
+            else
+                arrived = false
+            end
+        end
+    end
+
+    MovementService:SetCollision(true)
+    MovementService.Active = false
+    MovementService.Tween = nil
 
     if not arrived then
         FarmState.QuestStatus = "Could not reach quest NPC"
         return false
     end
 
-    task.wait(0.35)
+    task.wait(0.20)
 
     local rootAfterMove = GetCharacterRoot()
-    if not rootAfterMove or (rootAfterMove.Position - q.QuestPos.Position).Magnitude > 90 then
+    if not rootAfterMove or (rootAfterMove.Position - q.QuestPos.Position).Magnitude > 15 then
         FarmState.QuestStatus = "Quest NPC too far"
         return false
     end
@@ -2262,11 +2347,15 @@ local function StartLevelQuest(q)
     if ok then
         FarmState.QuestOwnedByHub = true
         FarmState.QuestSeenVisible = QuestVisible()
-        FarmState.QuestRoutePending = true
+        FarmState.QuestRoutePending = false
         FarmState.QuestStartLevel = PlayerService:GetLevel()
         FarmState.QuestStartedAt = os.clock()
+        FarmState.QuestMissingSince = 0
+        FarmState.QuestLastProgress = 0
+        FarmState.QuestGoal = 0
         FarmState.QuestStatus = "Quest accepted - going to mobs"
     else
+        FarmState.QuestOwnedByHub = false
         FarmState.QuestStatus = "Quest request failed"
     end
 
@@ -2278,11 +2367,90 @@ local function MoveToQuestMobArea(q)
     if not q or not q.MobPos then return false end
     if MovementService.Active then return false end
 
+    local root = GetCharacterRoot()
+    if not root then return false end
+
     FarmState.Status = "Going to mob area: " .. q.Mob
     FarmState.LastMobMove = os.clock()
-    return MovementService:GoTo(q.MobPos, 18, "Mob Area")
-end
 
+    local destination = q.MobPos * CFrame.new(0, 18, 0)
+    local distance = (root.Position - destination.Position).Magnitude
+    local arrived = false
+
+    MovementService:Stop()
+    MovementService.Active = true
+    MovementService.Target = q.MobPos
+    MovementService.DestinationName = "Mob Area"
+    MovementService:SetCollision(false)
+
+    if distance <= 220 then
+        MovementService.Status = "Mob travel"
+        arrived = MovementService:TweenRoot(root, destination)
+    else
+        local fixedY = math.max(root.Position.Y, destination.Position.Y) + 70
+
+        MovementService.Status = "Mob rising"
+        arrived = MovementService:TweenRoot(
+            root,
+            CFrame.new(root.Position.X, fixedY, root.Position.Z)
+        )
+
+        if arrived and MovementService.Active then
+            root = GetCharacterRoot()
+            local horizontalTarget = Vector3.new(
+                destination.Position.X,
+                fixedY,
+                destination.Position.Z
+            )
+            local startPosition = root and root.Position or horizontalTarget
+            local delta = horizontalTarget - startPosition
+            local total = delta.Magnitude
+
+            MovementService.Status = "Mob cruising"
+
+            if total > 1 then
+                local direction = delta.Unit
+                local travelled = 0
+
+                while travelled < total and MovementService.Active do
+                    root = GetCharacterRoot()
+                    if not root then
+                        arrived = false
+                        break
+                    end
+
+                    travelled = math.min(travelled + 28, total)
+                    local nextPosition = startPosition + direction * travelled
+                    nextPosition = Vector3.new(nextPosition.X, fixedY, nextPosition.Z)
+
+                    arrived = MovementService:TweenRoot(
+                        root,
+                        CFrame.new(nextPosition.X, fixedY, nextPosition.Z)
+                    )
+
+                    if not arrived then
+                        break
+                    end
+                end
+            end
+        end
+
+        if arrived and MovementService.Active then
+            root = GetCharacterRoot()
+            if root then
+                MovementService.Status = "Mob descending"
+                arrived = MovementService:TweenRoot(root, destination)
+            else
+                arrived = false
+            end
+        end
+    end
+
+    MovementService:SetCollision(true)
+    MovementService.Active = false
+    MovementService.Tween = nil
+    return arrived
+end
 
 local function IsValidFarmTarget(model)
     if not IsAlive(model) then
@@ -2797,45 +2965,82 @@ local function FarmStep()
 
         local visible = QuestVisible()
 
-        -- Reference-style quest cycle:
-        -- no visible quest -> go back to NPC and request it again.
-        if not visible then
-            if FarmState.QuestStartedAt > 0 and os.clock() - FarmState.QuestStartedAt < 2.50 then
-                FarmState.QuestOwnedByHub = true
-                FarmState.QuestRoutePending = false
-                FarmState.QuestStatus = "Quest accepted - travelling to mobs"
-                MoveToQuestMobArea(q)
+        if visible then
+            FarmState.QuestMissingSince = 0
+
+            -- Remember visible quest progress, e.g. 1/8, 5/8, 8/8.
+            local questText = GetQuestText()
+            local currentProgress, goalProgress = string.match(
+                questText,
+                "(%d+)%s*/%s*(%d+)"
+            )
+
+            if currentProgress and goalProgress then
+                FarmState.QuestLastProgress = tonumber(currentProgress) or 0
+                FarmState.QuestGoal = tonumber(goalProgress) or 0
+            end
+
+            if not QuestMatches(q) then
+                FarmState.QuestStatus = "Wrong quest - replacing"
+                AbandonCurrentQuest()
+                FarmState.QuestOwnedByHub = false
+                FarmState.QuestSeenVisible = false
+                FarmState.QuestStartedAt = 0
+                FarmState.QuestMissingSince = 0
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+                task.wait(0.20)
                 return
             end
 
-            FarmState.QuestOwnedByHub = false
-            FarmState.QuestSeenVisible = false
+            FarmState.QuestOwnedByHub = true
+            FarmState.QuestSeenVisible = true
             FarmState.QuestRoutePending = false
-            FarmState.QuestStartedAt = 0
-            FarmState.CurrentTarget = nil
-            FarmState.FarmAnchor = nil
-            FarmState.QuestStatus = "No active quest - returning to NPC"
-            StartLevelQuest(q)
-            return
-        end
 
-        -- A visible but wrong quest is replaced immediately.
-        if not QuestMatches(q) then
-            FarmState.QuestStatus = "Wrong quest - replacing"
-            AbandonCurrentQuest()
-            FarmState.QuestStartedAt = 0
-            FarmState.CurrentTarget = nil
-            FarmState.FarmAnchor = nil
-            task.wait(0.20)
-            return
-        end
+            if FarmState.QuestGoal > 0 then
+                FarmState.QuestStatus =
+                    "Quest active: " .. q.Mob .. " (" ..
+                    tostring(FarmState.QuestLastProgress) .. "/" ..
+                    tostring(FarmState.QuestGoal) .. ")"
+            else
+                FarmState.QuestStatus = "Quest active: " .. q.Mob
+            end
+        else
+            -- Once a quest is accepted, a brief Quest.Visible flicker must NOT
+            -- call StartQuest again, because that resets mission progress.
+            if FarmState.QuestOwnedByHub then
+                if FarmState.QuestMissingSince == 0 then
+                    FarmState.QuestMissingSince = os.clock()
+                end
 
-        -- The correct quest is active. From this point the mob farm runs until
-        -- the quest UI disappears; next FarmStep then returns to the NPC.
-        FarmState.QuestOwnedByHub = true
-        FarmState.QuestSeenVisible = true
-        FarmState.QuestRoutePending = false
-        FarmState.QuestStatus = "Quest active: " .. q.Mob
+                local missingFor = os.clock() - FarmState.QuestMissingSince
+                local progressComplete =
+                    FarmState.QuestGoal > 0
+                    and FarmState.QuestLastProgress >= FarmState.QuestGoal
+
+                if not progressComplete and missingFor < 5.0 then
+                    FarmState.QuestStatus = "Quest UI updating - keep farming"
+                    -- Continue below and kill the next matching mob.
+                else
+                    FarmState.QuestOwnedByHub = false
+                    FarmState.QuestSeenVisible = false
+                    FarmState.QuestRoutePending = false
+                    FarmState.QuestStartedAt = 0
+                    FarmState.QuestMissingSince = 0
+                    FarmState.QuestLastProgress = 0
+                    FarmState.QuestGoal = 0
+                    FarmState.CurrentTarget = nil
+                    FarmState.FarmAnchor = nil
+                    FarmState.QuestStatus = "Quest complete - returning to NPC"
+                    StartLevelQuest(q)
+                    return
+                end
+            else
+                FarmState.QuestStatus = "No active quest - returning to NPC"
+                StartLevelQuest(q)
+                return
+            end
+        end
     end
 
     if not FarmState.CurrentTarget or not IsValidFarmTarget(FarmState.CurrentTarget) then
@@ -2871,20 +3076,8 @@ local function FarmStep()
         AttackTarget(target)
     end
 
-    -- Quest completion watchdog:
-    -- once the quest UI was observed, disappearance means the mission ended.
-    -- Release ownership immediately so the next FarmStep returns to the NPC.
-    if FarmState.AutoQuest and FarmState.QuestOwnedByHub and FarmState.QuestSeenVisible then
-        if not QuestVisible() then
-            FarmState.QuestOwnedByHub = false
-            FarmState.QuestSeenVisible = false
-            FarmState.QuestRoutePending = false
-            FarmState.CurrentTarget = nil
-            FarmState.FarmAnchor = nil
-            FarmState.QuestStatus = "Quest complete - requesting next quest"
-            FarmState.Status = "Quest complete"
-        end
-    end
+    -- Quest completion is handled at the beginning of the next FarmStep
+    -- with a visibility grace window, so one-frame UI flickers do not reset progress.
 end
 
 
@@ -3936,7 +4129,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3p - SEGMENTED TELEPORT TEST
+-- FLOQUITAVE 2.7.3q - LEVEL FARM CYCLE FIX
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
