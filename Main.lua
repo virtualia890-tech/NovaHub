@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3w
+    Version: 2.7.3x
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3w",
+    Version = "2.7.3x",
 
     Width = 920,
     Height = 590,
@@ -3206,7 +3206,9 @@ task.spawn(function()
         LastCastleTeleport = 0,
         Moving = false,
         AttackCooldown = 0.14,
-        SkillCooldown = 0.60
+        SkillCooldown = 0.60,
+        CombatHeight = 11,
+        CombatDistance = 8
     }
 
     local function toolMatches(tool, wanted)
@@ -3438,14 +3440,34 @@ task.spawn(function()
             return false
         end
 
-        local distance = (root.Position - targetRoot.Position).Magnitude
+        local desiredCFrame =
+            targetRoot.CFrame
+            * CFrame.new(0, M.CombatHeight, M.CombatDistance)
 
-        -- Follow the mob directly. No vertical route state machine.
-        if distance > 32 then
+        local distance = (root.Position - desiredCFrame.Position).Magnitude
+
+        -- Stay slightly above and a little away from the NPC,
+        -- instead of standing on top of it.
+        if distance > 20 then
             M.Status = "Going to " .. target.Name
-            directMove(targetRoot.CFrame, 12, "Mastery Mob")
+            directMove(desiredCFrame, 0, "Mastery Mob")
             return true
         end
+
+        -- If we are too close, re-position to the safe attack offset.
+        if distance < 6 and not M.Moving then
+            M.Status = "Adjusting position"
+            directMove(desiredCFrame, 0, "Mastery Adjust")
+            return true
+        end
+
+        -- Soft position lock while attacking:
+        -- keep the character hovering above / slightly away from the mob.
+        pcall(function()
+            root.CFrame = desiredCFrame
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
 
         local wanted = M.Type
         local threshold = humanoid.MaxHealth * (M.KillPercent / 100)
@@ -3601,6 +3623,24 @@ task.spawn(function()
         M.KillPercent,
         function(value)
             M.KillPercent = math.clamp(value, 5, 90)
+        end
+    )
+
+    ValueBox(
+        FarmPage,
+        "Combat Height",
+        M.CombatHeight,
+        function(value)
+            M.CombatHeight = math.clamp(value, 6, 20)
+        end
+    )
+
+    ValueBox(
+        FarmPage,
+        "Combat Distance",
+        M.CombatDistance,
+        function(value)
+            M.CombatDistance = math.clamp(value, 4, 16)
         end
     )
 
@@ -4477,7 +4517,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3w - MASTERY BASIC BONES
+-- FLOQUITAVE 2.7.3x - MASTERY COMBAT OFFSET
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
