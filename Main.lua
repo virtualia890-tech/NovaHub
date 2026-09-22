@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3r
+    Version: 2.7.3t
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3r",
+    Version = "2.7.3t",
 
     Width = 920,
     Height = 590,
@@ -1404,6 +1404,85 @@ local function ActionButton(parent, text, callback)
     return button
 end
 
+local function CycleSelector(parent, title, subtitle, options, defaultIndex, callback)
+    local holder = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 78),
+        BackgroundColor3 = Theme.Card,
+        BorderSizePixel = 0
+    }, parent)
+
+    Corner(holder, 11)
+    Stroke(holder, Theme.Secondary, 0.3)
+
+    Create("TextLabel", {
+        Position = UDim2.new(0, 14, 0, 10),
+        Size = UDim2.new(1, -120, 0, 20),
+        BackgroundTransparency = 1,
+        Text = title,
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, holder)
+
+    Create("TextLabel", {
+        Position = UDim2.new(0, 14, 0, 30),
+        Size = UDim2.new(1, -28, 0, 16),
+        BackgroundTransparency = 1,
+        Text = subtitle or "",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.SubText,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, holder)
+
+    local valueLabel = Create("TextLabel", {
+        Position = UDim2.new(0, 14, 1, -30),
+        Size = UDim2.new(1, -120, 0, 16),
+        BackgroundTransparency = 1,
+        Text = "",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.Accent,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, holder)
+
+    local button = Create("TextButton", {
+        Position = UDim2.new(1, -100, 0.5, -17),
+        Size = UDim2.new(0, 86, 0, 34),
+        BackgroundColor3 = Theme.Secondary,
+        Text = "Select",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.Text,
+        AutoButtonColor = false
+    }, holder)
+
+    Corner(button, 9)
+    AddHoverEffect(button)
+
+    local index = math.clamp(tonumber(defaultIndex) or 1, 1, math.max(#options, 1))
+
+    local function apply()
+        local value = options[index] or "-"
+        valueLabel.Text = value
+        if callback then
+            callback(value, index, valueLabel)
+        end
+    end
+
+    Connect(button.MouseButton1Click, function()
+        if #options > 0 then
+            index = (index % #options) + 1
+            apply()
+        end
+    end)
+
+    apply()
+
+    return holder, valueLabel, button
+end
+
 local function ValueBox(parent, title, defaultValue, callback)
     local holder = Create("Frame", {
         Size = UDim2.new(1, 0, 0, 70),
@@ -2020,7 +2099,15 @@ local FarmState = {
 
     Enabled = false,
     AutoMastery = false,
+    MasteryType = "Blox Fruit",
     MasteryKillPercent = 40,
+    MasteryBoneIndex = 1,
+    SkillModeMelee = "Z + X + C",
+    SkillModeSword = "Z + X + C",
+    SkillModeGun = "Z + X + C",
+    SkillModeFruit = "Z + X + C + V",
+    HoldSkills = false,
+    HoldSkillDuration = 0.15,
     MasterySkillZ = true,
     MasterySkillX = true,
     MasterySkillC = true,
@@ -2569,122 +2656,285 @@ local function AttackTarget(target)
 
     local now = os.clock()
 
-    -- Mastery mode:
-    -- weaken with melee, then switch to the equipped Blox Fruit and finish
-    -- with enabled skills once the NPC reaches the configured HP threshold.
+    -- Generic mastery mode:
+    -- Melee trains directly.
+    -- Sword / Gun / Blox Fruit weaken with Melee, then finish with the selected type.
     if FarmState.AutoMastery then
+        local masteryType = tostring(FarmState.MasteryType or "Blox Fruit")
         local threshold = humanoid.MaxHealth * (FarmState.MasteryKillPercent / 100)
+        local useFinisher = masteryType == "Melee" or humanoid.Health <= threshold
 
-        if humanoid.Health <= threshold then
+        local function matchesType(tool, wanted)
+            if not tool or not tool:IsA("Tool") then return false end
+
+            local tip = string.lower(tostring(tool.ToolTip or ""))
+            local name = string.lower(tostring(tool.Name or ""))
+
+            if wanted == "Melee" then
+                return IsLikelyFightingStyle(tool)
+            elseif wanted == "Sword" then
+                return tip == "sword" or string.find(tip, "sword", 1, true) ~= nil
+            elseif wanted == "Gun" then
+                return tip == "gun"
+                    or string.find(tip, "gun", 1, true) ~= nil
+                    or tool:FindFirstChild("RemoteFunctionShoot") ~= nil
+            elseif wanted == "Blox Fruit" then
+                return string.find(tip, "fruit", 1, true) ~= nil
+                    or string.find(name, "-") ~= nil and tool:FindFirstChild("Level") ~= nil
+            end
+
+            return false
+        end
+
+        local function findTool(wanted)
             local character = LocalPlayer.Character
             local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-            local playerHumanoid = GetCharacterHumanoid()
-            local fruitTool = nil
 
-            if character then
+            if wanted == "Blox Fruit" and character then
                 local data = LocalPlayer:FindFirstChild("Data")
                 local fruitValue = data and data:FindFirstChild("DevilFruit")
 
                 if fruitValue and tostring(fruitValue.Value) ~= "" then
-                    fruitTool = character:FindFirstChild(tostring(fruitValue.Value))
-                    if not fruitTool and backpack then
-                        fruitTool = backpack:FindFirstChild(tostring(fruitValue.Value))
-                    end
-                end
+                    local fruitName = tostring(fruitValue.Value)
+                    local direct = character:FindFirstChild(fruitName)
+                        or (backpack and backpack:FindFirstChild(fruitName))
 
-                if not fruitTool then
-                    for _, candidate in ipairs(character:GetChildren()) do
-                        if candidate:IsA("Tool") then
-                            local tip = string.lower(tostring(candidate.ToolTip or ""))
-                            if string.find(tip, "fruit", 1, true) then
-                                fruitTool = candidate
-                                break
-                            end
-                        end
+                    if direct and direct:IsA("Tool") then
+                        return direct
                     end
                 end
             end
 
-            if not fruitTool and backpack then
-                for _, candidate in ipairs(backpack:GetChildren()) do
-                    if candidate:IsA("Tool") then
-                        local tip = string.lower(tostring(candidate.ToolTip or ""))
-                        if string.find(tip, "fruit", 1, true) then
-                            fruitTool = candidate
-                            break
-                        end
+            if character then
+                for _, tool in ipairs(character:GetChildren()) do
+                    if matchesType(tool, wanted) then
+                        return tool
                     end
                 end
             end
 
-            if fruitTool and playerHumanoid then
-                if fruitTool.Parent == backpack then
-                    pcall(function()
-                        playerHumanoid:EquipTool(fruitTool)
-                    end)
+            if backpack then
+                for _, tool in ipairs(backpack:GetChildren()) do
+                    if matchesType(tool, wanted) then
+                        return tool
+                    end
                 end
+            end
 
-                FarmState.CurrentTool = fruitTool
-                FarmState.MasteryStatus = "Finishing with " .. fruitTool.Name
+            return nil
+        end
 
+        local function equipTool(tool)
+            if not tool then return nil end
+
+            local playerHumanoid = GetCharacterHumanoid()
+            local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+
+            if playerHumanoid and backpack and tool.Parent == backpack then
                 pcall(function()
-                    local mousePos = fruitTool:FindFirstChild("MousePos")
-                    if mousePos then
-                        mousePos.Value = targetRoot.Position
-                    end
+                    playerHumanoid:EquipTool(tool)
                 end)
+            end
 
-                if now - FarmState.MasteryLastSkill >= FarmState.MasterySkillCooldown then
-                    local skills = {
-                        {FarmState.MasterySkillZ, Enum.KeyCode.Z, "Z"},
-                        {FarmState.MasterySkillX, Enum.KeyCode.X, "X"},
-                        {FarmState.MasterySkillC, Enum.KeyCode.C, "C"},
-                        {FarmState.MasterySkillV, Enum.KeyCode.V, "V"},
-                        {FarmState.MasterySkillF, Enum.KeyCode.F, "F"}
-                    }
+            FarmState.CurrentTool = tool
+            return tool
+        end
 
-                    local selected = nil
+        local function getMode()
+            if masteryType == "Melee" then
+                return FarmState.SkillModeMelee
+            elseif masteryType == "Sword" then
+                return FarmState.SkillModeSword
+            elseif masteryType == "Gun" then
+                return FarmState.SkillModeGun
+            end
 
-                    for _ = 1, #skills do
-                        local index = ((FarmState.MasterySkillIndex - 1) % #skills) + 1
-                        FarmState.MasterySkillIndex = index + 1
+            return FarmState.SkillModeFruit
+        end
 
-                        if skills[index][1] then
-                            selected = skills[index]
-                            break
-                        end
-                    end
+        local function modeHas(mode, key)
+            return string.find(
+                string.upper(tostring(mode or "")),
+                key,
+                1,
+                true
+            ) ~= nil
+        end
 
-                    if selected then
-                        FarmState.MasteryLastSkill = now
-                        FarmState.MasteryStatus = "Using skill " .. selected[3]
+        local function useSelectedSkill(tool)
+            if not tool then return false end
+            if now - FarmState.MasteryLastSkill < FarmState.MasterySkillCooldown then
+                return false
+            end
 
-                        pcall(function()
-                            local input = game:GetService("VirtualInputManager")
-                            input:SendKeyEvent(true, selected[2], false, game)
-                            input:SendKeyEvent(false, selected[2], false, game)
-                        end)
-                    end
+            local mode = getMode()
+            local skills = {
+                {modeHas(mode, "Z"), Enum.KeyCode.Z, "Z"},
+                {modeHas(mode, "X"), Enum.KeyCode.X, "X"},
+                {modeHas(mode, "C"), Enum.KeyCode.C, "C"},
+                {modeHas(mode, "V"), Enum.KeyCode.V, "V"},
+                {modeHas(mode, "F"), Enum.KeyCode.F, "F"}
+            }
+
+            local selected = nil
+
+            for _ = 1, #skills do
+                local index = ((FarmState.MasterySkillIndex - 1) % #skills) + 1
+                FarmState.MasterySkillIndex = index + 1
+
+                if skills[index][1] then
+                    selected = skills[index]
+                    break
+                end
+            end
+
+            if not selected then
+                return false
+            end
+
+            FarmState.MasteryLastSkill = now
+            FarmState.MasteryStatus =
+                masteryType .. " skill " .. selected[3]
+
+            pcall(function()
+                local input = game:GetService("VirtualInputManager")
+                input:SendKeyEvent(true, selected[2], false, game)
+
+                if FarmState.HoldSkills then
+                    task.wait(math.clamp(FarmState.HoldSkillDuration, 0.05, 0.8))
                 end
 
+                input:SendKeyEvent(false, selected[2], false, game)
+            end)
+
+            return true
+        end
+
+        if useFinisher then
+            local masteryTool = findTool(masteryType)
+
+            if not masteryTool then
+                FarmState.MasteryStatus = "No " .. masteryType .. " tool found"
                 return true
             end
 
-            -- No fruit found: fall back to melee instead of freezing the farm.
-            FarmState.MasteryStatus = "Fruit not found - using melee"
-        else
+            masteryTool = equipTool(masteryTool)
+
+            pcall(function()
+                local mousePos = masteryTool:FindFirstChild("MousePos")
+                if mousePos then
+                    mousePos.Value = targetRoot.Position
+                end
+            end)
+
+            -- Gun support: use its shoot remote when available.
+            if masteryType == "Gun" then
+                pcall(function()
+                    local remoteShoot = masteryTool:FindFirstChild("RemoteFunctionShoot")
+                    if remoteShoot and remoteShoot:IsA("RemoteFunction") then
+                        remoteShoot:InvokeServer(targetRoot.Position, targetRoot)
+                    end
+                end)
+            end
+
+            -- M1/Activate as a universal fallback for Melee, Sword, Gun and Fruit.
+            if now - FarmState.LastAttack >= FarmState.AttackCooldown then
+                FarmState.LastAttack = now
+
+                pcall(function()
+                    masteryTool:Activate()
+                end)
+
+                pcall(function()
+                    local camera = workspace.CurrentCamera
+                    local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
+                    local input = game:GetService("VirtualInputManager")
+
+                    input:SendMouseButtonEvent(
+                        math.floor(viewport.X / 2),
+                        math.floor(viewport.Y / 2),
+                        0,
+                        true,
+                        game,
+                        0
+                    )
+
+                    input:SendMouseButtonEvent(
+                        math.floor(viewport.X / 2),
+                        math.floor(viewport.Y / 2),
+                        0,
+                        false,
+                        game,
+                        0
+                    )
+                end)
+            end
+
+            useSelectedSkill(masteryTool)
+
             FarmState.MasteryStatus =
-                "Weakening NPC (" ..
+                "Finishing " .. masteryType .. " | " ..
                 tostring(math.floor((humanoid.Health / math.max(humanoid.MaxHealth, 1)) * 100)) ..
-                "%)"
+                "%"
+
+            return true
         end
+
+        -- Weaken Sword/Gun/Fruit targets with Melee until threshold.
+        local meleeTool = findTool("Melee")
+
+        if not meleeTool then
+            FarmState.MasteryStatus = "No Melee tool for weakening"
+            return true
+        end
+
+        equipTool(meleeTool)
+
+        FarmState.MasteryStatus =
+            "Weakening for " .. masteryType .. " (" ..
+            tostring(math.floor((humanoid.Health / math.max(humanoid.MaxHealth, 1)) * 100)) ..
+            "%)"
+
+        if now - FarmState.LastAttack >= FarmState.AttackCooldown then
+            FarmState.LastAttack = now
+
+            pcall(function()
+                meleeTool:Activate()
+            end)
+
+            pcall(function()
+                local camera = workspace.CurrentCamera
+                local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
+                local input = game:GetService("VirtualInputManager")
+
+                input:SendMouseButtonEvent(
+                    math.floor(viewport.X / 2),
+                    math.floor(viewport.Y / 2),
+                    0,
+                    true,
+                    game,
+                    0
+                )
+
+                input:SendMouseButtonEvent(
+                    math.floor(viewport.X / 2),
+                    math.floor(viewport.Y / 2),
+                    0,
+                    false,
+                    game,
+                    0
+                )
+            end)
+        end
+
+        return true
     end
 
     local tool = FarmState.CurrentTool
 
     if not tool
         or not tool.Parent
-        or (FarmState.AutoMastery and not IsLikelyFightingStyle(tool))
+        or not IsLikelyFightingStyle(tool)
     then
         tool = EquipFirstTool()
     end
@@ -2700,9 +2950,6 @@ local function AttackTarget(target)
 
     FarmState.LastAttack = now
 
-    -- Multi-path M1 attack:
-    -- Tool:Activate for normal Roblox tools + input fallback for games whose
-    -- combat LocalScript listens for mouse input instead of Activate alone.
     pcall(function()
         tool:Activate()
     end)
@@ -3056,18 +3303,62 @@ local function FarmStep()
 
     local q = nil
 
-    -- Mastery farm uses the level table only to choose the correct mob/area.
-    -- It deliberately does NOT depend on the quest cycle.
-    if FarmState.AutoMastery and not FarmState.AutoQuest then
-        q = GetLevelFarmQuest()
+    -- All mastery modes farm Haunted Castle Bones.
+    -- No quest is used while Auto Mastery is enabled.
+    if FarmState.AutoMastery then
+        FarmState.AutoQuest = false
+        FarmState.TargetName = "Auto"
+        FarmState.QuestStatus = "Mastery Bone Farm - no quest"
 
-        if q then
-            FarmState.TargetName = q.Mob
-            FarmState.QuestMob = q.Mob
-            FarmState.MobPosition = q.MobPos
-            FarmState.CurrentSea = q.Sea
-            FarmState.QuestStatus = "Mastery mode - no quest"
+        if not FarmState.CurrentTarget or not IsValidFarmTarget(FarmState.CurrentTarget)
+            or not SpecialNameMatch(FarmState.CurrentTarget.Name, BoneSpecial.MobNames)
+        then
+            FarmState.CurrentTarget = GetSpecialEnemy(BoneSpecial.MobNames)
+            FarmState.FarmAnchor = nil
         end
+
+        local masteryTarget = FarmState.CurrentTarget
+
+        if masteryTarget then
+            FarmState.Status =
+                "Mastery " .. tostring(FarmState.MasteryType) ..
+                ": " .. masteryTarget.Name
+            FarmState.MasteryStatus =
+                "Bones target: " .. masteryTarget.Name
+
+            if FarmState.AutoTarget then
+                MoveToTarget(masteryTarget)
+            end
+
+            if FarmState.UseTool then
+                AttackTarget(masteryTarget)
+            end
+
+            return
+        end
+
+        if not MovementService.Active then
+            local i = math.clamp(
+                FarmState.MasteryBoneIndex or 1,
+                1,
+                #BoneSpecial.Points
+            )
+
+            FarmState.Status =
+                "Mastery Bones rotation " .. i .. "/" .. #BoneSpecial.Points
+            FarmState.MasteryStatus =
+                "Travelling Haunted Castle"
+
+            MovementService:GoSegmented(
+                BoneSpecial.Points[i],
+                18,
+                "Mastery Bones"
+            )
+
+            FarmState.MasteryBoneIndex = (i % #BoneSpecial.Points) + 1
+        end
+
+        return
     end
 
     if FarmState.AutoQuest then
@@ -3138,12 +3429,7 @@ local function FarmStep()
             local distanceToMobArea = (root.Position - q.MobPos.Position).Magnitude
 
             if distanceToMobArea > math.max(FarmState.ScanRadius * 0.55, 180) then
-                if FarmState.AutoMastery and not FarmState.AutoQuest then
-                    FarmState.Status = "Mastery: travelling to " .. q.Mob
-                    MovementService:GoSegmented(q.MobPos, 18, "Mastery Mob Area")
-                else
-                    MoveToQuestMobArea(q)
-                end
+                MoveToQuestMobArea(q)
 
                 FarmState.CurrentTarget = GetNearestTarget()
                 return
@@ -3201,6 +3487,12 @@ local FarmDistanceCard, FarmDistanceValue = Card(
     FarmPage,
     "DISTANCE",
     tostring(FarmState.Distance)
+)
+
+Card(
+    FarmPage,
+    "MASTERY",
+    "Use Mastery Type + Auto Mastery below"
 )
 
 Section(
@@ -3290,10 +3582,60 @@ Toggle(
     end
 )
 
+
+local SkillModeOptions = {
+    "None",
+    "Z",
+    "Z + X",
+    "Z + X + C",
+    "Z + X + C + V",
+    "All (Z X C V F)"
+}
+
+local function SkillModeHas(mode, key)
+    return string.find(string.upper(tostring(mode or "")), key, 1, true) ~= nil
+end
+
+local function ApplyFruitSkillMode(mode)
+    FarmState.SkillModeFruit = mode
+    FarmState.MasterySkillZ = SkillModeHas(mode, "Z")
+    FarmState.MasterySkillX = SkillModeHas(mode, "X")
+    FarmState.MasterySkillC = SkillModeHas(mode, "C")
+    FarmState.MasterySkillV = SkillModeHas(mode, "V")
+    FarmState.MasterySkillF = SkillModeHas(mode, "F")
+end
+
+local function FindSkillModeIndex(value)
+    for index, option in ipairs(SkillModeOptions) do
+        if option == value then
+            return index
+        end
+    end
+    return 1
+end
+
+ApplyFruitSkillMode(FarmState.SkillModeFruit)
+
+CycleSelector(
+    FarmPage,
+    "Mastery Type",
+    "Melee / Sword / Gun / Blox Fruit. All modes farm Bones at Haunted Castle.",
+    {"Melee", "Sword", "Gun", "Blox Fruit"},
+    4,
+    function(value)
+        FarmState.MasteryType = value
+        FarmState.CurrentTarget = nil
+        FarmState.FarmAnchor = nil
+        FarmState.MasterySkillIndex = 1
+        FarmState.MasteryLastSkill = 0
+        Notify("Auto Mastery", "Mode: " .. value)
+    end
+)
+
 Toggle(
     FarmPage,
-    "Auto Mastery (Blox Fruit)",
-    "Farm sem quest: enfraquece o NPC com Melee e finaliza com skills da fruta para ganhar maestria.",
+    "Auto Mastery",
+    "Farm de maestria em Bones. Melee treina direto; Sword/Gun/Blox Fruit usam Melee para enfraquecer e finalizam com o tipo selecionado.",
     false,
     function(enabled)
         FarmState.AutoMastery = enabled
@@ -3314,7 +3656,7 @@ Toggle(
             FarmState.Status = "Mastery starting"
             EquipFirstTool()
 
-            Notify("Auto Mastery", "Blox Fruit mastery enabled.")
+            Notify("Auto Mastery", tostring(FarmState.MasteryType) .. " mastery on Bones enabled.")
         else
             FarmState.AutoQuest = FarmState.MasteryPreviousAutoQuest
             FarmState.MasteryStatus = "Idle"
@@ -3331,61 +3673,11 @@ Toggle(
 
 ValueBox(
     FarmPage,
-    "Mastery Finish HP %",
+    "Mastery Finisher HP %",
     FarmState.MasteryKillPercent,
     function(value)
         FarmState.MasteryKillPercent = math.clamp(value, 5, 90)
-        Notify("Auto Mastery", "Fruit finisher at " .. tostring(FarmState.MasteryKillPercent) .. "% HP.")
-    end
-)
-
-Toggle(
-    FarmPage,
-    "Mastery Skill Z",
-    "Usa a skill Z na finalização.",
-    true,
-    function(enabled)
-        FarmState.MasterySkillZ = enabled
-    end
-)
-
-Toggle(
-    FarmPage,
-    "Mastery Skill X",
-    "Usa a skill X na finalização.",
-    true,
-    function(enabled)
-        FarmState.MasterySkillX = enabled
-    end
-)
-
-Toggle(
-    FarmPage,
-    "Mastery Skill C",
-    "Usa a skill C na finalização.",
-    true,
-    function(enabled)
-        FarmState.MasterySkillC = enabled
-    end
-)
-
-Toggle(
-    FarmPage,
-    "Mastery Skill V",
-    "Usa a skill V na finalização.",
-    true,
-    function(enabled)
-        FarmState.MasterySkillV = enabled
-    end
-)
-
-Toggle(
-    FarmPage,
-    "Mastery Skill F",
-    "Opcional. Fica desligada por padrão porque algumas frutas usam F para movimento.",
-    false,
-    function(enabled)
-        FarmState.MasterySkillF = enabled
+        Notify("Auto Mastery", "Finisher at " .. tostring(FarmState.MasteryKillPercent) .. "% HP.")
     end
 )
 
@@ -3654,6 +3946,100 @@ Section(
     CombatPage,
     "Auto Boss",
     "Refresh the server, select a live boss, then enable Auto Farm Boss."
+)
+
+--==================================================
+-- SKILLS
+--==================================================
+
+local SkillsPage = PageService:Create("Skills")
+
+Section(
+    SkillsPage,
+    "Setting Hold and Select Skill",
+    "Configure selected skills for Melee, Sword, Gun and Blox Fruit."
+)
+
+local function SkillModeNotify(kind, value)
+    Notify("Skills", kind .. " -> " .. value)
+end
+
+CycleSelector(
+    SkillsPage,
+    "Select Skills Melee",
+    "Cycle the skills to be used by melee routines.",
+    SkillModeOptions,
+    FindSkillModeIndex(FarmState.SkillModeMelee),
+    function(value)
+        FarmState.SkillModeMelee = value
+        SkillModeNotify("Melee", value)
+    end
+)
+
+CycleSelector(
+    SkillsPage,
+    "Select Skills Sword",
+    "Cycle the skills to be used by sword routines.",
+    SkillModeOptions,
+    FindSkillModeIndex(FarmState.SkillModeSword),
+    function(value)
+        FarmState.SkillModeSword = value
+        SkillModeNotify("Sword", value)
+    end
+)
+
+CycleSelector(
+    SkillsPage,
+    "Select Skills Gun",
+    "Cycle the skills to be used by gun routines.",
+    SkillModeOptions,
+    FindSkillModeIndex(FarmState.SkillModeGun),
+    function(value)
+        FarmState.SkillModeGun = value
+        SkillModeNotify("Gun", value)
+    end
+)
+
+CycleSelector(
+    SkillsPage,
+    "Select Skills Blox Fruit",
+    "This selection is applied directly to Auto Mastery finisher skills.",
+    SkillModeOptions,
+    FindSkillModeIndex(FarmState.SkillModeFruit),
+    function(value)
+        ApplyFruitSkillMode(value)
+        SkillModeNotify("Blox Fruit", value)
+    end
+)
+
+Toggle(
+    SkillsPage,
+    "Hold Skills",
+    "Keeps a skill key pressed for a short duration before releasing it.",
+    FarmState.HoldSkills,
+    function(enabled)
+        FarmState.HoldSkills = enabled
+        Notify("Skills", enabled and "Hold Skills enabled." or "Hold Skills disabled.")
+    end
+)
+
+ValueBox(
+    SkillsPage,
+    "Hold Skill Duration",
+    FarmState.HoldSkillDuration,
+    function(value)
+        FarmState.HoldSkillDuration = math.clamp(value, 0.05, 0.80)
+        Notify("Skills", "Hold duration: " .. string.format("%.2f", FarmState.HoldSkillDuration))
+    end
+)
+
+ActionButton(
+    SkillsPage,
+    "Apply Fruit Selection To Mastery",
+    function()
+        ApplyFruitSkillMode(FarmState.SkillModeFruit)
+        Notify("Skills", "Fruit selection applied to Auto Mastery.")
+    end
 )
 
 --==================================================
@@ -4317,7 +4703,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3r - MASTERY + ATTACK FIX
+-- FLOQUITAVE 2.7.3t - MASTERY BONE FARM ALL TYPES
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
