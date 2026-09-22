@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3v
+    Version: 2.7.3w
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3v",
+    Version = "2.7.3w",
 
     Width = 920,
     Height = 590,
@@ -3182,9 +3182,14 @@ FarmConnect(RunService.Heartbeat, function()
 end)
 
 --==================================================
--- MASTERY FARM 2.7.3u
--- Encapsulated on purpose to avoid Luau main-chunk local register pressure.
--- All mastery types farm Haunted Castle Bones.
+-- MASTERY FARM 2.7.3w
+-- Basic implementation:
+-- 1) use the already-working Teleport Directory once to reach Haunted Castle;
+-- 2) scan only the four Bone mobs;
+-- 3) move directly to the current mob (no rise/cruise loop);
+-- 4) attack until that exact mob dies, then pick the next one.
+-- The structure follows the common pattern found across the reference sources,
+-- but this is an independent implementation.
 --==================================================
 
 task.spawn(function()
@@ -3198,18 +3203,13 @@ task.spawn(function()
         LastAttack = 0,
         LastSkill = 0,
         SkillIndex = 1,
+        LastCastleTeleport = 0,
+        Moving = false,
         AttackCooldown = 0.14,
-        SkillCooldown = 0.60,
-        SkillZ = true,
-        SkillX = true,
-        SkillC = true,
-        SkillV = true,
-        SkillF = false,
-        HoldSkills = false,
-        HoldDuration = 0.15
+        SkillCooldown = 0.60
     }
 
-    local function masteryTypeMatches(tool, wanted)
+    local function toolMatches(tool, wanted)
         if not tool or not tool:IsA("Tool") then
             return false
         end
@@ -3228,18 +3228,19 @@ task.spawn(function()
                 or tool:FindFirstChild("RemoteFunctionShoot") ~= nil
         elseif wanted == "Blox Fruit" then
             return string.find(tip, "fruit", 1, true) ~= nil
-                or (string.find(name, "-", 1, true) ~= nil
-                    and tool:FindFirstChild("Level") ~= nil)
+                or (
+                    string.find(name, "-", 1, true) ~= nil
+                    and tool:FindFirstChild("Level") ~= nil
+                )
         end
 
         return false
     end
 
-    local function findMasteryTool(wanted)
+    local function findTool(wanted)
         local character = LocalPlayer.Character
         local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
 
-        -- Blox Fruit: prefer the equipped fruit name from Player.Data.
         if wanted == "Blox Fruit" then
             local data = LocalPlayer:FindFirstChild("Data")
             local fruitValue = data and data:FindFirstChild("DevilFruit")
@@ -3248,16 +3249,16 @@ task.spawn(function()
                 local fruitName = tostring(fruitValue.Value)
 
                 if character then
-                    local tool = character:FindFirstChild(fruitName)
-                    if tool and tool:IsA("Tool") then
-                        return tool
+                    local direct = character:FindFirstChild(fruitName)
+                    if direct and direct:IsA("Tool") then
+                        return direct
                     end
                 end
 
                 if backpack then
-                    local tool = backpack:FindFirstChild(fruitName)
-                    if tool and tool:IsA("Tool") then
-                        return tool
+                    local direct = backpack:FindFirstChild(fruitName)
+                    if direct and direct:IsA("Tool") then
+                        return direct
                     end
                 end
             end
@@ -3265,7 +3266,7 @@ task.spawn(function()
 
         if character then
             for _, tool in ipairs(character:GetChildren()) do
-                if masteryTypeMatches(tool, wanted) then
+                if toolMatches(tool, wanted) then
                     return tool
                 end
             end
@@ -3273,7 +3274,7 @@ task.spawn(function()
 
         if backpack then
             for _, tool in ipairs(backpack:GetChildren()) do
-                if masteryTypeMatches(tool, wanted) then
+                if toolMatches(tool, wanted) then
                     return tool
                 end
             end
@@ -3282,7 +3283,7 @@ task.spawn(function()
         return nil
     end
 
-    local function equipMasteryTool(tool)
+    local function equip(tool)
         if not tool then
             return nil
         end
@@ -3299,7 +3300,7 @@ task.spawn(function()
         return tool
     end
 
-    local function findBoneTarget()
+    local function findBone()
         local root = GetCharacterRoot()
         local best = nil
         local bestDistance = math.huge
@@ -3328,23 +3329,25 @@ task.spawn(function()
         return best
     end
 
-    -- Copy of the tested segmented idea, isolated from Teleport Directory.
-    local function masteryTravel(targetCFrame, yOffset, destinationName)
-        local root = MovementService:GetRoot()
-        local humanoid = MovementService:GetHumanoid()
+    local function directMove(targetCFrame, yOffset, name)
+        if M.Moving or not M.Enabled then
+            return false
+        end
 
+        local root = GetCharacterRoot()
         if not root or not targetCFrame then
             return false
         end
 
+        M.Moving = true
+
         MovementService:Stop()
         MovementService.Active = true
         MovementService.Target = targetCFrame
-        MovementService.DestinationName = destinationName or "Mastery"
+        MovementService.DestinationName = name or "Mastery"
+        MovementService:SetCollision(false)
 
-        if humanoid then
-            humanoid.Sit = false
-        end
+        local destination = targetCFrame * CFrame.new(0, yOffset or 10, 0)
 
         pcall(function()
             root.Anchored = false
@@ -3352,97 +3355,19 @@ task.spawn(function()
             root.AssemblyAngularVelocity = Vector3.zero
         end)
 
-        local finalTarget = targetCFrame * CFrame.new(0, yOffset or 0)
-        local distance = (root.Position - finalTarget.Position).Magnitude
-        local ok = true
-
-        MovementService:SetCollision(false)
-
-        -- Short travel: one simple tween.
-        if distance <= 220 then
-            ok = MovementService:TweenRoot(root, finalTarget)
-        else
-            -- Long travel: rise once, fixed Y segmented cruise, descend once.
-            local fixedY = math.max(root.Position.Y, finalTarget.Position.Y) + 70
-
-            ok = MovementService:TweenRoot(
-                root,
-                CFrame.new(root.Position.X, fixedY, root.Position.Z)
-            )
-
-            if ok and MovementService.Active then
-                root = MovementService:GetRoot()
-
-                if root then
-                    local startPosition = root.Position
-                    local horizontalTarget = Vector3.new(
-                        finalTarget.Position.X,
-                        fixedY,
-                        finalTarget.Position.Z
-                    )
-                    local delta = horizontalTarget - startPosition
-                    local total = delta.Magnitude
-
-                    if total > 1 then
-                        local direction = delta.Unit
-                        local travelled = 0
-
-                        while travelled < total
-                            and MovementService.Active
-                            and M.Enabled
-                        do
-                            root = MovementService:GetRoot()
-
-                            if not root then
-                                ok = false
-                                break
-                            end
-
-                            travelled = math.min(travelled + 28, total)
-
-                            local nextPosition =
-                                startPosition + direction * travelled
-
-                            nextPosition = Vector3.new(
-                                nextPosition.X,
-                                fixedY,
-                                nextPosition.Z
-                            )
-
-                            ok = MovementService:TweenRoot(
-                                root,
-                                CFrame.new(nextPosition)
-                            )
-
-                            if not ok then
-                                break
-                            end
-                        end
-                    end
-                else
-                    ok = false
-                end
-            end
-
-            if ok and MovementService.Active and M.Enabled then
-                root = MovementService:GetRoot()
-
-                if root then
-                    ok = MovementService:TweenRoot(root, finalTarget)
-                else
-                    ok = false
-                end
-            end
-        end
+        -- IMPORTANT: one direct tween only.
+        -- No "Rising", no fixed-altitude loop, no repeated upward movement.
+        local ok = MovementService:TweenRoot(root, destination)
 
         MovementService:SetCollision(true)
         MovementService.Active = false
         MovementService.Tween = nil
+        M.Moving = false
 
         return ok
     end
 
-    local function sendM1(tool)
+    local function m1(tool)
         if not tool then
             return
         end
@@ -3453,34 +3378,17 @@ task.spawn(function()
 
         pcall(function()
             local camera = workspace.CurrentCamera
-            local viewport = camera
-                and camera.ViewportSize
-                or Vector2.new(800, 600)
-            local input = game:GetService("VirtualInputManager")
+            local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
             local x = math.floor(viewport.X / 2)
             local y = math.floor(viewport.Y / 2)
+            local input = game:GetService("VirtualInputManager")
 
-            input:SendMouseButtonEvent(
-                x,
-                y,
-                0,
-                true,
-                game,
-                0
-            )
-
-            input:SendMouseButtonEvent(
-                x,
-                y,
-                0,
-                false,
-                game,
-                0
-            )
+            input:SendMouseButtonEvent(x, y, 0, true, game, 0)
+            input:SendMouseButtonEvent(x, y, 0, false, game, 0)
         end)
     end
 
-    local function useNextSkill(tool, targetRoot)
+    local function skill(tool, targetRoot)
         if not tool or not targetRoot then
             return false
         end
@@ -3496,144 +3404,96 @@ task.spawn(function()
             end
         end)
 
-        local skills = {
-            {M.SkillZ, Enum.KeyCode.Z, "Z"},
-            {M.SkillX, Enum.KeyCode.X, "X"},
-            {M.SkillC, Enum.KeyCode.C, "C"},
-            {M.SkillV, Enum.KeyCode.V, "V"},
-            {M.SkillF, Enum.KeyCode.F, "F"}
+        local order = {
+            {Enum.KeyCode.Z, "Z"},
+            {Enum.KeyCode.X, "X"},
+            {Enum.KeyCode.C, "C"},
+            {Enum.KeyCode.V, "V"}
         }
 
-        local selected = nil
-
-        for _ = 1, #skills do
-            local index = ((M.SkillIndex - 1) % #skills) + 1
-            M.SkillIndex = index + 1
-
-            if skills[index][1] then
-                selected = skills[index]
-                break
-            end
-        end
-
-        if not selected then
-            return false
-        end
-
+        local selected = order[((M.SkillIndex - 1) % #order) + 1]
+        M.SkillIndex = M.SkillIndex + 1
         M.LastSkill = os.clock()
-        M.Status = M.Type .. " skill " .. selected[3]
 
         pcall(function()
             local input = game:GetService("VirtualInputManager")
-            input:SendKeyEvent(true, selected[2], false, game)
-
-            if M.HoldSkills then
-                task.wait(math.clamp(M.HoldDuration, 0.05, 0.8))
-            end
-
-            input:SendKeyEvent(false, selected[2], false, game)
+            input:SendKeyEvent(true, selected[1], false, game)
+            task.wait(0.08)
+            input:SendKeyEvent(false, selected[1], false, game)
         end)
 
         return true
     end
 
-    local function attackBone(target)
+    local function attack(target)
         if not target or not IsAlive(target) then
             return false
         end
 
-        local humanoid = target:FindFirstChildOfClass("Humanoid")
         local targetRoot = GetTargetRoot(target)
-        local playerRoot = GetCharacterRoot()
+        local humanoid = target:FindFirstChildOfClass("Humanoid")
+        local root = GetCharacterRoot()
 
-        if not humanoid or not targetRoot or not playerRoot then
+        if not targetRoot or not humanoid or not root then
             return false
         end
 
-        local distance = (playerRoot.Position - targetRoot.Position).Magnitude
+        local distance = (root.Position - targetRoot.Position).Magnitude
 
-        -- Only short movement around the current Haunted Castle area.
-        if distance > 38 and not MovementService.Active then
-            masteryTravel(
-                targetRoot.CFrame,
-                18,
-                "Mastery Target"
-            )
+        -- Follow the mob directly. No vertical route state machine.
+        if distance > 32 then
+            M.Status = "Going to " .. target.Name
+            directMove(targetRoot.CFrame, 12, "Mastery Mob")
             return true
         end
 
-        local threshold =
-            humanoid.MaxHealth * (M.KillPercent / 100)
+        local wanted = M.Type
+        local threshold = humanoid.MaxHealth * (M.KillPercent / 100)
 
-        local wantedToolType = M.Type
-
-        -- Sword/Gun/Fruit weaken using Melee first.
-        if M.Type ~= "Melee"
-            and humanoid.Health > threshold
-        then
-            wantedToolType = "Melee"
-            M.Status =
-                "Weakening for " .. M.Type ..
-                " (" ..
-                tostring(
-                    math.floor(
-                        humanoid.Health
-                        / math.max(humanoid.MaxHealth, 1)
-                        * 100
-                    )
-                ) ..
-                "%)"
+        -- Sword/Gun/Fruit: weaken with Melee, then finish with selected type.
+        if M.Type ~= "Melee" and humanoid.Health > threshold then
+            wanted = "Melee"
+            M.Status = "Weakening " .. target.Name
         else
-            M.Status =
-                "Mastery " .. M.Type ..
-                " | " .. target.Name
+            M.Status = "Attacking " .. target.Name .. " with " .. M.Type
         end
 
-        local tool = findMasteryTool(wantedToolType)
+        local tool = findTool(wanted)
 
         if not tool then
-            M.Status = "No " .. wantedToolType .. " tool found"
+            M.Status = "No " .. wanted .. " tool found"
             return true
         end
 
-        tool = equipMasteryTool(tool)
+        tool = equip(tool)
 
-        -- Gun direct shot support.
-        if wantedToolType == "Gun" then
+        -- Gun direct shot fallback when available.
+        if wanted == "Gun" then
             pcall(function()
-                local remoteShoot =
-                    tool:FindFirstChild("RemoteFunctionShoot")
-
-                if remoteShoot
-                    and remoteShoot:IsA("RemoteFunction")
-                then
-                    remoteShoot:InvokeServer(
-                        targetRoot.Position,
-                        targetRoot
-                    )
+                local shoot = tool:FindFirstChild("RemoteFunctionShoot")
+                if shoot and shoot:IsA("RemoteFunction") then
+                    shoot:InvokeServer(targetRoot.Position, targetRoot)
                 end
             end)
         end
 
         if os.clock() - M.LastAttack >= M.AttackCooldown then
             M.LastAttack = os.clock()
-            sendM1(tool)
+            m1(tool)
         end
 
-        -- Use skills only with the mastery item itself,
-        -- not during the Melee weakening stage.
-        if wantedToolType == M.Type then
-            useNextSkill(tool, targetRoot)
+        if wanted == M.Type and M.Type ~= "Melee" then
+            skill(tool, targetRoot)
         end
 
         return true
     end
 
-    -- Simple Mastery UI.
+    -- Simple UI requested by the user.
     Section(
         FarmPage,
         "Mastery Farm",
-        "Simple and functional • Bones / Haunted Castle"
+        "Bones / Haunted Castle"
     )
 
     local masteryStatusCard, masteryStatusValue =
@@ -3687,12 +3547,12 @@ task.spawn(function()
     Corner(methodList, 11)
     Stroke(methodList, Theme.Secondary, 0.30)
 
-    local methodLayout = Create("UIListLayout", {
+    Create("UIListLayout", {
         Padding = UDim.new(0, 2),
         SortOrder = Enum.SortOrder.LayoutOrder
     }, methodList)
 
-    local methodPadding = Create("UIPadding", {
+    Create("UIPadding", {
         PaddingTop = UDim.new(0, 8),
         PaddingBottom = UDim.new(0, 8),
         PaddingLeft = UDim.new(0, 8),
@@ -3700,31 +3560,14 @@ task.spawn(function()
     }, methodList)
 
     local methodOpen = false
-    local methodOrder = {"Blox Fruit", "Gun", "Sword", "Melee"}
-
-    local function refreshMethodLabel()
-        methodLabel.Text = "Select Method Farm Mastery: " .. tostring(M.Type)
-        methodArrow.Text = methodOpen and "⌄" or "›"
-    end
-
-    local function selectMethod(value)
-        M.Type = value
-        M.Target = nil
-        M.SkillIndex = 1
-        M.LastSkill = 0
-        methodOpen = false
-        methodList.Visible = false
-        refreshMethodLabel()
-        Notify("Mastery", "Method: " .. value)
-    end
 
     Connect(methodButton.MouseButton1Click, function()
         methodOpen = not methodOpen
         methodList.Visible = methodOpen
-        refreshMethodLabel()
+        methodArrow.Text = methodOpen and "⌄" or "›"
     end)
 
-    for _, option in ipairs(methodOrder) do
+    for _, option in ipairs({"Blox Fruit", "Gun", "Sword", "Melee"}) do
         local item = Create("TextButton", {
             Size = UDim2.new(1, 0, 0, 34),
             BackgroundColor3 = Theme.Secondary,
@@ -3740,11 +3583,17 @@ task.spawn(function()
         AddHoverEffect(item)
 
         Connect(item.MouseButton1Click, function()
-            selectMethod(option)
+            M.Type = option
+            M.Target = nil
+            M.SkillIndex = 1
+            M.LastSkill = 0
+            methodOpen = false
+            methodList.Visible = false
+            methodArrow.Text = "›"
+            methodLabel.Text = "Select Method Farm Mastery: " .. option
+            Notify("Mastery", "Method: " .. option)
         end)
     end
-
-    refreshMethodLabel()
 
     ValueBox(
         FarmPage,
@@ -3758,14 +3607,14 @@ task.spawn(function()
     Toggle(
         FarmPage,
         "Farm Mastery",
-        "Farm Reborn Skeleton, Living Zombie, Demonic Soul and Posessed Mummy.",
+        "Go to Haunted Castle Bones and attack the mobs.",
         false,
         function(enabled)
             M.Enabled = enabled
             M.Target = nil
             M.BoneIndex = 1
-            M.SkillIndex = 1
-            M.LastSkill = 0
+            M.LastCastleTeleport = 0
+            M.Moving = false
 
             if enabled then
                 FarmState.Enabled = false
@@ -3774,10 +3623,7 @@ task.spawn(function()
                 FarmState.CurrentTarget = nil
                 FarmState.FarmAnchor = nil
                 MovementService:Stop()
-
-                M.Status =
-                    "Starting " .. M.Type ..
-                    " mastery on Bones"
+                M.Status = "Starting mastery"
             else
                 MovementService:Stop()
                 M.Status = "Idle"
@@ -3785,59 +3631,70 @@ task.spawn(function()
         end
     )
 
-    FarmConnect(RunService.Heartbeat, function()
-        if State.Destroyed then
-            return
-        end
+    -- Sequential worker: one movement/attack decision at a time.
+    -- This avoids Heartbeat repeatedly restarting movement.
+    while not State.Destroyed do
+        task.wait(0.15)
 
         masteryStatusValue.Text = M.Status
 
-        if not M.Enabled then
-            return
+        if M.Enabled and not M.Moving then
+            local root = GetCharacterRoot()
+
+            if root then
+                local castle = IslandCFrames["Sea 3"]["Haunted Castle"]
+                local castleDistance = (root.Position - castle.Position).Magnitude
+
+                -- Use the exact Teleport Directory routine the user already confirmed works.
+                if castleDistance > 1800 then
+                    if not MovementService.Active
+                        and os.clock() - M.LastCastleTeleport > 6
+                    then
+                        M.LastCastleTeleport = os.clock()
+                        M.Status = "Going to Haunted Castle"
+                        TeleportToIsland("Sea 3", "Haunted Castle")
+                    end
+                elseif not MovementService.Active then
+                    if M.Target
+                        and (
+                            not M.Target.Parent
+                            or not IsAlive(M.Target)
+                            or not SpecialNameMatch(
+                                M.Target.Name,
+                                BoneSpecial.MobNames
+                            )
+                        )
+                    then
+                        M.Target = nil
+                    end
+
+                    if not M.Target then
+                        M.Target = findBone()
+                    end
+
+                    if M.Target then
+                        attack(M.Target)
+                    else
+                        -- No live Bone mob currently found:
+                        -- move directly to the next known Bone spawn point.
+                        local point = BoneSpecial.Points[M.BoneIndex]
+                        M.Status =
+                            "Searching Bones " ..
+                            tostring(M.BoneIndex) ..
+                            "/" ..
+                            tostring(#BoneSpecial.Points)
+
+                        directMove(point, 12, "Bone Spawn")
+
+                        M.BoneIndex =
+                            (M.BoneIndex % #BoneSpecial.Points) + 1
+                    end
+                end
+            else
+                M.Status = "Waiting for character"
+            end
         end
-
-        if M.Target
-            and (
-                not M.Target.Parent
-                or not IsAlive(M.Target)
-                or not SpecialNameMatch(
-                    M.Target.Name,
-                    BoneSpecial.MobNames
-                )
-            )
-        then
-            M.Target = nil
-        end
-
-        if not M.Target then
-            M.Target = findBoneTarget()
-        end
-
-        if M.Target then
-            attackBone(M.Target)
-            return
-        end
-
-        if not MovementService.Active then
-            local point =
-                BoneSpecial.Points[M.BoneIndex]
-
-            M.Status =
-                "Searching Bones area " ..
-                tostring(M.BoneIndex) ..
-                "/" ..
-                tostring(#BoneSpecial.Points)
-
-            masteryTravel(
-                point,
-                18,
-                "Mastery Bones"
-            )
-
-            M.BoneIndex =
-                (M.BoneIndex % #BoneSpecial.Points) + 1
-        end
-    end)
+    end
 end)
 
 --==================================================
@@ -4620,7 +4477,7 @@ print(
 )
 
 -- ============================================================
--- FLOQUITAVE 2.7.3v - MASTERY SIMPLE UI
+-- FLOQUITAVE 2.7.3w - MASTERY BASIC BONES
 -- Only LIVE bosses are shown in the dropdown.
 -- Encapsulated to protect the main chunk register limit.
 -- ============================================================
