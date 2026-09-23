@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.4i
+    Version: 2.7.5a
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.4i",
+    Version = "2.7.5a",
 
     Width = 920,
     Height = 590,
@@ -3854,6 +3854,313 @@ Section(
     "Auto Boss",
     "Refresh the server, select a live boss, then enable Auto Farm Boss."
 )
+
+--==================================================
+-- AUTO GHOUL 2.7.5a
+-- Focused flow: Cursed Captain -> Hellfire Torch -> Ectoplasm -> Ghoul
+--==================================================
+task.spawn(function()
+    local G = {
+        Enabled = false,
+        Status = "Idle",
+        BossPos = CFrame.new(916.92859,181.09277,33422),
+        ShipPos = CFrame.new(1212.01111,150.79205,33059.24609),
+        LastHop = 0,
+        LastBuy = 0,
+        ConfigFile = "Floquitave_AutoGhoul.txt"
+    }
+
+    local function saveEnabled(value)
+        if writefile then
+            pcall(function()
+                writefile(G.ConfigFile, value and "true" or "false")
+            end)
+        end
+    end
+
+    local function loadEnabled()
+        if isfile and readfile then
+            local ok, value = pcall(function()
+                if isfile(G.ConfigFile) then
+                    return readfile(G.ConfigFile)
+                end
+            end)
+            return ok and tostring(value) == "true"
+        end
+        return false
+    end
+
+    G.Enabled = loadEnabled()
+
+    local function getRace()
+        local data = LocalPlayer:FindFirstChild("Data")
+        local race = data and data:FindFirstChild("Race")
+        return race and tostring(race.Value) or ""
+    end
+
+    local function isGhoul()
+        return string.find(string.lower(getRace()), "ghoul", 1, true) ~= nil
+    end
+
+    local function hasTorch()
+        local character = LocalPlayer.Character
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        return (character and character:FindFirstChild("Hellfire Torch") ~= nil)
+            or (backpack and backpack:FindFirstChild("Hellfire Torch") ~= nil)
+    end
+
+    local function cursedCaptain()
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies then return nil end
+        for _, enemy in ipairs(enemies:GetChildren()) do
+            if enemy:IsA("Model")
+                and string.find(enemy.Name, "Cursed Captain", 1, true)
+                and IsAlive(enemy)
+            then
+                return enemy
+            end
+        end
+        return nil
+    end
+
+    local function getRoot(model)
+        return model and (
+            model:FindFirstChild("HumanoidRootPart")
+            or model:FindFirstChild("UpperTorso")
+            or model:FindFirstChild("Torso")
+        )
+    end
+
+    local function moveTo(cf, label)
+        local root = GetCharacterRoot()
+        if not root or not cf then return false end
+        if MovementService.TeleportPriority then return false end
+
+        MovementService:Stop()
+        MovementService.Active = true
+        MovementService.DestinationName = label or "Auto Ghoul"
+        MovementService.Status = "Auto Ghoul travel"
+        MovementService:SetCollision(false)
+
+        local ok = MovementService:TweenRoot(root, cf)
+
+        MovementService:SetCollision(true)
+        MovementService.Active = false
+        MovementService.Status = ok and "Arrived" or "Failed"
+        return ok
+    end
+
+    local function hitBoss(target)
+        if not IsAlive(target) then return false end
+        local tr = getRoot(target)
+        local me = GetCharacterRoot()
+        if not tr or not me then return false end
+
+        local desired = CFrame.new((tr.CFrame * CFrame.new(0, 18, 0)).Position, tr.Position)
+        if (me.Position - desired.Position).Magnitude > 28 then
+            moveTo(desired, "Cursed Captain")
+            return true
+        end
+
+        MovementService:Stop()
+        pcall(function()
+            me.CFrame = desired
+            me.AssemblyLinearVelocity = Vector3.zero
+            tr.CanCollide = false
+        end)
+
+        local tool = GetEquippedTool()
+        if not tool or not IsLikelyFightingStyle(tool) then
+            tool = EquipFirstTool()
+        end
+
+        if tool then
+            pcall(function() tool:Activate() end)
+            pcall(function()
+                local vu = game:GetService("VirtualUser")
+                vu:CaptureController()
+                vu:Button1Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+                vu:Button1Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+            end)
+        end
+        return true
+    end
+
+    local function tryBuyGhoul()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local comm = remotes and remotes:FindFirstChild("CommF_")
+        if not comm then
+            G.Status = "CommF_ not found"
+            return false
+        end
+
+        G.LastBuy = os.clock()
+        G.Status = "Trading Torch + Ectoplasm for Ghoul"
+
+        -- Exact Ghoul purchase sequence found in the supplied source.
+        pcall(function()
+            comm:InvokeServer("Ectoplasm", "BuyCheck", 4)
+        end)
+        task.wait(0.35)
+        pcall(function()
+            comm:InvokeServer("Ectoplasm", "Change", 4)
+        end)
+        task.wait(0.75)
+
+        if isGhoul() then
+            G.Enabled = false
+            saveEnabled(false)
+            G.Status = "Ghoul obtained"
+            Notify("Auto Ghoul", "Ghoul obtida com sucesso.")
+            return true
+        end
+
+        G.Status = "Need Torch / 100 Ectoplasm"
+        return false
+    end
+
+    local function queueReload()
+        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=275a"))()'
+        local q = queue_on_teleport
+            or (syn and syn.queue_on_teleport)
+            or (fluxus and fluxus.queue_on_teleport)
+
+        if q then
+            pcall(function() q(loader) end)
+        end
+    end
+
+    local function serverHop()
+        if os.clock() - G.LastHop < 12 then return end
+        G.LastHop = os.clock()
+        G.Status = "Cursed Captain absent - changing server"
+        saveEnabled(true)
+        queueReload()
+
+        -- Public-server hop. Persistence file re-enables Auto Ghoul after reload.
+        task.spawn(function()
+            local HttpService = game:GetService("HttpService")
+            local TeleportService = game:GetService("TeleportService")
+            local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId)
+                .. "/servers/Public?sortOrder=Asc&limit=100"
+            local ok, body = pcall(function()
+                return game:HttpGet(url)
+            end)
+            if not ok then
+                G.Status = "Server list unavailable"
+                return
+            end
+
+            local decodedOk, data = pcall(function()
+                return HttpService:JSONDecode(body)
+            end)
+            if not decodedOk or not data or not data.data then
+                G.Status = "Server list invalid"
+                return
+            end
+
+            for _, server in ipairs(data.data) do
+                if not G.Enabled then return end
+                if server.id ~= game.JobId
+                    and tonumber(server.playing or 0) < tonumber(server.maxPlayers or 0)
+                then
+                    pcall(function()
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, server.id, LocalPlayer)
+                    end)
+                    task.wait(3)
+                end
+            end
+            G.Status = "No alternate server found"
+        end)
+    end
+
+    Section(
+        CombatPage,
+        "Auto Ghoul",
+        "Cursed Captain -> Hellfire Torch -> 100 Ectoplasm -> Ghoul"
+    )
+
+    local statusCard, statusValue = Card(CombatPage, "GHOUL STATUS", G.Status)
+
+    Toggle(
+        CombatPage,
+        "Auto Ghoul",
+        "Mata Cursed Captain, procura Hellfire Torch e troca por Ghoul usando Ectoplasm.",
+        G.Enabled,
+        function(enabled)
+            G.Enabled = enabled
+            saveEnabled(enabled)
+
+            if enabled then
+                FarmState.Enabled = false
+                FarmState.AutoCakePrince = false
+                FarmState.AutoBone = false
+                FarmState.CurrentTarget = nil
+                MovementService:Stop()
+                G.Status = "Starting Auto Ghoul"
+            else
+                MovementService:Stop()
+                G.Status = "Disabled"
+            end
+            statusValue.Text = G.Status
+        end
+    )
+
+    -- Toggle() does not call its callback for a default=true value.
+    -- The worker reads G.Enabled directly, so persisted state resumes automatically.
+    task.spawn(function()
+        while not State.Destroyed do
+            task.wait(0.25)
+
+            if not G.Enabled then
+                statusValue.Text = G.Status
+                continue
+            end
+
+            if isGhoul() then
+                G.Enabled = false
+                saveEnabled(false)
+                G.Status = "Ghoul already equipped"
+                statusValue.Text = G.Status
+                Notify("Auto Ghoul", "A conta já está com raça Ghoul.")
+                continue
+            end
+
+            -- The supplied source's purchase remote performs the server-side
+            -- requirement checks. If Torch + Ectoplasm are ready, this completes it.
+            if hasTorch() then
+                if os.clock() - G.LastBuy > 2 then
+                    tryBuyGhoul()
+                end
+                statusValue.Text = G.Status
+                continue
+            end
+
+            local boss = cursedCaptain()
+            if boss then
+                G.Status = "Killing Cursed Captain"
+                hitBoss(boss)
+                statusValue.Text = G.Status
+                continue
+            end
+
+            -- ReplicatedStorage model means the boss exists in this server but
+            -- is not currently attackable/streamed. Travel to its known spawn.
+            local stored = ReplicatedStorage:FindFirstChild("Cursed Captain")
+            if stored then
+                G.Status = "Going to Cursed Captain spawn"
+                moveTo(G.BossPos * CFrame.new(0, 12, 0), "Cursed Captain Spawn")
+                statusValue.Text = G.Status
+                task.wait(1)
+                continue
+            end
+
+            -- If the boss is absent, hop rather than waiting indefinitely.
+            serverHop()
+            statusValue.Text = G.Status
+        end
+    end)
+end)
 
 --==================================================
 -- MISC
