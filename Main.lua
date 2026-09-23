@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.4e
+    Version: 2.7.4f
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.4e",
+    Version = "2.7.4f",
 
     Width = 920,
     Height = 590,
@@ -920,7 +920,8 @@ end
 
 local Main = Create("Frame", {
     Size = UDim2.new(0, Config.Width, 0, Config.Height),
-    Position = UDim2.new(0.5, -Config.Width / 2, 0.5, -Config.Height / 2),
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromScale(0.5, 0.5),
     BackgroundColor3 = Theme.Background,
     BorderSizePixel = 0
 }, ScreenGui)
@@ -929,45 +930,45 @@ Corner(Main, 16)
 Stroke(Main, Theme.Secondary, 0.15)
 
 local MainScale = Create("UIScale", {
-    Scale = Config.Scale
+    Scale = 1
 }, Main)
 
--- Mobile responsive scale:
--- Keep the desktop design untouched, but shrink the whole hub when
--- the available viewport is smaller than the designed 920x590 canvas.
+-- Mobile viewport fix.
+-- Scale is calculated from the actual visible viewport and the window remains
+-- centered by AnchorPoint, so it cannot start enlarged/off-screen.
 do
-    local function UpdateResponsiveScale()
+    local function UpdateMobileViewport()
         local camera = workspace.CurrentCamera
         if not camera then return end
 
         local viewport = camera.ViewportSize
-        local safeWidth = math.max(viewport.X - 24, 320)
-        local safeHeight = math.max(viewport.Y - 24, 240)
 
-        local fitX = safeWidth / Config.Width
-        local fitY = safeHeight / Config.Height
-        local fit = math.min(fitX, fitY)
+        -- Use at most 68% of the screen width and 72% of its height.
+        -- This deliberately leaves Roblox/mobile controls visible around the hub.
+        local targetWidth = viewport.X * 0.68
+        local targetHeight = viewport.Y * 0.72
 
-        -- Forced compact mode. Do not trust Android emulator viewport/touch
-        -- detection: always cap this hub at 45% of its designed size.
-        fit = math.min(fit, 0.45)
+        local fitX = targetWidth / Config.Width
+        local fitY = targetHeight / Config.Height
+        local scale = math.min(fitX, fitY, 0.68)
 
-        MainScale.Scale = math.clamp(fit, 0.30, 0.45)
+        MainScale.Scale = math.clamp(scale, 0.22, 0.68)
+        Main.AnchorPoint = Vector2.new(0.5, 0.5)
+        Main.Position = UDim2.fromScale(0.5, 0.5)
     end
 
-    UpdateResponsiveScale()
+    UpdateMobileViewport()
 
     local camera = workspace.CurrentCamera
     if camera then
-        Connect(camera:GetPropertyChangedSignal("ViewportSize"), UpdateResponsiveScale)
+        Connect(camera:GetPropertyChangedSignal("ViewportSize"), UpdateMobileViewport)
     end
 
     Connect(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
-        task.wait()
-        UpdateResponsiveScale()
+        task.wait(0.1)
+        UpdateMobileViewport()
     end)
 end
-
 --==================================================
 -- TOPBAR
 --==================================================
