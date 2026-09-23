@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.4f
+    Version: 2.7.4g
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.4f",
+    Version = "2.7.4g",
 
     Width = 920,
     Height = 590,
@@ -38,7 +38,7 @@ local Config = {
     Notifications = true,
 
     Theme = "Dark",
-    Scale = 1,
+    Scale = 0.50,
 
     Accent = Color3.fromRGB(151, 92, 255),
 
@@ -4063,7 +4063,7 @@ Corner(PlusScale, 9)
 AddHoverEffect(PlusScale)
 
 local function UpdateScale()
-    Config.Scale = math.clamp(Config.Scale, 0.8, 1.2)
+    Config.Scale = math.clamp(Config.Scale, 0.30, 1.20)
 
     MainScale.Scale = Config.Scale
     ScaleValue.Text = tostring(math.floor(Config.Scale * 100)) .. "%"
