@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.4h
+    Version: 2.7.4i
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.4h",
+    Version = "2.7.4i",
 
     Width = 920,
     Height = 590,
@@ -3413,7 +3413,7 @@ task.spawn(function()
                 local ok = pcall(function()
                     leftClick:FireServer(direction.Unit, 1)
                 end)
-                if ok then return true end
+                -- Continue into the normal activation path too.
             end
         end
 
@@ -3427,14 +3427,15 @@ task.spawn(function()
             and registerAttack:IsA("RemoteEvent")
             and registerHit:IsA("RemoteEvent")
         then
-            local ok = pcall(function()
+            pcall(function()
                 registerAttack:FireServer(0.1)
-                registerHit:FireServer(hitPart, {{target, hitPart}})
+                -- Single-target packet used by the supplied basic-attack reference.
+                registerHit:FireServer(hitPart, {})
             end)
-            if ok then return true end
         end
 
-        -- Universal fallback for experiences/tools that use normal Tool activation.
+        -- Keep normal Tool activation in the SAME tick instead of treating it
+        -- as a fallback only.
         pcall(function() tool:Activate() end)
         pcall(function()
             local vu = game:GetService("VirtualUser")
@@ -3495,6 +3496,16 @@ task.spawn(function()
         end
 
         local desired = targetRoot.CFrame * CFrame.new(0, M.CombatHeight, M.CombatDistance)
+
+        -- Match the supplied farm pattern: keep the mob's combat part large,
+        -- non-collidable and stationary while the basic attack is being sent.
+        pcall(function()
+            targetRoot.CanCollide = false
+            targetRoot.Size = Vector3.new(60, 60, 60)
+            targetRoot.Transparency = 1
+            humanoid.WalkSpeed = 0
+        end)
+
         if (root.Position - desired.Position).Magnitude > 20 then
             M.Status = "Going to " .. target.Name
             directMove(desired, 0, "Mastery Mob")
