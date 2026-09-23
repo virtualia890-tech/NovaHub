@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.5g
+    Version: 2.7.5h
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.5g",
+    Version = "2.7.5h",
 
     Width = 920,
     Height = 590,
@@ -3873,10 +3873,10 @@ Section(
 )
 
 task.spawn(function()
-    local TOP_TREE = CFrame.new(2947.556884765625, 2281.630615234375, -7213.54931640625)
+    local TOP_TREE = CFrame.new(3032.05, 2280.94, -7323.46)
     -- Staging point on Great Tree island. Long-distance travel goes here first,
     -- so the character does not start climbing while it is still far from the island.
-    local TREE_ISLAND_STAGE = CFrame.new(2869.0, 424.0, -7207.0)
+    local TREE_ISLAND_STAGE = CFrame.new(3032.05, 424.0, -7323.46)
     local TEMPLE_ENTRY = CFrame.new(28286.35546875, 14895.3017578125, 102.62469482421875)
 
     local RACE_DOORS = {
@@ -4293,7 +4293,7 @@ task.spawn(function()
     end
 
     local function queueReload()
-        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=275g"))()'
+        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=275h"))()'
         local q = queue_on_teleport
             or (syn and syn.queue_on_teleport)
             or (fluxus and fluxus.queue_on_teleport)
