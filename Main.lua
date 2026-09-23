@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3y1
+    Version: 2.7.3x
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3y1",
+    Version = "2.7.3x",
 
     Width = 920,
     Height = 590,
@@ -40,7 +40,7 @@ local Config = {
     Theme = "Dark",
     Scale = 1,
 
-    Accent = Color3.fromRGB(145, 92, 246),
+    Accent = Color3.fromRGB(115, 90, 255),
 
     PerformanceInterval = 0.5
 }
@@ -79,13 +79,13 @@ local StartTime = os.clock()
 
 local Themes = {
     Dark = {
-        Background = Color3.fromRGB(8, 8, 11),
-        Sidebar = Color3.fromRGB(11, 11, 16),
-        Card = Color3.fromRGB(16, 16, 23),
-        Secondary = Color3.fromRGB(24, 24, 34),
-        Text = Color3.fromRGB(244, 244, 248),
-        SubText = Color3.fromRGB(145, 145, 160),
-        Accent = Color3.fromRGB(145, 92, 246)
+        Background = Color3.fromRGB(12, 12, 18),
+        Sidebar = Color3.fromRGB(16, 16, 24),
+        Card = Color3.fromRGB(21, 21, 31),
+        Secondary = Color3.fromRGB(28, 28, 40),
+        Text = Color3.fromRGB(245, 245, 250),
+        SubText = Color3.fromRGB(155, 155, 175),
+        Accent = Color3.fromRGB(115, 90, 255)
     },
 
     Light = {
@@ -926,15 +926,14 @@ local TopbarCover = Create("Frame", {
 local Logo = Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 9),
     Size = UDim2.new(0, 40, 0, 40),
-    BackgroundColor3 = Theme.Secondary,
+    BackgroundColor3 = Theme.Accent,
     Text = "F",
     Font = Enum.Font.GothamBlack,
-    TextSize = 20,
-    TextColor3 = Theme.Accent
+    TextSize = 21,
+    TextColor3 = Color3.new(1, 1, 1)
 }, Topbar)
 
-Corner(Logo, 12)
-Stroke(Logo, Theme.Accent, 0.18)
+Corner(Logo, 11)
 
 local Title = Create("TextLabel", {
     Position = UDim2.new(0, 70, 0, 10),
@@ -3964,8 +3963,7 @@ local function ApplyTheme()
     Topbar.BackgroundColor3 = Theme.Card
     TopbarCover.BackgroundColor3 = Theme.Card
 
-    Logo.BackgroundColor3 = Theme.Secondary
-    Logo.TextColor3 = Theme.Accent
+    Logo.BackgroundColor3 = Theme.Accent
 
     Title.TextColor3 = Theme.Text
     Version.TextColor3 = Theme.SubText
@@ -4317,19 +4315,18 @@ end)
 --==================================================
 
 local FloatingButton = Create("TextButton", {
-    Size = UDim2.new(0, 60, 0, 60),
-    Position = UDim2.new(0, 25, 0.5, -30),
-    BackgroundColor3 = Theme.Card,
+    Size = UDim2.new(0, 58, 0, 58),
+    Position = UDim2.new(0, 25, 0.5, -29),
+    BackgroundColor3 = Theme.Accent,
     Text = "F",
     Font = Enum.Font.GothamBlack,
-    TextSize = 24,
-    TextColor3 = Theme.Accent,
+    TextSize = 21,
+    TextColor3 = Color3.new(1, 1, 1),
     Visible = false,
     AutoButtonColor = false
 }, ScreenGui)
 
-Corner(FloatingButton, 30)
-Stroke(FloatingButton, Theme.Accent, 0.12)
+Corner(FloatingButton, 29)
 AddHoverEffect(FloatingButton)
 
 local floatingDragging = false
