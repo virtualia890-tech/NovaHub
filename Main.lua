@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.4d
+    Version: 2.7.4e
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.4d",
+    Version = "2.7.4e",
 
     Width = 920,
     Height = 590,
@@ -946,21 +946,13 @@ do
 
         local fitX = safeWidth / Config.Width
         local fitY = safeHeight / Config.Height
-        local fit = math.min(Config.Scale, fitX, fitY)
+        local fit = math.min(fitX, fitY)
 
-        -- Mobile/emulator: intentionally compact instead of merely fitting.
-        -- Roblox may report a large virtual viewport on Android emulators,
-        -- so cap the scale based on touch/mobile input as well.
-        local UIS = game:GetService("UserInputService")
-        local mobileLike = UIS.TouchEnabled
+        -- Forced compact mode. Do not trust Android emulator viewport/touch
+        -- detection: always cap this hub at 45% of its designed size.
+        fit = math.min(fit, 0.45)
 
-        if mobileLike then
-            fit = math.min(fit * 0.72, 0.62)
-        elseif viewport.X < 1000 or viewport.Y < 650 then
-            fit = math.min(fit * 0.78, 0.72)
-        end
-
-        MainScale.Scale = math.clamp(fit, 0.38, Config.Scale)
+        MainScale.Scale = math.clamp(fit, 0.30, 0.45)
     end
 
     UpdateResponsiveScale()
