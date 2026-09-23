@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.5f
+    Version: 2.7.5g
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.5f",
+    Version = "2.7.5g",
 
     Width = 920,
     Height = 590,
@@ -3943,32 +3943,47 @@ task.spawn(function()
             return false
         end
 
-        -- Stage 1: use the hub's already-tested island teleport route.
-        -- This reaches Great Tree at island level before any vertical climb.
-        if (root.Position - TREE_ISLAND_STAGE.Position).Magnitude > 900 then
-            raceStatus.Text = "Going to Great Tree island"
-            local ok = pcall(function()
-                TeleportToIsland("Sea 3", "Great Tree")
-            end)
-            if not ok then
-                raceStatus.Text = "Great Tree island travel failed"
+        -- IMPORTANT: Race V4 navigation does NOT call TeleportToIsland here.
+        -- That teleport intentionally starts with a vertical rise, which is not
+        -- desired for the Great Tree NPC route.
+        --
+        -- Phase 1: travel horizontally to Great Tree X/Z while preserving the
+        -- character's CURRENT Y. No climbing can begin during the long trip.
+        local horizontalArrival = CFrame.new(
+            TREE_ISLAND_STAGE.Position.X,
+            root.Position.Y,
+            TREE_ISLAND_STAGE.Position.Z
+        )
+
+        local horizontalDistance = Vector3.new(
+            root.Position.X - TREE_ISLAND_STAGE.Position.X,
+            0,
+            root.Position.Z - TREE_ISLAND_STAGE.Position.Z
+        ).Magnitude
+
+        if horizontalDistance > 180 then
+            raceStatus.Text = "Going horizontally to Great Tree island"
+            if not move(horizontalArrival, "Great Tree - Horizontal") then
+                raceStatus.Text = "Could not reach Great Tree X/Z"
                 return false
             end
-            task.wait(0.8)
+            task.wait(0.5)
             root = GetCharacterRoot()
             if not root then return false end
         end
 
-        -- Stage 2: settle near the island/tree base first.
-        if (root.Position - TREE_ISLAND_STAGE.Position).Magnitude > 350 then
-            raceStatus.Text = "Approaching Great Tree"
-            if not move(TREE_ISLAND_STAGE, "Great Tree Island") then
+        -- Phase 2: now that X/Z are already on the island, adjust only locally
+        -- to the island/base height.
+        raceStatus.Text = "Settling on Great Tree island"
+        if (root.Position - TREE_ISLAND_STAGE.Position).Magnitude > 80 then
+            if not move(TREE_ISLAND_STAGE, "Great Tree Island Base") then
+                raceStatus.Text = "Could not settle on Great Tree island"
                 return false
             end
-            task.wait(0.5)
+            task.wait(0.6)
         end
 
-        -- Stage 3: only now climb to the NPC.
+        -- Phase 3: climb only after the account is already at Great Tree.
         raceStatus.Text = "Climbing Great Tree"
         return move(TOP_TREE, "Great Tree NPC")
     end
@@ -4278,7 +4293,7 @@ task.spawn(function()
     end
 
     local function queueReload()
-        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=275f"))()'
+        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=275g"))()'
         local q = queue_on_teleport
             or (syn and syn.queue_on_teleport)
             or (fluxus and fluxus.queue_on_teleport)
