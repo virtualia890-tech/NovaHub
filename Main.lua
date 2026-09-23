@@ -1,7 +1,6 @@
-
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.5d
+    Version: 2.7.5f
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -30,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.5d",
+    Version = "2.7.5f",
 
     Width = 920,
     Height = 590,
@@ -3875,6 +3874,9 @@ Section(
 
 task.spawn(function()
     local TOP_TREE = CFrame.new(2947.556884765625, 2281.630615234375, -7213.54931640625)
+    -- Staging point on Great Tree island. Long-distance travel goes here first,
+    -- so the character does not start climbing while it is still far from the island.
+    local TREE_ISLAND_STAGE = CFrame.new(2869.0, 424.0, -7207.0)
     local TEMPLE_ENTRY = CFrame.new(28286.35546875, 14895.3017578125, 102.62469482421875)
 
     local RACE_DOORS = {
@@ -3894,15 +3896,81 @@ task.spawn(function()
             raceStatus.Text = "Character not ready"
             return false
         end
+
+        -- Race navigation intentionally uses a slower dedicated tween.
+        -- It does not alter the hub's normal TeleportToIsland movement.
         MovementService:Stop()
         MovementService.Active = true
         MovementService.DestinationName = name
         MovementService.Status = name
         MovementService:SetCollision(false)
-        local ok = MovementService:TweenRoot(root, cf)
+
+        local distance = (root.Position - cf.Position).Magnitude
+        local raceSpeed = 115
+        local duration = math.max(distance / raceSpeed, 0.35)
+        local tween = TweenService:Create(
+            root,
+            TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+            {CFrame = cf}
+        )
+
+        local finished = false
+        local connection
+        connection = tween.Completed:Connect(function()
+            finished = true
+            if connection then connection:Disconnect() end
+        end)
+
+        tween:Play()
+        local started = os.clock()
+        while not finished and os.clock() - started < duration + 2 do
+            if State.Destroyed then
+                pcall(function() tween:Cancel() end)
+                break
+            end
+            task.wait(0.05)
+        end
+
         MovementService:SetCollision(true)
         MovementService.Active = false
-        return ok
+        return finished
+    end
+
+    local function goToGreatTreeThenClimb()
+        local root = GetCharacterRoot()
+        if not root then
+            raceStatus.Text = "Character not ready"
+            return false
+        end
+
+        -- Stage 1: use the hub's already-tested island teleport route.
+        -- This reaches Great Tree at island level before any vertical climb.
+        if (root.Position - TREE_ISLAND_STAGE.Position).Magnitude > 900 then
+            raceStatus.Text = "Going to Great Tree island"
+            local ok = pcall(function()
+                TeleportToIsland("Sea 3", "Great Tree")
+            end)
+            if not ok then
+                raceStatus.Text = "Great Tree island travel failed"
+                return false
+            end
+            task.wait(0.8)
+            root = GetCharacterRoot()
+            if not root then return false end
+        end
+
+        -- Stage 2: settle near the island/tree base first.
+        if (root.Position - TREE_ISLAND_STAGE.Position).Magnitude > 350 then
+            raceStatus.Text = "Approaching Great Tree"
+            if not move(TREE_ISLAND_STAGE, "Great Tree Island") then
+                return false
+            end
+            task.wait(0.5)
+        end
+
+        -- Stage 3: only now climb to the NPC.
+        raceStatus.Text = "Climbing Great Tree"
+        return move(TOP_TREE, "Great Tree NPC")
     end
 
     local function interactTreeNPC()
@@ -3970,9 +4038,10 @@ task.spawn(function()
 
     ActionButton(RacesPage, "1. Go Up Great Tree", function()
         task.spawn(function()
-            raceStatus.Text = "Going up Great Tree"
-            move(TOP_TREE, "Great Tree NPC")
-            raceStatus.Text = "At Great Tree NPC"
+            raceStatus.Text = "Going to Great Tree island"
+            if goToGreatTreeThenClimb() then
+                raceStatus.Text = "At Great Tree NPC"
+            end
         end)
     end)
 
@@ -3995,9 +4064,9 @@ task.spawn(function()
 
     ActionButton(RacesPage, "Tree -> NPC -> Race Door", function()
         task.spawn(function()
-            raceStatus.Text = "Going up Great Tree"
-            if not move(TOP_TREE, "Great Tree NPC") then
-                raceStatus.Text = "Could not reach Great Tree"
+            raceStatus.Text = "Going to Great Tree island"
+            if not goToGreatTreeThenClimb() then
+                raceStatus.Text = "Could not reach Great Tree NPC"
                 return
             end
 
@@ -4209,7 +4278,7 @@ task.spawn(function()
     end
 
     local function queueReload()
-        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=275d"))()'
+        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=275f"))()'
         local q = queue_on_teleport
             or (syn and syn.queue_on_teleport)
             or (fluxus and fluxus.queue_on_teleport)
