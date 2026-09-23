@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3y
+    Version: 2.7.3y1
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3y",
+    Version = "2.7.3y1",
 
     Width = 920,
     Height = 590,
@@ -1350,7 +1350,7 @@ local Home = PageService:Create("Home")
 Section(
     Home,
     "Welcome to Floquitave",
-    "Clean • Functional • Lightweight"
+    "Clean interface • Smooth animations • Modular architecture"
 )
 
 local Welcome = Create("Frame", {
@@ -1377,7 +1377,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "Floquitave 2.7.3y",
+    Text = "2.6.5 Farm Route Fix",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -2918,9 +2918,23 @@ end
 -- FARM UI
 --==================================================
 
-local FarmStatusValue = nil
-local FarmTargetValue = nil
-local FarmDistanceValue = nil
+local FarmStatusCard, FarmStatusValue = Card(
+    FarmPage,
+    "FARM STATUS",
+    "Idle"
+)
+
+local FarmTargetCard, FarmTargetValue = Card(
+    FarmPage,
+    "CURRENT TARGET",
+    "None"
+)
+
+local FarmDistanceCard, FarmDistanceValue = Card(
+    FarmPage,
+    "DISTANCE",
+    tostring(FarmState.Distance)
+)
 
 Section(
     FarmPage,
@@ -2934,9 +2948,9 @@ Section(
     "Sem quests • modos separados do Auto Farm Level"
 )
 
-local SpecialFarmValue = nil
-local CakeFarmValue = nil
-local BoneFarmValue = nil
+local SpecialFarmCard, SpecialFarmValue = Card(FarmPage, "SPECIAL STATUS", "Idle")
+local CakeFarmCard, CakeFarmValue = Card(FarmPage, "CAKE PRINCE", "Checking...")
+local BoneFarmCard, BoneFarmValue = Card(FarmPage, "BONES", "Checking...")
 
 Toggle(
     FarmPage,
@@ -3011,6 +3025,17 @@ Toggle(
 
 Toggle(
     FarmPage,
+    "Auto Mastery",
+    "Keeps the mastery mode available for the game's custom attack hook.",
+    false,
+    function(enabled)
+        FarmState.AutoMastery = enabled
+        Notify("Auto Mastery", enabled and "Enabled" or "Disabled")
+    end
+)
+
+Toggle(
+    FarmPage,
     "Auto Equip Tool",
     "Automatically equips the first Tool found in the Backpack.",
     true,
@@ -3066,7 +3091,7 @@ ValueBox(
     FarmState.Distance,
     function(value)
         FarmState.Distance = math.clamp(value, 2, 30)
-        if FarmDistanceValue then FarmDistanceValue.Text = tostring(FarmState.Distance) end
+        FarmDistanceValue.Text = tostring(FarmState.Distance)
     end
 )
 
@@ -3101,12 +3126,12 @@ ActionButton(
 
         if target then
             FarmState.CurrentTarget = target
-            if FarmTargetValue then FarmTargetValue.Text = target.Name end
-            if FarmStatusValue then FarmStatusValue.Text = "Target found" end
+            FarmTargetValue.Text = target.Name
+            FarmStatusValue.Text = "Target found"
             Notify("Main Farm", "Target encontrado: " .. target.Name)
         else
-            if FarmTargetValue then FarmTargetValue.Text = "None" end
-            if FarmStatusValue then FarmStatusValue.Text = "No target" end
+            FarmTargetValue.Text = "None"
+            FarmStatusValue.Text = "No target"
             Notify("Main Farm", "Nenhum alvo válido encontrado.")
         end
     end
@@ -3152,9 +3177,9 @@ FarmConnect(RunService.Heartbeat, function()
         end
     end
 
-    if SpecialFarmValue then SpecialFarmValue.Text = FarmState.SpecialStatus .. " • " .. FarmState.SpecialTarget end
-    if CakeFarmValue then CakeFarmValue.Text = FarmState.CakeStatus end
-    if BoneFarmValue then BoneFarmValue.Text = FarmState.BoneCount end
+    SpecialFarmValue.Text = FarmState.SpecialStatus .. " • " .. FarmState.SpecialTarget
+    CakeFarmValue.Text = FarmState.CakeStatus
+    BoneFarmValue.Text = FarmState.BoneCount
 end)
 
 --==================================================
@@ -3494,7 +3519,8 @@ task.spawn(function()
         "Bones / Haunted Castle"
     )
 
-    local masteryStatusValue = nil
+    local masteryStatusCard, masteryStatusValue =
+        Card(FarmPage, "MASTERY STATUS", "Idle")
 
     local methodHolder = Create("Frame", {
         Size = UDim2.new(1, 0, 0, 52),
@@ -3651,7 +3677,7 @@ task.spawn(function()
     while not State.Destroyed do
         task.wait(0.15)
 
-        if masteryStatusValue then masteryStatusValue.Text = M.Status end
+        masteryStatusValue.Text = M.Status
 
         if M.Enabled and not M.Moving then
             local root = GetCharacterRoot()
@@ -3722,8 +3748,8 @@ FarmConnect(RunService.Heartbeat, function()
     end
 
     if not FarmState.Enabled then
-        if FarmStatusValue then FarmStatusValue.Text = FarmState.Status end
-        if FarmTargetValue then FarmTargetValue.Text = FarmState.CurrentTarget end
+        FarmStatusValue.Text = FarmState.Status
+        FarmTargetValue.Text = FarmState.CurrentTarget
             and FarmState.CurrentTarget.Name
             or "None"
         return
@@ -3731,7 +3757,7 @@ FarmConnect(RunService.Heartbeat, function()
 
     FarmStep()
 
-    if FarmStatusValue then FarmStatusValue.Text = FarmState.Status end
+    FarmStatusValue.Text = FarmState.Status
     if QuestStatusValue then QuestStatusValue.Text = FarmState.QuestStatus or "Idle" end
     if QuestMobValue then QuestMobValue.Text = FarmState.QuestMob or "Auto by level"
         QuestSeaValue.Text = FarmState.CurrentSea and ("Sea " .. tostring(FarmState.CurrentSea)) or "Auto" end
@@ -3740,9 +3766,9 @@ FarmConnect(RunService.Heartbeat, function()
         and FarmState.CurrentTarget.Parent
         and IsValidFarmTarget(FarmState.CurrentTarget)
     then
-        if FarmTargetValue then FarmTargetValue.Text = FarmState.CurrentTarget end.Name
+        FarmTargetValue.Text = FarmState.CurrentTarget.Name
     else
-        if FarmTargetValue then FarmTargetValue.Text = "None" end
+        FarmTargetValue.Text = "None"
     end
 end)
 
@@ -3778,10 +3804,11 @@ Section(
     "Quest management interface"
 )
 
-local QuestStatusValue = nil
-local QuestMobValue = nil
-local QuestSeaValue = nil
-local QuestRouteValue = nil
+local QuestStatusCard, QuestStatusValue = Card(QuestPage, "QUEST STATUS", "Idle")
+local QuestMobCard, QuestMobValue = Card(QuestPage, "QUEST MOB", "Auto by level")
+local QuestSeaCard, QuestSeaValue = Card(QuestPage, "SEA", "Auto")
+local QuestRouteCard, QuestRouteValue = Card(QuestPage, "ROUTE", "Quest NPC -> Mob Spawn")
+
 
 Toggle(
     QuestPage,
@@ -3793,6 +3820,28 @@ Toggle(
         FarmState.CurrentTarget = nil
         FarmState.FarmAnchor = nil
         Notify("Auto Quest", enabled and "Enabled" or "Disabled")
+    end
+)
+
+--==================================================
+-- RAIDS
+--==================================================
+
+local RaidPage = PageService:Create("Raids")
+
+Section(
+    RaidPage,
+    "Raids",
+    "Raid interface"
+)
+
+Toggle(
+    RaidPage,
+    "Auto Raid",
+    "Test toggle — interface only",
+    false,
+    function(enabled)
+        Notify("Auto Raid", enabled and "Enabled" or "Disabled")
     end
 )
 
@@ -3831,6 +3880,22 @@ Toggle(
     end
 )
 
+
+Section(
+    MiscPage,
+    "Misc",
+    "Additional options"
+)
+
+Toggle(
+    MiscPage,
+    "Anti AFK",
+    "Test interface",
+    false,
+    function(enabled)
+        Notify("Anti AFK", enabled and "Enabled" or "Disabled")
+    end
+)
 
 --==================================================
 -- SETTINGS
@@ -4255,45 +4320,16 @@ local FloatingButton = Create("TextButton", {
     Size = UDim2.new(0, 60, 0, 60),
     Position = UDim2.new(0, 25, 0.5, -30),
     BackgroundColor3 = Theme.Card,
-    Text = "",
+    Text = "F",
+    Font = Enum.Font.GothamBlack,
+    TextSize = 24,
+    TextColor3 = Theme.Accent,
     Visible = false,
     AutoButtonColor = false
 }, ScreenGui)
 
 Corner(FloatingButton, 30)
 Stroke(FloatingButton, Theme.Accent, 0.12)
-
-local FloatingInner = Create("Frame", {
-    AnchorPoint = Vector2.new(0.5, 0.5),
-    Position = UDim2.new(0.5, 0, 0.5, 0),
-    Size = UDim2.new(0, 46, 0, 46),
-    BackgroundColor3 = Theme.Secondary,
-    BorderSizePixel = 0
-}, FloatingButton)
-
-Corner(FloatingInner, 23)
-Stroke(FloatingInner, Theme.Secondary, 0.10)
-
-local FloatingMark = Create("TextLabel", {
-    AnchorPoint = Vector2.new(0.5, 0.5),
-    Position = UDim2.new(0.5, -1, 0.5, -1),
-    Size = UDim2.new(0, 28, 0, 30),
-    BackgroundTransparency = 1,
-    Text = "F",
-    Font = Enum.Font.GothamBlack,
-    TextSize = 24,
-    TextColor3 = Theme.Accent
-}, FloatingInner)
-
-local FloatingDot = Create("Frame", {
-    AnchorPoint = Vector2.new(0.5, 0.5),
-    Position = UDim2.new(0.74, 0, 0.28, 0),
-    Size = UDim2.new(0, 6, 0, 6),
-    BackgroundColor3 = Theme.Accent,
-    BorderSizePixel = 0
-}, FloatingInner)
-
-Corner(FloatingDot, 3)
 AddHoverEffect(FloatingButton)
 
 local floatingDragging = false
