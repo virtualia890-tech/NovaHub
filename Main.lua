@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3x
+    Version: 2.7.3z
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3x",
+    Version = "2.7.3z",
 
     Width = 920,
     Height = 590,
@@ -884,7 +884,35 @@ pcall(function()
     end
 end)
 
-ScreenGui.Parent = game:GetService("CoreGui")
+do
+    local parented = false
+
+    if typeof(gethui) == "function" then
+        parented = pcall(function()
+            ScreenGui.Parent = gethui()
+        end)
+    end
+
+    if not parented then
+        parented = pcall(function()
+            ScreenGui.Parent = game:GetService("CoreGui")
+        end)
+    end
+
+    if not parented then
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            or LocalPlayer:WaitForChild("PlayerGui", 5)
+
+        if playerGui then
+            ScreenGui.Parent = playerGui
+            parented = true
+        end
+    end
+
+    if not parented then
+        return
+    end
+end
 
 --==================================================
 -- MAIN
@@ -1388,20 +1416,20 @@ local HomeGrid = Create("Frame", {
     BackgroundTransparency = 1
 }, Home)
 
-local GridLayout = Create("UIGridLayout", {
+Create("UIGridLayout", {
     CellSize = UDim2.new(0.24, 0, 0, 72),
     CellPadding = UDim2.new(0.012, 0, 0, 10),
     SortOrder = Enum.SortOrder.LayoutOrder
 }, HomeGrid)
 
-local LevelCard, LevelValue = Card(HomeGrid, "LEVEL", "0")
-local BeliCard, BeliValue = Card(HomeGrid, "BELI", "0")
-local FragmentCard, FragmentValue = Card(HomeGrid, "FRAGMENTS", "0")
-local RaceCard, RaceValue = Card(HomeGrid, "RACE", "Unknown")
-local SeaCard, SeaValue = Card(HomeGrid, "SEA", "Unknown")
-local FPSCard, FPSValue = Card(HomeGrid, "FPS", "0")
-local PingCard, PingValue = Card(HomeGrid, "PING", "0 ms")
-local UptimeCard, UptimeValue = Card(HomeGrid, "UPTIME", "00:00:00")
+local LevelValue = select(2, Card(HomeGrid, "LEVEL", "0"))
+local BeliValue = select(2, Card(HomeGrid, "BELI", "0"))
+local FragmentValue = select(2, Card(HomeGrid, "FRAGMENTS", "0"))
+local RaceValue = select(2, Card(HomeGrid, "RACE", "Unknown"))
+local SeaValue = select(2, Card(HomeGrid, "SEA", "Unknown"))
+local FPSValue = select(2, Card(HomeGrid, "FPS", "0"))
+local PingValue = select(2, Card(HomeGrid, "PING", "0 ms"))
+local UptimeValue = select(2, Card(HomeGrid, "UPTIME", "00:00:00"))
 
 local StatusCard = Create("Frame", {
     Size = UDim2.new(1, 0, 0, 72),
@@ -1451,7 +1479,7 @@ local PlayerInfoGrid = Create("Frame", {
     BackgroundTransparency = 1
 }, PlayerPage)
 
-local PlayerGrid = Create("UIGridLayout", {
+Create("UIGridLayout", {
     CellSize = UDim2.new(0.32, 0, 0, 68),
     CellPadding = UDim2.new(0.015, 0, 0, 10)
 }, PlayerInfoGrid)
@@ -1460,7 +1488,7 @@ Card(PlayerInfoGrid, "USERNAME", LocalPlayer.Name)
 Card(PlayerInfoGrid, "DISPLAY NAME", LocalPlayer.DisplayName)
 Card(PlayerInfoGrid, "USER ID", LocalPlayer.UserId)
 
-local SpeedHolder, SpeedBox = ValueBox(
+local _, SpeedBox = ValueBox(
     PlayerPage,
     "WalkSpeed",
     State.PlayerSettings.WalkSpeed,
@@ -1481,7 +1509,7 @@ local SpeedHolder, SpeedBox = ValueBox(
     end
 )
 
-local JumpHolder, JumpBox = ValueBox(
+local _, JumpBox = ValueBox(
     PlayerPage,
     "JumpPower",
     State.PlayerSettings.JumpPower,
@@ -1543,7 +1571,7 @@ local SeaHolder = Create("Frame", {
     BackgroundTransparency = 1
 }, TeleportPage)
 
-local SeaLayout = Create("UIListLayout", {
+Create("UIListLayout", {
     FillDirection = Enum.FillDirection.Horizontal,
     HorizontalAlignment = Enum.HorizontalAlignment.Center,
     Padding = UDim.new(0, 8),
