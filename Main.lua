@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.4g
+    Version: 2.7.4h
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.4g",
+    Version = "2.7.4h",
 
     Width = 920,
     Height = 590,
@@ -3397,17 +3397,53 @@ task.spawn(function()
         return ok
     end
 
-    local function m1(tool)
-        if not tool then return end
+    local function m1(tool, target)
+        if not tool or not target or not IsAlive(target) then return false end
+
+        local character = LocalPlayer.Character
+        local targetRoot = GetTargetRoot(target)
+        local hitPart = target:FindFirstChild("Head") or targetRoot
+        if not character or not targetRoot or not hitPart then return false end
+
+        -- Reference combat path: newer/custom tools can own LeftClickRemote.
+        local leftClick = tool:FindFirstChild("LeftClickRemote")
+        if leftClick and leftClick:IsA("RemoteEvent") then
+            local direction = targetRoot.Position - character:GetPivot().Position
+            if direction.Magnitude > 0 then
+                local ok = pcall(function()
+                    leftClick:FireServer(direction.Unit, 1)
+                end)
+                if ok then return true end
+            end
+        end
+
+        -- Reference Net path used by Melee/Sword combat.
+        local modules = ReplicatedStorage:FindFirstChild("Modules")
+        local net = modules and modules:FindFirstChild("Net")
+        local registerAttack = net and net:FindFirstChild("RE/RegisterAttack")
+        local registerHit = net and net:FindFirstChild("RE/RegisterHit")
+
+        if registerAttack and registerHit
+            and registerAttack:IsA("RemoteEvent")
+            and registerHit:IsA("RemoteEvent")
+        then
+            local ok = pcall(function()
+                registerAttack:FireServer(0.1)
+                registerHit:FireServer(hitPart, {{target, hitPart}})
+            end)
+            if ok then return true end
+        end
+
+        -- Universal fallback for experiences/tools that use normal Tool activation.
         pcall(function() tool:Activate() end)
         pcall(function()
+            local vu = game:GetService("VirtualUser")
             local camera = workspace.CurrentCamera
-            local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
-            local input = game:GetService("VirtualInputManager")
-            local x, y = math.floor(viewport.X / 2), math.floor(viewport.Y / 2)
-            input:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            input:SendMouseButtonEvent(x, y, 0, false, game, 0)
+            vu:CaptureController()
+            vu:Button1Down(Vector2.new(0, 0), camera and camera.CFrame or CFrame.new())
+            vu:Button1Up(Vector2.new(0, 0), camera and camera.CFrame or CFrame.new())
         end)
+        return true
     end
 
     local skillOrder = {
@@ -3426,6 +3462,12 @@ task.spawn(function()
             local mousePos = tool:FindFirstChild("MousePos")
             if mousePos and mousePos:IsA("Vector3Value") then
                 mousePos.Value = targetRoot.Position
+            end
+
+            -- Several fruit tools use their own RemoteEvent to receive the aim point.
+            local remote = tool:FindFirstChild("RemoteEvent")
+            if remote and remote:IsA("RemoteEvent") then
+                remote:FireServer(targetRoot.Position)
             end
         end)
 
@@ -3476,7 +3518,7 @@ task.spawn(function()
             end
             if os.clock() - M.LastAttack >= M.AttackCooldown then
                 M.LastAttack = os.clock()
-                m1(melee)
+                m1(melee, target)
             end
         else
             M.Status = string.format("Fruit finish %s (%.0f%%)", target.Name, hpPercent)
@@ -3489,7 +3531,7 @@ task.spawn(function()
             -- Keep M1 active where the fruit supports it, while skills cycle.
             if os.clock() - M.LastAttack >= M.AttackCooldown then
                 M.LastAttack = os.clock()
-                m1(fruit)
+                m1(fruit, target)
             end
             castFruitSkill(fruit, targetRoot)
         end
