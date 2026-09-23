@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.3z
+    Version: 2.7.4a
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.3z",
+    Version = "2.7.4a",
 
     Width = 920,
     Height = 590,
@@ -40,7 +40,7 @@ local Config = {
     Theme = "Dark",
     Scale = 1,
 
-    Accent = Color3.fromRGB(115, 90, 255),
+    Accent = Color3.fromRGB(151, 92, 255),
 
     PerformanceInterval = 0.5
 }
@@ -79,13 +79,13 @@ local StartTime = os.clock()
 
 local Themes = {
     Dark = {
-        Background = Color3.fromRGB(12, 12, 18),
-        Sidebar = Color3.fromRGB(16, 16, 24),
-        Card = Color3.fromRGB(21, 21, 31),
-        Secondary = Color3.fromRGB(28, 28, 40),
-        Text = Color3.fromRGB(245, 245, 250),
-        SubText = Color3.fromRGB(155, 155, 175),
-        Accent = Color3.fromRGB(115, 90, 255)
+        Background = Color3.fromRGB(7, 7, 10),
+        Sidebar = Color3.fromRGB(10, 10, 15),
+        Card = Color3.fromRGB(15, 15, 22),
+        Secondary = Color3.fromRGB(23, 23, 33),
+        Text = Color3.fromRGB(245, 245, 248),
+        SubText = Color3.fromRGB(143, 143, 158),
+        Accent = Color3.fromRGB(151, 92, 255)
     },
 
     Light = {
@@ -954,14 +954,15 @@ local TopbarCover = Create("Frame", {
 local Logo = Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 9),
     Size = UDim2.new(0, 40, 0, 40),
-    BackgroundColor3 = Theme.Accent,
+    BackgroundColor3 = Theme.Secondary,
     Text = "F",
     Font = Enum.Font.GothamBlack,
-    TextSize = 21,
-    TextColor3 = Color3.new(1, 1, 1)
+    TextSize = 20,
+    TextColor3 = Theme.Accent
 }, Topbar)
 
-Corner(Logo, 11)
+Corner(Logo, 12)
+Stroke(Logo, Theme.Accent, 0.16)
 
 local Title = Create("TextLabel", {
     Position = UDim2.new(0, 70, 0, 10),
@@ -1377,7 +1378,7 @@ local Home = PageService:Create("Home")
 Section(
     Home,
     "Welcome to Floquitave",
-    "Clean interface • Smooth animations • Modular architecture"
+    "Simple • Functional • Lightweight"
 )
 
 local Welcome = Create("Frame", {
@@ -1404,7 +1405,7 @@ Create("TextLabel", {
     Position = UDim2.new(0, 18, 0, 45),
     Size = UDim2.new(1, -36, 0, 25),
     BackgroundTransparency = 1,
-    Text = "2.6.5 Farm Route Fix",
+    Text = "Floquitave 2.7.4",
     Font = Enum.Font.Gotham,
     TextSize = 12,
     TextColor3 = Theme.SubText,
@@ -3991,7 +3992,8 @@ local function ApplyTheme()
     Topbar.BackgroundColor3 = Theme.Card
     TopbarCover.BackgroundColor3 = Theme.Card
 
-    Logo.BackgroundColor3 = Theme.Accent
+    Logo.BackgroundColor3 = Theme.Secondary
+    Logo.TextColor3 = Theme.Accent
 
     Title.TextColor3 = Theme.Text
     Version.TextColor3 = Theme.SubText
@@ -4343,18 +4345,19 @@ end)
 --==================================================
 
 local FloatingButton = Create("TextButton", {
-    Size = UDim2.new(0, 58, 0, 58),
-    Position = UDim2.new(0, 25, 0.5, -29),
-    BackgroundColor3 = Theme.Accent,
+    Size = UDim2.new(0, 60, 0, 60),
+    Position = UDim2.new(0, 25, 0.5, -30),
+    BackgroundColor3 = Theme.Card,
     Text = "F",
     Font = Enum.Font.GothamBlack,
-    TextSize = 21,
-    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 25,
+    TextColor3 = Theme.Accent,
     Visible = false,
     AutoButtonColor = false
 }, ScreenGui)
 
-Corner(FloatingButton, 29)
+Corner(FloatingButton, 30)
+Stroke(FloatingButton, Theme.Accent, 0.08)
 AddHoverEffect(FloatingButton)
 
 local floatingDragging = false
