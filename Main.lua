@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.4a
+    Version: 2.7.4c
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.4a",
+    Version = "2.7.4c",
 
     Width = 920,
     Height = 590,
@@ -931,6 +931,43 @@ Stroke(Main, Theme.Secondary, 0.15)
 local MainScale = Create("UIScale", {
     Scale = Config.Scale
 }, Main)
+
+-- Mobile responsive scale:
+-- Keep the desktop design untouched, but shrink the whole hub when
+-- the available viewport is smaller than the designed 920x590 canvas.
+do
+    local function UpdateResponsiveScale()
+        local camera = workspace.CurrentCamera
+        if not camera then return end
+
+        local viewport = camera.ViewportSize
+        local safeWidth = math.max(viewport.X - 24, 320)
+        local safeHeight = math.max(viewport.Y - 24, 240)
+
+        local fitX = safeWidth / Config.Width
+        local fitY = safeHeight / Config.Height
+        local fit = math.min(Config.Scale, fitX, fitY)
+
+        -- On phones/emulators leave a little breathing room around the hub.
+        if viewport.X < 1000 or viewport.Y < 650 then
+            fit = fit * 0.88
+        end
+
+        MainScale.Scale = math.clamp(fit, 0.48, Config.Scale)
+    end
+
+    UpdateResponsiveScale()
+
+    local camera = workspace.CurrentCamera
+    if camera then
+        Connect(camera:GetPropertyChangedSignal("ViewportSize"), UpdateResponsiveScale)
+    end
+
+    Connect(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
+        task.wait()
+        UpdateResponsiveScale()
+    end)
+end
 
 --==================================================
 -- TOPBAR
@@ -3211,373 +3248,290 @@ FarmConnect(RunService.Heartbeat, function()
 end)
 
 --==================================================
--- MASTERY FARM 2.7.3w
--- Basic implementation:
--- 1) use the already-working Teleport Directory once to reach Haunted Castle;
--- 2) scan only the four Bone mobs;
--- 3) move directly to the current mob (no rise/cruise loop);
--- 4) attack until that exact mob dies, then pick the next one.
--- The structure follows the common pattern found across the reference sources,
--- but this is an independent implementation.
+-- FRUIT MASTERY FARM 2.7.4b
+-- Selectable area: Bones / Cake Prince.
+-- Weakens with Melee until the chosen HP %, then equips the fruit
+-- and cycles fruit skills against the same target until it dies.
 --==================================================
 
 task.spawn(function()
     local M = {
         Enabled = false,
-        Type = "Blox Fruit",
+        Area = "Bones",
         KillPercent = 40,
         Status = "Idle",
         Target = nil,
-        BoneIndex = 1,
+        PointIndex = 1,
         LastAttack = 0,
         LastSkill = 0,
         SkillIndex = 1,
-        LastCastleTeleport = 0,
+        LastLongTeleport = 0,
         Moving = false,
         AttackCooldown = 0.14,
-        SkillCooldown = 0.60,
+        SkillCooldown = 0.55,
         CombatHeight = 11,
         CombatDistance = 8
     }
 
-    local function toolMatches(tool, wanted)
-        if not tool or not tool:IsA("Tool") then
-            return false
-        end
-
-        local tip = string.lower(tostring(tool.ToolTip or ""))
-        local name = string.lower(tostring(tool.Name or ""))
-
-        if wanted == "Melee" then
-            return IsLikelyFightingStyle(tool)
-        elseif wanted == "Sword" then
-            return tip == "sword"
-                or string.find(tip, "sword", 1, true) ~= nil
-        elseif wanted == "Gun" then
-            return tip == "gun"
-                or string.find(tip, "gun", 1, true) ~= nil
-                or tool:FindFirstChild("RemoteFunctionShoot") ~= nil
-        elseif wanted == "Blox Fruit" then
-            return string.find(tip, "fruit", 1, true) ~= nil
-                or (
-                    string.find(name, "-", 1, true) ~= nil
-                    and tool:FindFirstChild("Level") ~= nil
-                )
-        end
-
-        return false
+    local function toolTip(tool)
+        return string.lower(tostring(tool and tool.ToolTip or ""))
     end
 
-    local function findTool(wanted)
+    local function isMelee(tool)
+        return tool and tool:IsA("Tool") and IsLikelyFightingStyle(tool)
+    end
+
+    local function isFruit(tool)
+        if not tool or not tool:IsA("Tool") then return false end
+        local tip = toolTip(tool)
+        if string.find(tip, "fruit", 1, true) then return true end
+
+        local data = LocalPlayer:FindFirstChild("Data")
+        local fruitValue = data and data:FindFirstChild("DevilFruit")
+        local fruitName = fruitValue and tostring(fruitValue.Value) or ""
+        return fruitName ~= "" and tool.Name == fruitName
+    end
+
+    local function findTool(kind)
         local character = LocalPlayer.Character
         local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
 
-        if wanted == "Blox Fruit" then
+        if kind == "Fruit" then
             local data = LocalPlayer:FindFirstChild("Data")
             local fruitValue = data and data:FindFirstChild("DevilFruit")
+            local fruitName = fruitValue and tostring(fruitValue.Value) or ""
 
-            if fruitValue and tostring(fruitValue.Value) ~= "" then
-                local fruitName = tostring(fruitValue.Value)
+            if fruitName ~= "" then
+                local direct = character and character:FindFirstChild(fruitName)
+                if direct and direct:IsA("Tool") then return direct end
+                direct = backpack and backpack:FindFirstChild(fruitName)
+                if direct and direct:IsA("Tool") then return direct end
+            end
+        end
 
-                if character then
-                    local direct = character:FindFirstChild(fruitName)
-                    if direct and direct:IsA("Tool") then
-                        return direct
+        for _, holder in ipairs({character, backpack}) do
+            if holder then
+                for _, tool in ipairs(holder:GetChildren()) do
+                    if (kind == "Melee" and isMelee(tool))
+                        or (kind == "Fruit" and isFruit(tool))
+                    then
+                        return tool
                     end
                 end
-
-                if backpack then
-                    local direct = backpack:FindFirstChild(fruitName)
-                    if direct and direct:IsA("Tool") then
-                        return direct
-                    end
-                end
             end
         end
-
-        if character then
-            for _, tool in ipairs(character:GetChildren()) do
-                if toolMatches(tool, wanted) then
-                    return tool
-                end
-            end
-        end
-
-        if backpack then
-            for _, tool in ipairs(backpack:GetChildren()) do
-                if toolMatches(tool, wanted) then
-                    return tool
-                end
-            end
-        end
-
         return nil
     end
 
     local function equip(tool)
-        if not tool then
-            return nil
-        end
-
+        if not tool then return nil end
         local humanoid = GetCharacterHumanoid()
         local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-
         if humanoid and backpack and tool.Parent == backpack then
-            pcall(function()
-                humanoid:EquipTool(tool)
-            end)
+            pcall(function() humanoid:EquipTool(tool) end)
         end
-
         return tool
     end
 
-    local function findBone()
+    local function currentNames()
+        if M.Area == "Cake Prince" then
+            return CakeSpecial.MobNames
+        end
+        return BoneSpecial.MobNames
+    end
+
+    local function currentPoints()
+        if M.Area == "Cake Prince" then
+            return CakeSpecial.MobPoints
+        end
+        return BoneSpecial.Points
+    end
+
+    local function findTarget()
         local root = GetCharacterRoot()
-        local best = nil
-        local bestDistance = math.huge
+        local best, bestDistance = nil, math.huge
+        local names = currentNames()
 
         for _, container in ipairs(FindEnemyContainers()) do
             for _, enemy in ipairs(container:GetChildren()) do
-                if IsAlive(enemy)
-                    and SpecialNameMatch(enemy.Name, BoneSpecial.MobNames)
-                then
+                if IsAlive(enemy) and SpecialNameMatch(enemy.Name, names) then
                     local enemyRoot = GetTargetRoot(enemy)
-
                     if enemyRoot then
                         local distance = root
                             and (enemyRoot.Position - root.Position).Magnitude
                             or 0
-
                         if distance < bestDistance then
-                            best = enemy
-                            bestDistance = distance
+                            best, bestDistance = enemy, distance
                         end
                     end
                 end
             end
         end
-
         return best
     end
 
     local function directMove(targetCFrame, yOffset, name)
-        if M.Moving or not M.Enabled then
-            return false
-        end
-
+        if M.Moving or not M.Enabled or not targetCFrame then return false end
         local root = GetCharacterRoot()
-        if not root or not targetCFrame then
-            return false
-        end
+        if not root then return false end
 
         M.Moving = true
-
         MovementService:Stop()
         MovementService.Active = true
         MovementService.Target = targetCFrame
-        MovementService.DestinationName = name or "Mastery"
+        MovementService.DestinationName = name or "Fruit Mastery"
         MovementService:SetCollision(false)
 
         local destination = targetCFrame * CFrame.new(0, yOffset or 10, 0)
-
         pcall(function()
             root.Anchored = false
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
         end)
 
-        -- IMPORTANT: one direct tween only.
-        -- No "Rising", no fixed-altitude loop, no repeated upward movement.
         local ok = MovementService:TweenRoot(root, destination)
-
         MovementService:SetCollision(true)
         MovementService.Active = false
         MovementService.Tween = nil
         M.Moving = false
-
         return ok
     end
 
     local function m1(tool)
-        if not tool then
-            return
-        end
-
-        pcall(function()
-            tool:Activate()
-        end)
-
+        if not tool then return end
+        pcall(function() tool:Activate() end)
         pcall(function()
             local camera = workspace.CurrentCamera
             local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
-            local x = math.floor(viewport.X / 2)
-            local y = math.floor(viewport.Y / 2)
             local input = game:GetService("VirtualInputManager")
-
+            local x, y = math.floor(viewport.X / 2), math.floor(viewport.Y / 2)
             input:SendMouseButtonEvent(x, y, 0, true, game, 0)
             input:SendMouseButtonEvent(x, y, 0, false, game, 0)
         end)
     end
 
-    local function skill(tool, targetRoot)
-        if not tool or not targetRoot then
-            return false
-        end
+    local skillOrder = {
+        {Enum.KeyCode.Z, "Z"},
+        {Enum.KeyCode.X, "X"},
+        {Enum.KeyCode.C, "C"},
+        {Enum.KeyCode.V, "V"},
+        {Enum.KeyCode.F, "F"}
+    }
 
-        if os.clock() - M.LastSkill < M.SkillCooldown then
-            return false
-        end
+    local function castFruitSkill(tool, targetRoot)
+        if not tool or not targetRoot then return false end
+        if os.clock() - M.LastSkill < M.SkillCooldown then return false end
 
         pcall(function()
             local mousePos = tool:FindFirstChild("MousePos")
-            if mousePos then
+            if mousePos and mousePos:IsA("Vector3Value") then
                 mousePos.Value = targetRoot.Position
             end
         end)
 
-        local order = {
-            {Enum.KeyCode.Z, "Z"},
-            {Enum.KeyCode.X, "X"},
-            {Enum.KeyCode.C, "C"},
-            {Enum.KeyCode.V, "V"}
-        }
-
-        local selected = order[((M.SkillIndex - 1) % #order) + 1]
+        local selected = skillOrder[((M.SkillIndex - 1) % #skillOrder) + 1]
         M.SkillIndex = M.SkillIndex + 1
         M.LastSkill = os.clock()
 
         pcall(function()
             local input = game:GetService("VirtualInputManager")
             input:SendKeyEvent(true, selected[1], false, game)
-            task.wait(0.08)
+            task.wait(0.10)
             input:SendKeyEvent(false, selected[1], false, game)
         end)
-
         return true
     end
 
     local function attack(target)
-        if not target or not IsAlive(target) then
-            return false
-        end
+        if not target or not IsAlive(target) then return false end
 
         local targetRoot = GetTargetRoot(target)
         local humanoid = target:FindFirstChildOfClass("Humanoid")
         local root = GetCharacterRoot()
-
-        if not targetRoot or not humanoid or not root then
+        if not targetRoot or not humanoid or not root or humanoid.MaxHealth <= 0 then
             return false
         end
 
-        local desiredCFrame =
-            targetRoot.CFrame
-            * CFrame.new(0, M.CombatHeight, M.CombatDistance)
-
-        local distance = (root.Position - desiredCFrame.Position).Magnitude
-
-        -- Stay slightly above and a little away from the NPC,
-        -- instead of standing on top of it.
-        if distance > 20 then
+        local desired = targetRoot.CFrame * CFrame.new(0, M.CombatHeight, M.CombatDistance)
+        if (root.Position - desired.Position).Magnitude > 20 then
             M.Status = "Going to " .. target.Name
-            directMove(desiredCFrame, 0, "Mastery Mob")
+            directMove(desired, 0, "Mastery Mob")
             return true
         end
 
-        -- If we are too close, re-position to the safe attack offset.
-        if distance < 6 and not M.Moving then
-            M.Status = "Adjusting position"
-            directMove(desiredCFrame, 0, "Mastery Adjust")
-            return true
-        end
-
-        -- Soft position lock while attacking:
-        -- keep the character hovering above / slightly away from the mob.
         pcall(function()
-            root.CFrame = desiredCFrame
+            root.CFrame = CFrame.lookAt(desired.Position, targetRoot.Position)
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
         end)
 
-        local wanted = M.Type
-        local threshold = humanoid.MaxHealth * (M.KillPercent / 100)
+        local hpPercent = (humanoid.Health / humanoid.MaxHealth) * 100
 
-        -- Sword/Gun/Fruit: weaken with Melee, then finish with selected type.
-        if M.Type ~= "Melee" and humanoid.Health > threshold then
-            wanted = "Melee"
-            M.Status = "Weakening " .. target.Name
+        if hpPercent > M.KillPercent then
+            M.Status = string.format("Weakening %s (%.0f%%)", target.Name, hpPercent)
+            local melee = equip(findTool("Melee"))
+            if not melee then
+                M.Status = "Melee not found"
+                return true
+            end
+            if os.clock() - M.LastAttack >= M.AttackCooldown then
+                M.LastAttack = os.clock()
+                m1(melee)
+            end
         else
-            M.Status = "Attacking " .. target.Name .. " with " .. M.Type
+            M.Status = string.format("Fruit finish %s (%.0f%%)", target.Name, hpPercent)
+            local fruit = equip(findTool("Fruit"))
+            if not fruit then
+                M.Status = "Fruit tool not found"
+                return true
+            end
+
+            -- Keep M1 active where the fruit supports it, while skills cycle.
+            if os.clock() - M.LastAttack >= M.AttackCooldown then
+                M.LastAttack = os.clock()
+                m1(fruit)
+            end
+            castFruitSkill(fruit, targetRoot)
         end
-
-        local tool = findTool(wanted)
-
-        if not tool then
-            M.Status = "No " .. wanted .. " tool found"
-            return true
-        end
-
-        tool = equip(tool)
-
-        -- Gun direct shot fallback when available.
-        if wanted == "Gun" then
-            pcall(function()
-                local shoot = tool:FindFirstChild("RemoteFunctionShoot")
-                if shoot and shoot:IsA("RemoteFunction") then
-                    shoot:InvokeServer(targetRoot.Position, targetRoot)
-                end
-            end)
-        end
-
-        if os.clock() - M.LastAttack >= M.AttackCooldown then
-            M.LastAttack = os.clock()
-            m1(tool)
-        end
-
-        if wanted == M.Type and M.Type ~= "Melee" then
-            skill(tool, targetRoot)
-        end
-
         return true
     end
 
-    -- Simple UI requested by the user.
     Section(
         FarmPage,
-        "Mastery Farm",
-        "Bones / Haunted Castle"
+        "Fruit Mastery",
+        "Weaken with Melee, finish with your Blox Fruit"
     )
 
     local masteryStatusCard, masteryStatusValue =
         Card(FarmPage, "MASTERY STATUS", "Idle")
 
-    local methodHolder = Create("Frame", {
+    local areaHolder = Create("Frame", {
         Size = UDim2.new(1, 0, 0, 52),
         BackgroundColor3 = Theme.Card,
         BorderSizePixel = 0
     }, FarmPage)
+    Corner(areaHolder, 11)
+    Stroke(areaHolder, Theme.Secondary, 0.30)
 
-    Corner(methodHolder, 11)
-    Stroke(methodHolder, Theme.Secondary, 0.30)
-
-    local methodButton = Create("TextButton", {
+    local areaButton = Create("TextButton", {
         Size = UDim2.new(1, 0, 1, 0),
         BackgroundTransparency = 1,
         Text = "",
         AutoButtonColor = false
-    }, methodHolder)
+    }, areaHolder)
 
-    local methodLabel = Create("TextLabel", {
+    local areaLabel = Create("TextLabel", {
         Position = UDim2.new(0, 14, 0, 0),
         Size = UDim2.new(1, -56, 1, 0),
         BackgroundTransparency = 1,
-        Text = "Select Method Farm Mastery: Blox Fruit",
+        Text = "Farm Area: Bones",
         Font = Enum.Font.GothamBold,
         TextSize = 12,
         TextColor3 = Theme.Text,
         TextXAlignment = Enum.TextXAlignment.Left
-    }, methodHolder)
+    }, areaHolder)
 
-    local methodArrow = Create("TextLabel", {
+    local areaArrow = Create("TextLabel", {
         Position = UDim2.new(1, -34, 0, 0),
         Size = UDim2.new(0, 20, 1, 0),
         BackgroundTransparency = 1,
@@ -3585,40 +3539,37 @@ task.spawn(function()
         Font = Enum.Font.GothamBold,
         TextSize = 20,
         TextColor3 = Theme.Text
-    }, methodHolder)
+    }, areaHolder)
 
-    local methodList = Create("Frame", {
+    local areaList = Create("Frame", {
         Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundColor3 = Theme.Card,
         BorderSizePixel = 0,
         Visible = false
     }, FarmPage)
-
-    Corner(methodList, 11)
-    Stroke(methodList, Theme.Secondary, 0.30)
+    Corner(areaList, 11)
+    Stroke(areaList, Theme.Secondary, 0.30)
 
     Create("UIListLayout", {
         Padding = UDim.new(0, 2),
         SortOrder = Enum.SortOrder.LayoutOrder
-    }, methodList)
-
+    }, areaList)
     Create("UIPadding", {
         PaddingTop = UDim.new(0, 8),
         PaddingBottom = UDim.new(0, 8),
         PaddingLeft = UDim.new(0, 8),
         PaddingRight = UDim.new(0, 8)
-    }, methodList)
+    }, areaList)
 
-    local methodOpen = false
-
-    Connect(methodButton.MouseButton1Click, function()
-        methodOpen = not methodOpen
-        methodList.Visible = methodOpen
-        methodArrow.Text = methodOpen and "⌄" or "›"
+    local areaOpen = false
+    Connect(areaButton.MouseButton1Click, function()
+        areaOpen = not areaOpen
+        areaList.Visible = areaOpen
+        areaArrow.Text = areaOpen and "⌄" or "›"
     end)
 
-    for _, option in ipairs({"Blox Fruit", "Gun", "Sword", "Melee"}) do
+    for _, option in ipairs({"Bones", "Cake Prince"}) do
         local item = Create("TextButton", {
             Size = UDim2.new(1, 0, 0, 34),
             BackgroundColor3 = Theme.Secondary,
@@ -3628,62 +3579,44 @@ task.spawn(function()
             TextSize = 12,
             TextColor3 = Theme.Text,
             AutoButtonColor = false
-        }, methodList)
-
+        }, areaList)
         Corner(item, 8)
         AddHoverEffect(item)
 
         Connect(item.MouseButton1Click, function()
-            M.Type = option
+            M.Area = option
             M.Target = nil
-            M.SkillIndex = 1
-            M.LastSkill = 0
-            methodOpen = false
-            methodList.Visible = false
-            methodArrow.Text = "›"
-            methodLabel.Text = "Select Method Farm Mastery: " .. option
-            Notify("Mastery", "Method: " .. option)
+            M.PointIndex = 1
+            M.LastLongTeleport = 0
+            areaOpen = false
+            areaList.Visible = false
+            areaArrow.Text = "›"
+            areaLabel.Text = "Farm Area: " .. option
+            Notify("Fruit Mastery", "Area: " .. option)
         end)
     end
 
     ValueBox(
         FarmPage,
-        "Health %",
+        "Finish with Fruit at HP %",
         M.KillPercent,
         function(value)
-            M.KillPercent = math.clamp(value, 5, 90)
-        end
-    )
-
-    ValueBox(
-        FarmPage,
-        "Combat Height",
-        M.CombatHeight,
-        function(value)
-            M.CombatHeight = math.clamp(value, 6, 20)
-        end
-    )
-
-    ValueBox(
-        FarmPage,
-        "Combat Distance",
-        M.CombatDistance,
-        function(value)
-            M.CombatDistance = math.clamp(value, 4, 16)
+            M.KillPercent = math.clamp(value, 5, 95)
         end
     )
 
     Toggle(
         FarmPage,
-        "Farm Mastery",
-        "Go to Haunted Castle Bones and attack the mobs.",
+        "Auto Farm Fruit Mastery",
+        "Bones or Cake Prince mobs. Melee first, fruit skills at selected HP.",
         false,
         function(enabled)
             M.Enabled = enabled
             M.Target = nil
-            M.BoneIndex = 1
-            M.LastCastleTeleport = 0
+            M.PointIndex = 1
+            M.LastLongTeleport = 0
             M.Moving = false
+            M.SkillIndex = 1
 
             if enabled then
                 FarmState.Enabled = false
@@ -3692,7 +3625,7 @@ task.spawn(function()
                 FarmState.CurrentTarget = nil
                 FarmState.FarmAnchor = nil
                 MovementService:Stop()
-                M.Status = "Starting mastery"
+                M.Status = "Starting Fruit Mastery"
             else
                 MovementService:Stop()
                 M.Status = "Idle"
@@ -3700,72 +3633,56 @@ task.spawn(function()
         end
     )
 
-    -- Sequential worker: one movement/attack decision at a time.
-    -- This avoids Heartbeat repeatedly restarting movement.
     while not State.Destroyed do
         task.wait(0.15)
-
         masteryStatusValue.Text = M.Status
 
         if M.Enabled and not M.Moving then
             local root = GetCharacterRoot()
-
-            if root then
-                local castle = IslandCFrames["Sea 3"]["Haunted Castle"]
-                local castleDistance = (root.Position - castle.Position).Magnitude
-
-                -- Use the exact Teleport Directory routine the user already confirmed works.
-                if castleDistance > 1800 then
-                    if not MovementService.Active
-                        and os.clock() - M.LastCastleTeleport > 6
-                    then
-                        M.LastCastleTeleport = os.clock()
+            if root and not MovementService.Active then
+                -- Bones can use the already-confirmed Haunted Castle teleport.
+                if M.Area == "Bones" then
+                    local castle = IslandCFrames["Sea 3"]["Haunted Castle"]
+                    local dist = (root.Position - castle.Position).Magnitude
+                    if dist > 1800 and os.clock() - M.LastLongTeleport > 6 then
+                        M.LastLongTeleport = os.clock()
                         M.Status = "Going to Haunted Castle"
                         TeleportToIsland("Sea 3", "Haunted Castle")
-                    end
-                elseif not MovementService.Active then
-                    if M.Target
-                        and (
-                            not M.Target.Parent
-                            or not IsAlive(M.Target)
-                            or not SpecialNameMatch(
-                                M.Target.Name,
-                                BoneSpecial.MobNames
-                            )
-                        )
-                    then
-                        M.Target = nil
-                    end
-
-                    if not M.Target then
-                        M.Target = findBone()
-                    end
-
-                    if M.Target then
-                        attack(M.Target)
-                    else
-                        -- No live Bone mob currently found:
-                        -- move directly to the next known Bone spawn point.
-                        local point = BoneSpecial.Points[M.BoneIndex]
-                        M.Status =
-                            "Searching Bones " ..
-                            tostring(M.BoneIndex) ..
-                            "/" ..
-                            tostring(#BoneSpecial.Points)
-
-                        directMove(point, 12, "Bone Spawn")
-
-                        M.BoneIndex =
-                            (M.BoneIndex % #BoneSpecial.Points) + 1
+                        task.wait(0.3)
                     end
                 end
-            else
+
+                if M.Target and (
+                    not M.Target.Parent
+                    or not IsAlive(M.Target)
+                    or not SpecialNameMatch(M.Target.Name, currentNames())
+                ) then
+                    M.Target = nil
+                    M.SkillIndex = 1
+                    M.LastSkill = 0
+                end
+
+                if not M.Target then
+                    M.Target = findTarget()
+                end
+
+                if M.Target then
+                    attack(M.Target)
+                else
+                    local points = currentPoints()
+                    local point = points[M.PointIndex]
+                    if point then
+                        M.Status = "Searching " .. M.Area
+                        directMove(point, 12, M.Area .. " Spawn")
+                        M.PointIndex = (M.PointIndex % #points) + 1
+                    end
+                end
+            elseif not root then
                 M.Status = "Waiting for character"
             end
         end
     end
 end)
-
 --==================================================
 -- FARM LOOP
 --==================================================
