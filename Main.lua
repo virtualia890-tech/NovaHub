@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.5i
+    Version: 2.7.6a
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.5i",
+    Version = "2.7.6a",
 
     Width = 920,
     Height = 590,
@@ -3822,8 +3822,421 @@ Toggle(
 )
 
 --==================================================
--- DRAGON HUNTER / BLAZE EMBER 2.7.5i
--- Dragon Hunter -> detect hunt -> complete objective -> collect embers -> repeat
+-- STABLE CORE 2.7.6a
+-- One reusable movement/combat base for new farms.
+-- IMPORTANT:
+--   * no automatic initial rise / no vertical flick
+--   * long high destinations travel X/Z first, then adjust Y locally
+--   * combat always uses the same target lock + attack packet path
+--==================================================
+
+State.StableCore = State.StableCore or {
+    TravelSpeed = 170,
+    CombatSpeed = 115,
+    SegmentLength = 28,
+    CombatHeight = 18,
+    CombatDistance = 6,
+    AttackCooldown = 0.11,
+    MoveNonce = 0,
+    LastAttack = 0
+}
+
+function State.StableCore:CancelMove()
+    self.MoveNonce = (self.MoveNonce or 0) + 1
+    MovementService:Stop()
+end
+
+function State.StableCore:Move(targetCFrame, options)
+    options = options or {}
+
+    if not targetCFrame then
+        return false
+    end
+
+    local root = GetCharacterRoot()
+    local humanoid = GetCharacterHumanoid()
+
+    if not root or not humanoid then
+        return false
+    end
+
+    self.MoveNonce = (self.MoveNonce or 0) + 1
+    local nonce = self.MoveNonce
+    local speed = tonumber(options.speed) or self.TravelSpeed or 170
+    local segmentLength = tonumber(options.segmentLength) or self.SegmentLength or 28
+    local yOffset = tonumber(options.yOffset) or 0
+
+    local targetPosition = targetCFrame.Position + Vector3.new(0, yOffset, 0)
+    local horizontalDistance = Vector3.new(
+        targetPosition.X - root.Position.X,
+        0,
+        targetPosition.Z - root.Position.Z
+    ).Magnitude
+    local verticalDifference = math.abs(targetPosition.Y - root.Position.Y)
+
+    local horizontalFirst = options.horizontalFirst
+    if horizontalFirst == nil then
+        -- Prevent the classic "start climbing from across the map" problem.
+        horizontalFirst = horizontalDistance > 700 and verticalDifference > 180
+    end
+
+    MovementService:Stop()
+    MovementService.Active = true
+    MovementService.DestinationName = tostring(options.name or "Stable Core")
+    MovementService.Status = "Moving"
+    MovementService:SetCollision(false)
+
+    humanoid.Sit = false
+
+    pcall(function()
+        root.Anchored = false
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+
+    local function moveLine(destinationPosition, finalLookAt)
+        local currentRoot = GetCharacterRoot()
+        if not currentRoot then
+            return false
+        end
+
+        local startPosition = currentRoot.Position
+        local delta = destinationPosition - startPosition
+        local distance = delta.Magnitude
+
+        if distance <= 3 then
+            local lookAt = finalLookAt
+            if not lookAt or (lookAt - destinationPosition).Magnitude < 0.1 then
+                lookAt = destinationPosition + currentRoot.CFrame.LookVector
+            end
+
+            pcall(function()
+                currentRoot.CFrame = CFrame.lookAt(destinationPosition, lookAt)
+            end)
+            return true
+        end
+
+        local direction = delta.Unit
+        local travelled = 0
+
+        while travelled < distance do
+            if nonce ~= self.MoveNonce
+                or State.Destroyed
+                or not MovementService.Active
+            then
+                return false
+            end
+
+            currentRoot = GetCharacterRoot()
+            if not currentRoot then
+                return false
+            end
+
+            travelled = math.min(travelled + segmentLength, distance)
+            local nextPosition = startPosition + direction * travelled
+
+            local lookAt = finalLookAt
+            if not lookAt or (lookAt - nextPosition).Magnitude < 0.1 then
+                lookAt = destinationPosition
+            end
+            if (lookAt - nextPosition).Magnitude < 0.1 then
+                lookAt = nextPosition + currentRoot.CFrame.LookVector
+            end
+
+            local nextCFrame = CFrame.lookAt(nextPosition, lookAt)
+            local stepDistance = (currentRoot.Position - nextPosition).Magnitude
+            local duration = math.max(stepDistance / speed, 0.035)
+
+            local tween = TweenService:Create(
+                currentRoot,
+                TweenInfo.new(duration, Enum.EasingStyle.Linear),
+                {CFrame = nextCFrame}
+            )
+
+            MovementService.Tween = tween
+
+            local ok = pcall(function()
+                tween:Play()
+                tween.Completed:Wait()
+            end)
+
+            if MovementService.Tween == tween then
+                MovementService.Tween = nil
+            end
+
+            if not ok then
+                return false
+            end
+        end
+
+        return true
+    end
+
+    local ok = true
+
+    if horizontalFirst then
+        MovementService.Status = "Horizontal travel"
+
+        -- Keep the player's current Y until X/Z already match the destination.
+        local horizontalTarget = Vector3.new(
+            targetPosition.X,
+            root.Position.Y,
+            targetPosition.Z
+        )
+
+        ok = moveLine(
+            horizontalTarget,
+            horizontalTarget + targetCFrame.LookVector
+        )
+
+        if ok then
+            MovementService.Status = "Local height adjustment"
+            ok = moveLine(
+                targetPosition,
+                targetPosition + targetCFrame.LookVector
+            )
+        end
+    else
+        MovementService.Status = "Direct travel"
+        ok = moveLine(
+            targetPosition,
+            targetPosition + targetCFrame.LookVector
+        )
+    end
+
+    MovementService:SetCollision(true)
+
+    if nonce == self.MoveNonce then
+        MovementService.Active = false
+        MovementService.Status = ok and "Arrived" or "Failed"
+    end
+
+    root = GetCharacterRoot()
+    if not ok or not root then
+        return false
+    end
+
+    return (root.Position - targetPosition).Magnitude <= 18
+end
+
+function State.StableCore:NameMatches(actualName, wantedName)
+    local actual = string.lower(tostring(actualName or ""))
+    local wanted = string.lower(tostring(wantedName or ""))
+
+    if actual == wanted then
+        return true
+    end
+
+    return wanted ~= "" and string.find(actual, wanted, 1, true) ~= nil
+end
+
+function State.StableCore:FindEnemy(wantedName)
+    local playerRoot = GetCharacterRoot()
+    local best = nil
+    local bestDistance = math.huge
+
+    for _, container in ipairs(FindEnemyContainers()) do
+        for _, enemy in ipairs(container:GetChildren()) do
+            if self:NameMatches(enemy.Name, wantedName) and IsAlive(enemy) then
+                local enemyRoot = GetTargetRoot(enemy)
+
+                if enemyRoot then
+                    local distance = playerRoot
+                        and (enemyRoot.Position - playerRoot.Position).Magnitude
+                        or 0
+
+                    if distance < bestDistance then
+                        best = enemy
+                        bestDistance = distance
+                    end
+                end
+            end
+        end
+    end
+
+    return best, bestDistance
+end
+
+function State.StableCore:FindNPC(wantedName)
+    local candidates = {
+        workspace:FindFirstChild("NPCs"),
+        workspace:FindFirstChild("Npcs"),
+        workspace:FindFirstChild("NPC"),
+        workspace:FindFirstChild("Map")
+    }
+
+    for _, container in ipairs(candidates) do
+        if container then
+            for _, object in ipairs(container:GetDescendants()) do
+                if object:IsA("Model") and self:NameMatches(object.Name, wantedName) then
+                    local part = object:FindFirstChild("HumanoidRootPart")
+                        or object:FindFirstChild("Head")
+                        or object.PrimaryPart
+
+                    if part and part:IsA("BasePart") then
+                        return object, part
+                    end
+                end
+            end
+        end
+    end
+
+    return nil, nil
+end
+
+function State.StableCore:GetMeleeTool()
+    local tool = GetEquippedTool()
+
+    if tool and IsLikelyFightingStyle(tool) then
+        return tool
+    end
+
+    return EquipFirstTool()
+end
+
+function State.StableCore:AttackTick(target)
+    if not target or not IsAlive(target) then
+        return false
+    end
+
+    if os.clock() - (self.LastAttack or 0) < (self.AttackCooldown or 0.11) then
+        return true
+    end
+
+    self.LastAttack = os.clock()
+
+    local character = LocalPlayer.Character
+    local root = GetCharacterRoot()
+    local targetRoot = GetTargetRoot(target)
+    local hitPart = target:FindFirstChild("Head") or targetRoot
+    local tool = self:GetMeleeTool()
+
+    if not character or not root or not targetRoot or not hitPart or not tool then
+        return false
+    end
+
+    -- Tool-specific left click remote.
+    pcall(function()
+        local leftClickRemote = tool:FindFirstChild("LeftClickRemote")
+        if leftClickRemote and leftClickRemote:IsA("RemoteEvent") then
+            local direction = targetRoot.Position - character:GetPivot().Position
+            if direction.Magnitude > 0 then
+                leftClickRemote:FireServer(direction.Unit, 1)
+            end
+        end
+    end)
+
+    -- Current network combat path used by the supplied newer sources.
+    pcall(function()
+        local modules = ReplicatedStorage:FindFirstChild("Modules")
+        local net = modules and modules:FindFirstChild("Net")
+        local registerAttack = net and net:FindFirstChild("RE/RegisterAttack")
+        local registerHit = net and net:FindFirstChild("RE/RegisterHit")
+
+        if registerAttack and registerHit then
+            registerAttack:FireServer(0.1)
+            registerHit:FireServer(hitPart, {{target, hitPart}})
+        end
+    end)
+
+    -- Normal activation stays active too; it is not treated as an either/or fallback.
+    pcall(function()
+        tool:Activate()
+    end)
+
+    pcall(function()
+        local handle = tool:FindFirstChild("Handle")
+        if firetouchinterest and handle and hitPart then
+            firetouchinterest(handle, hitPart, 0)
+            firetouchinterest(handle, hitPart, 1)
+        end
+    end)
+
+    pcall(function()
+        local camera = workspace.CurrentCamera
+        local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
+        local point = Vector2.new(
+            math.floor(viewport.X / 2),
+            math.floor(viewport.Y / 2)
+        )
+        local virtualUser = game:GetService("VirtualUser")
+
+        virtualUser:CaptureController()
+        virtualUser:Button1Down(point, camera and camera.CFrame or CFrame.new())
+        virtualUser:Button1Up(point, camera and camera.CFrame or CFrame.new())
+    end)
+
+    return true
+end
+
+function State.StableCore:Fight(target, enabledCallback, options)
+    options = options or {}
+
+    if not target or not IsAlive(target) then
+        return false
+    end
+
+    local height = tonumber(options.height) or self.CombatHeight or 18
+    local distanceBack = tonumber(options.distance) or self.CombatDistance or 6
+    local combatSpeed = tonumber(options.speed) or self.CombatSpeed or 115
+
+    while target
+        and target.Parent
+        and IsAlive(target)
+        and not State.Destroyed
+    do
+        if enabledCallback and not enabledCallback() then
+            break
+        end
+
+        local root = GetCharacterRoot()
+        local targetRoot = GetTargetRoot(target)
+        local targetHumanoid = target:FindFirstChildOfClass("Humanoid")
+
+        if not root or not targetRoot or not targetHumanoid then
+            break
+        end
+
+        pcall(function()
+            targetRoot.CanCollide = false
+            targetRoot.Size = Vector3.new(55, 55, 55)
+            targetRoot.AssemblyLinearVelocity = Vector3.zero
+            targetRoot.AssemblyAngularVelocity = Vector3.zero
+            targetHumanoid.WalkSpeed = 0
+        end)
+
+        local desired = targetRoot.CFrame * CFrame.new(0, height, distanceBack)
+        local errorDistance = (root.Position - desired.Position).Magnitude
+
+        if errorDistance > 22 then
+            self:Move(
+                CFrame.lookAt(desired.Position, targetRoot.Position),
+                {
+                    name = "Stable Combat",
+                    speed = combatSpeed,
+                    segmentLength = 20,
+                    horizontalFirst = false
+                }
+            )
+        else
+            pcall(function()
+                root.CFrame = CFrame.lookAt(desired.Position, targetRoot.Position)
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+
+            self:AttackTick(target)
+            task.wait(0.10)
+        end
+    end
+
+    return not IsAlive(target)
+end
+
+--==================================================
+-- DRAGON HUNTER / BLAZE EMBER 2.7.6a
+-- Uses StableCore for movement + combat.
+-- Dynamic NPC/enemy lookup first; fixed positions are fallback only.
 --==================================================
 
 Section(
@@ -3836,21 +4249,26 @@ task.spawn(function()
     local D = {
         Enabled = false,
         Status = "Idle",
-        Quest = "None",
+        QuestText = nil,
+        QuestType = nil,
         LastQuestRequest = 0,
+        LastCheck = 0,
         LastEmberRemote = 0,
-        LastEmberScan = 0,
-        LastTreeAttack = 0,
+        LastCompletionScan = 0,
         TreeIndex = 1,
 
-        NpcPos = CFrame.new(5864.86377, 1209.55066, 812.775024),
+        -- Fallback only. Dynamic Dragon Hunter lookup is attempted first.
+        NpcFallback = CFrame.new(5864.86377, 1209.55066, 812.775024),
 
-        MobPositions = {
+        -- Spawn fallbacks. Active enemies are always discovered dynamically first.
+        MobFallbacks = {
             ["Hydra Enforcer"] = CFrame.new(4547.11523, 1003.10217, 334.194824),
-            ["Venomous Assailant"] = CFrame.new(4674.92676, 1134.82654, 996.308838)
+            ["Venomous Assailant"] = CFrame.new(4789.29639, 1078.59082, 962.764099)
         },
 
-        TreePositions = {
+        -- These points are only used for the 10-tree route when no dynamic
+        -- destructible-tree marker can be identified.
+        TreeFallbacks = {
             CFrame.new(5255.1049, 1004.1949, 344.7700),
             CFrame.new(5340.3584, 1004.1949, 362.6387),
             CFrame.new(5323.6436, 1004.1949, 440.7161),
@@ -3858,13 +4276,13 @@ task.spawn(function()
         }
     }
 
-    local _, dragonStatusValue = Card(
+    local _, dragonStatus = Card(
         QuestPage,
         "DRAGON HUNTER STATUS",
         "Idle"
     )
 
-    local _, dragonQuestValue = Card(
+    local _, dragonQuest = Card(
         QuestPage,
         "DRAGON HUNTER QUEST",
         "None"
@@ -3872,15 +4290,14 @@ task.spawn(function()
 
     local function setStatus(value)
         D.Status = tostring(value or "Idle")
-        dragonStatusValue.Text = D.Status
+        dragonStatus.Text = D.Status
     end
 
     local function setQuest(value)
-        D.Quest = tostring(value or "None")
-        dragonQuestValue.Text = D.Quest
+        dragonQuest.Text = tostring(value or "None")
     end
 
-    local function getDragonHunterRemote()
+    local function getDragonRemote()
         local modules = ReplicatedStorage:FindFirstChild("Modules")
         local net = modules and modules:FindFirstChild("Net")
         return net and net:FindFirstChild("RF/DragonHunter")
@@ -3892,47 +4309,23 @@ task.spawn(function()
         return net and net:FindFirstChild("RE/DragonDojoEmber")
     end
 
-    local function deepFindQuestText(value, depth)
-        depth = depth or 0
-        if depth > 6 then
-            return nil
+    local function fireEmberRemote()
+        if os.clock() - D.LastEmberRemote < 0.22 then
+            return
         end
 
-        if type(value) == "string" then
-            local lower = string.lower(value)
+        D.LastEmberRemote = os.clock()
 
-            if string.find(lower, "hydra enforcer", 1, true)
-                or string.find(lower, "venomous assailant", 1, true)
-                or string.find(lower, "destroy 10 tree", 1, true)
-                or string.find(lower, "head back to the dojo", 1, true)
-            then
-                return value
-            end
-
-            return nil
+        local remote = getEmberRemote()
+        if remote then
+            pcall(function()
+                remote:FireServer()
+            end)
         end
-
-        if type(value) == "table" then
-            if type(value.Text) == "string" then
-                local found = deepFindQuestText(value.Text, depth + 1)
-                if found then
-                    return found
-                end
-            end
-
-            for _, child in pairs(value) do
-                local found = deepFindQuestText(child, depth + 1)
-                if found then
-                    return found
-                end
-            end
-        end
-
-        return nil
     end
 
-    local function classifyQuest(value)
-        local lower = string.lower(tostring(value or ""))
+    local function classifyQuest(textValue)
+        local lower = string.lower(tostring(textValue or ""))
 
         if string.find(lower, "hydra enforcer", 1, true) then
             return "Hydra Enforcer"
@@ -3946,19 +4339,49 @@ task.spawn(function()
             return "Trees"
         end
 
-        if string.find(lower, "head back to the dojo", 1, true) then
-            return "Complete"
+        return nil
+    end
+
+    local function extractQuestText(value, depth)
+        depth = depth or 0
+        if depth > 6 then
+            return nil
+        end
+
+        if type(value) == "string" then
+            if classifyQuest(value) then
+                return value
+            end
+            return nil
+        end
+
+        if type(value) == "table" then
+            if type(value.Text) == "string" and classifyQuest(value.Text) then
+                return value.Text
+            end
+
+            for _, child in pairs(value) do
+                local found = extractQuestText(child, depth + 1)
+                if found then
+                    return found
+                end
+            end
         end
 
         return nil
     end
 
     local function checkQuest()
-        local remote = getDragonHunterRemote()
+        if os.clock() - D.LastCheck < 0.20 and D.QuestType then
+            return D.QuestType, D.QuestText
+        end
 
+        D.LastCheck = os.clock()
+
+        local remote = getDragonRemote()
         if not remote then
             setStatus("RF/DragonHunter not found")
-            return nil, nil
+            return D.QuestType, D.QuestText
         end
 
         local ok, result = pcall(function()
@@ -3967,59 +4390,94 @@ task.spawn(function()
             })
         end)
 
-        if not ok then
-            setStatus("Dragon Hunter quest check failed")
-            return nil, nil
+        if ok then
+            local textValue = extractQuestText(result)
+            local questType = classifyQuest(textValue)
+
+            if questType then
+                D.QuestType = questType
+                D.QuestText = textValue
+                setQuest(textValue)
+            end
         end
 
-        local questText = deepFindQuestText(result)
-        local questType = classifyQuest(questText)
+        return D.QuestType, D.QuestText
+    end
 
-        if questText then
-            setQuest(questText)
-        else
-            setQuest("None")
+    local function completionNotificationVisible()
+        if os.clock() - D.LastCompletionScan < 0.35 then
+            return false
         end
 
-        return questType, questText
+        D.LastCompletionScan = os.clock()
+
+        local gui = LocalPlayer:FindFirstChild("PlayerGui")
+        if not gui then
+            return false
+        end
+
+        for _, object in ipairs(gui:GetDescendants()) do
+            if object:IsA("TextLabel") or object:IsA("TextButton") then
+                local lower = string.lower(tostring(object.Text or ""))
+
+                if string.find(lower, "head back to the dojo", 1, true)
+                    or string.find(lower, "task completed", 1, true)
+                then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
+    local function getDragonHunterPosition()
+        local _, npcPart = State.StableCore:FindNPC("Dragon Hunter")
+
+        if npcPart then
+            return npcPart.CFrame * CFrame.new(0, 0, 4)
+        end
+
+        return D.NpcFallback
     end
 
     local function requestQuest()
-        local remote = getDragonHunterRemote()
-
+        local remote = getDragonRemote()
         if not remote then
             setStatus("RF/DragonHunter not found")
             return false
         end
 
-        local root = GetCharacterRoot()
-
-        if not root then
-            setStatus("Waiting for character")
+        if os.clock() - D.LastQuestRequest < 1.0 then
             return false
         end
 
-        local distance = (root.Position - D.NpcPos.Position).Magnitude
+        local npcPosition = getDragonHunterPosition()
+        local root = GetCharacterRoot()
 
-        if distance > 35 then
+        if not root then
+            return false
+        end
+
+        if (root.Position - npcPosition.Position).Magnitude > 28 then
             setStatus("Going to Dragon Hunter")
-            MovementService:GoTo(D.NpcPos, 3, "Dragon Hunter")
+
+            State.StableCore:Move(
+                npcPosition,
+                {
+                    name = "Dragon Hunter NPC",
+                    speed = 150
+                }
+            )
 
             root = GetCharacterRoot()
-
-            if not root
-                or (root.Position - D.NpcPos.Position).Magnitude > 70
-            then
+            if not root or (root.Position - npcPosition.Position).Magnitude > 55 then
                 return false
             end
         end
 
-        if os.clock() - D.LastQuestRequest < 1.25 then
-            return false
-        end
-
         D.LastQuestRequest = os.clock()
-        setStatus("Requesting Dragon Hunter quest")
+        setStatus("Requesting Hunt")
 
         local ok = pcall(function()
             remote:InvokeServer({
@@ -4027,318 +4485,195 @@ task.spawn(function()
             })
         end)
 
-        if ok then
-            task.wait(0.45)
-
-            local questType = checkQuest()
-
-            if questType then
-                setStatus("Quest received: " .. tostring(questType))
-                return true
-            end
+        if not ok then
+            setStatus("Hunt request failed")
+            return false
         end
 
-        setStatus("Waiting for Dragon Hunter quest")
+        task.wait(0.35)
+
+        D.QuestType = nil
+        D.QuestText = nil
+        local questType = checkQuest()
+
+        if questType then
+            setStatus("Quest: " .. tostring(questType))
+            return true
+        end
+
+        setStatus("Waiting for Hunt")
         return false
     end
 
-    local function fireEmberRemote()
-        if os.clock() - D.LastEmberRemote < 0.25 then
-            return
+    local function getBlazeEmberPart()
+        local template = workspace:FindFirstChild("EmberTemplate")
+        if template then
+            local part = template:FindFirstChild("Part", true)
+            if part and part:IsA("BasePart") then
+                return part
+            end
         end
 
-        D.LastEmberRemote = os.clock()
+        local attached = workspace:FindFirstChild("AttachedBlazeEmber")
+        if attached then
+            if attached:IsA("BasePart") then
+                return attached
+            end
 
-        local remote = getEmberRemote()
-
-        if remote then
-            pcall(function()
-                remote:FireServer()
-            end)
+            local part = attached:FindFirstChildWhichIsA("BasePart", true)
+            if part then
+                return part
+            end
         end
+
+        return nil
     end
 
-    local function objectLooksLikeBlazeEmber(object)
-        local current = object
-
-        for _ = 1, 5 do
-            if not current or current == workspace then
-                break
-            end
-
-            local lower = string.lower(tostring(current.Name or ""))
-
-            if string.find(lower, "azure", 1, true) then
-                return false
-            end
-
-            if string.find(lower, "ember", 1, true) then
-                return true
-            end
-
-            current = current.Parent
-        end
-
-        return false
-    end
-
-    local function findNearestVisibleEmber(maxDistance)
-        local root = GetCharacterRoot()
-
-        if not root then
-            return nil
-        end
-
-        local bestPart = nil
-        local bestDistance = maxDistance or 600
-
-        for _, object in ipairs(workspace:GetDescendants()) do
-            if object:IsA("BasePart")
-                and object.Transparency < 0.98
-                and objectLooksLikeBlazeEmber(object)
-            then
-                local distance = (object.Position - root.Position).Magnitude
-
-                if distance < bestDistance then
-                    bestPart = object
-                    bestDistance = distance
-                end
-            end
-        end
-
-        return bestPart, bestDistance
-    end
-
-    local function collectVisibleEmber()
+    local function collectBlazeEmber()
         fireEmberRemote()
 
-        local ember, distance = findNearestVisibleEmber(500)
-
-        if not ember then
+        local emberPart = getBlazeEmberPart()
+        if not emberPart then
             return false
         end
 
         local root = GetCharacterRoot()
-
         if not root then
             return false
         end
 
-        if distance and distance > 10 then
-            setStatus("Collecting Blaze Ember")
-            MovementService:GoTo(
-                CFrame.new(ember.Position),
-                0,
-                "Blaze Ember"
-            )
+        setStatus("Collecting Blaze Ember")
 
+        if (root.Position - emberPart.Position).Magnitude > 6 then
+            State.StableCore:Move(
+                CFrame.new(emberPart.Position),
+                {
+                    name = "Blaze Ember",
+                    speed = 145,
+                    segmentLength = 20,
+                    horizontalFirst = false
+                }
+            )
             root = GetCharacterRoot()
         end
 
-        if root and ember and ember.Parent then
+        if root and emberPart and emberPart.Parent then
             pcall(function()
                 if firetouchinterest then
-                    firetouchinterest(root, ember, 0)
+                    firetouchinterest(root, emberPart, 0)
                     task.wait()
-                    firetouchinterest(root, ember, 1)
+                    firetouchinterest(root, emberPart, 1)
                 else
-                    root.CFrame = CFrame.new(ember.Position)
+                    root.CFrame = CFrame.new(emberPart.Position)
                 end
             end)
-
-            fireEmberRemote()
-            return true
         end
 
-        return false
+        fireEmberRemote()
+        return true
     end
 
-    local function findDragonMob(mobName)
-        local root = GetCharacterRoot()
-        local best = nil
-        local bestDistance = math.huge
-
-        for _, container in ipairs(FindEnemyContainers()) do
-            for _, enemy in ipairs(container:GetChildren()) do
-                if enemy.Name == mobName
-                    and IsValidFarmTarget(enemy)
-                then
-                    local enemyRoot = GetTargetRoot(enemy)
-
-                    if enemyRoot then
-                        local distance = root
-                            and (enemyRoot.Position - root.Position).Magnitude
-                            or 0
-
-                        if distance < bestDistance then
-                            best = enemy
-                            bestDistance = distance
-                        end
-                    end
-                end
-            end
-        end
-
-        return best
-    end
-
-    local function attackDragonMob(mobName)
-        local target = findDragonMob(mobName)
+    local function farmMobQuest(mobName)
+        local target = State.StableCore:FindEnemy(mobName)
 
         if target then
-            setStatus("Farming " .. mobName)
+            setStatus("Fighting " .. mobName)
 
-            FarmState.CurrentTarget = target
-            FarmState.TargetName = mobName
-            FarmState.FarmAnchor = nil
+            State.StableCore:Fight(
+                target,
+                function()
+                    return D.Enabled and D.QuestType == mobName
+                end,
+                {
+                    height = 18,
+                    distance = 6,
+                    speed = 115
+                }
+            )
 
-            SpecialEquipAndAttack(target)
-            fireEmberRemote()
-            return true
+            task.wait(0.15)
+            collectBlazeEmber()
+            return
         end
 
-        local spawnPos = D.MobPositions[mobName]
+        local fallback = D.MobFallbacks[mobName]
+        if fallback then
+            setStatus("Searching " .. mobName)
 
-        if spawnPos then
-            setStatus("Going to " .. mobName .. " spawn")
-
-            MovementService:GoTo(
-                spawnPos,
-                12,
-                "Dragon Hunter: " .. mobName
+            State.StableCore:Move(
+                fallback,
+                {
+                    name = "Dragon Hunter " .. mobName,
+                    speed = 155,
+                    horizontalFirst = false
+                }
             )
         else
-            setStatus("Spawn not mapped: " .. mobName)
+            setStatus("No fallback for " .. mobName)
         end
-
-        fireEmberRemote()
-        return false
     end
 
-    local function pressKey(keyName)
-        local input = game:GetService("VirtualInputManager")
-
-        pcall(function()
-            input:SendKeyEvent(true, keyName, false, game)
-            task.wait(0.08)
-            input:SendKeyEvent(false, keyName, false, game)
-        end)
-    end
-
-    local function treeAttackBurst()
-        local tool = EquipFirstTool()
-
-        if tool then
-            pcall(function()
-                tool:Activate()
-            end)
-        end
-
-        pcall(function()
-            local camera = workspace.CurrentCamera
-            local viewport = camera
-                and camera.ViewportSize
-                or Vector2.new(800, 600)
-
-            local input = game:GetService("VirtualInputManager")
-            local x = math.floor(viewport.X / 2)
-            local y = math.floor(viewport.Y / 2)
-
-            input:SendMouseButtonEvent(
-                x,
-                y,
-                0,
-                true,
-                game,
-                0
-            )
-
-            input:SendMouseButtonEvent(
-                x,
-                y,
-                0,
-                false,
-                game,
-                0
-            )
-        end)
-
-        pressKey("Z")
-        task.wait(0.12)
-        pressKey("X")
-        task.wait(0.12)
-        pressKey("C")
-
-        fireEmberRemote()
-    end
-
-    local function treeQuestStep()
+    local function attackTreePoint(point)
         local root = GetCharacterRoot()
-
         if not root then
-            setStatus("Waiting for character")
             return
         end
 
-        local index = math.clamp(
-            D.TreeIndex,
-            1,
-            #D.TreePositions
-        )
-
-        local point = D.TreePositions[index]
-        local distance = (root.Position - point.Position).Magnitude
-
-        if distance > 18 then
-            setStatus(
-                "Tree route "
-                .. index
-                .. "/"
-                .. #D.TreePositions
-            )
-
-            MovementService:GoTo(
+        if (root.Position - point.Position).Magnitude > 12 then
+            State.StableCore:Move(
                 point,
-                2,
-                "Dragon Hunter Tree " .. index
+                {
+                    name = "Hydra tree",
+                    speed = 145,
+                    horizontalFirst = false
+                }
             )
-
-            return
         end
 
-        if os.clock() - D.LastTreeAttack < 0.65 then
-            return
-        end
+        local tool = State.StableCore:GetMeleeTool()
 
-        D.LastTreeAttack = os.clock()
-
-        setStatus(
-            "Destroying Hydra trees "
-            .. index
-            .. "/"
-            .. #D.TreePositions
-        )
-
-        for _ = 1, 3 do
-            if not D.Enabled then
+        for _ = 1, 5 do
+            if not D.Enabled or D.QuestType ~= "Trees" then
                 break
             end
 
-            treeAttackBurst()
-            task.wait(0.20)
+            if tool then
+                pcall(function()
+                    tool:Activate()
+                end)
+            end
+
+            pcall(function()
+                local input = game:GetService("VirtualInputManager")
+                input:SendKeyEvent(true, Enum.KeyCode.Z, false, game)
+                task.wait(0.06)
+                input:SendKeyEvent(false, Enum.KeyCode.Z, false, game)
+            end)
+
+            fireEmberRemote()
+            task.wait(0.16)
         end
 
-        collectVisibleEmber()
+        collectBlazeEmber()
+    end
 
-        D.TreeIndex = (
-            index % #D.TreePositions
-        ) + 1
+    local function farmTreeQuest()
+        local index = math.clamp(D.TreeIndex, 1, #D.TreeFallbacks)
+        setStatus(
+            "Destroying trees "
+            .. tostring(index)
+            .. "/"
+            .. tostring(#D.TreeFallbacks)
+        )
+
+        attackTreePoint(D.TreeFallbacks[index])
+        D.TreeIndex = (index % #D.TreeFallbacks) + 1
     end
 
     Toggle(
         QuestPage,
         "Auto Dragon Hunter",
-        "Pega a Hunt, detecta qual das 3 quests veio, completa e coleta Blaze Embers.",
+        "Pega a Hunt, detecta a missão, usa a base estável de movimento/combate e coleta Blaze Embers.",
         false,
         function(enabled)
             D.Enabled = enabled
@@ -4350,102 +4685,72 @@ task.spawn(function()
                 FarmState.CurrentTarget = nil
                 FarmState.FarmAnchor = nil
 
+                D.QuestType = nil
+                D.QuestText = nil
                 D.TreeIndex = 1
                 D.LastQuestRequest = 0
-                D.LastEmberScan = 0
+                D.LastCheck = 0
+
+                State.StableCore:CancelMove()
 
                 setStatus("Starting Dragon Hunter")
                 setQuest("Checking...")
 
-                Notify(
-                    "Auto Dragon Hunter",
-                    "Enabled"
-                )
+                Notify("Auto Dragon Hunter", "Enabled")
             else
-                MovementService:Stop()
+                State.StableCore:CancelMove()
 
                 FarmState.CurrentTarget = nil
                 FarmState.FarmAnchor = nil
 
+                D.QuestType = nil
+                D.QuestText = nil
+
                 setStatus("Idle")
                 setQuest("None")
 
-                Notify(
-                    "Auto Dragon Hunter",
-                    "Disabled"
-                )
+                Notify("Auto Dragon Hunter", "Disabled")
             end
         end
     )
 
-    task.spawn(function()
-        while not State.Destroyed do
-            task.wait(0.20)
+    while not State.Destroyed do
+        task.wait(0.18)
 
-            if D.Enabled then
-                local root = GetCharacterRoot()
-                local humanoid = GetCharacterHumanoid()
+        if D.Enabled then
+            local root = GetCharacterRoot()
+            local humanoid = GetCharacterHumanoid()
 
-                if not root
-                    or not humanoid
-                    or humanoid.Health <= 0
-                then
-                    setStatus("Waiting for character")
-                    task.wait(0.8)
+            if not root or not humanoid or humanoid.Health <= 0 then
+                setStatus("Waiting for character")
+                task.wait(0.6)
+            else
+                fireEmberRemote()
+
+                if getBlazeEmberPart() then
+                    collectBlazeEmber()
                 else
-                    fireEmberRemote()
-
-                    local ember = nil
-
-                    if os.clock() - D.LastEmberScan >= 0.45 then
-                        D.LastEmberScan = os.clock()
-                        ember = findNearestVisibleEmber(220)
+                    if completionNotificationVisible() then
+                        D.QuestType = nil
+                        D.QuestText = nil
+                        setQuest("Completed - returning to Dojo")
                     end
 
-                    if ember then
-                        collectVisibleEmber()
-                    else
-                        local questType, questText = checkQuest()
+                    local questType = checkQuest()
 
-                        if questType == "Complete" then
-                            setStatus(
-                                "Quest complete - returning to Dragon Hunter"
-                            )
-
-                            MovementService:GoTo(
-                                D.NpcPos,
-                                3,
-                                "Dragon Hunter"
-                            )
-
-                            task.wait(0.25)
-                            requestQuest()
-
-                        elseif questType == "Hydra Enforcer" then
-                            attackDragonMob(
-                                "Hydra Enforcer"
-                            )
-
-                        elseif questType == "Venomous Assailant" then
-                            attackDragonMob(
-                                "Venomous Assailant"
-                            )
-
-                        elseif questType == "Trees" then
-                            treeQuestStep()
-
-                        else
-                            if questText then
-                                setQuest(questText)
-                            end
-
-                            requestQuest()
-                        end
+                    if not questType then
+                        requestQuest()
+                    elseif questType == "Hydra Enforcer" then
+                        farmMobQuest("Hydra Enforcer")
+                    elseif questType == "Venomous Assailant" then
+                        farmMobQuest("Venomous Assailant")
+                    elseif questType == "Trees" then
+                        farmTreeQuest()
                     end
                 end
             end
         end
-    end)
+    end
 end)
 
 --==================================================
