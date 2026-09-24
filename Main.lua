@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.6a
+    Version: 2.7.6b
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.6a",
+    Version = "2.7.6b",
 
     Width = 920,
     Height = 590,
@@ -4613,6 +4613,154 @@ task.spawn(function()
         end
     end
 
+    local function treeToolTip(tool)
+        return string.lower(tostring(tool and tool.ToolTip or ""))
+    end
+
+    local function treeIsFruit(tool)
+        if not tool or not tool:IsA("Tool") then
+            return false
+        end
+
+        local tip = treeToolTip(tool)
+        if string.find(tip, "fruit", 1, true) then
+            return true
+        end
+
+        local data = LocalPlayer:FindFirstChild("Data")
+        local fruitValue = data and data:FindFirstChild("DevilFruit")
+        local fruitName = fruitValue and tostring(fruitValue.Value) or ""
+
+        return fruitName ~= "" and tool.Name == fruitName
+    end
+
+    local function treeToolMatches(tool, kind)
+        if not tool or not tool:IsA("Tool") then
+            return false
+        end
+
+        local tip = treeToolTip(tool)
+
+        if kind == "Melee" then
+            return IsLikelyFightingStyle(tool)
+        elseif kind == "Sword" then
+            return string.find(tip, "sword", 1, true) ~= nil
+        elseif kind == "Gun" then
+            return string.find(tip, "gun", 1, true) ~= nil
+        elseif kind == "Fruit" then
+            return treeIsFruit(tool)
+        end
+
+        return false
+    end
+
+    local function findTreeTool(kind)
+        local character = LocalPlayer.Character
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+
+        for _, holder in ipairs({character, backpack}) do
+            if holder then
+                for _, tool in ipairs(holder:GetChildren()) do
+                    if treeToolMatches(tool, kind) then
+                        return tool
+                    end
+                end
+            end
+        end
+
+        return nil
+    end
+
+    local function equipTreeTool(tool)
+        if not tool then
+            return nil
+        end
+
+        local humanoid = GetCharacterHumanoid()
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+
+        if humanoid and backpack and tool.Parent == backpack then
+            pcall(function()
+                humanoid:EquipTool(tool)
+            end)
+
+            task.wait(0.12)
+        end
+
+        return tool
+    end
+
+    local function aimTreeTool(tool, point)
+        if not tool or not point then
+            return
+        end
+
+        pcall(function()
+            local mousePos = tool:FindFirstChild("MousePos")
+            if mousePos and mousePos:IsA("Vector3Value") then
+                mousePos.Value = point.Position
+            end
+        end)
+
+        pcall(function()
+            local remote = tool:FindFirstChild("RemoteEvent")
+            if remote and remote:IsA("RemoteEvent") then
+                remote:FireServer(point.Position)
+            end
+        end)
+    end
+
+    local function pressTreeSkill(keyCode, holdTime)
+        pcall(function()
+            local input = game:GetService("VirtualInputManager")
+            input:SendKeyEvent(true, keyCode, false, game)
+            task.wait(holdTime or 0.12)
+            input:SendKeyEvent(false, keyCode, false, game)
+        end)
+    end
+
+    local function useTreeCategory(kind, keys, point)
+        if not D.Enabled or D.QuestType ~= "Trees" then
+            return
+        end
+
+        local tool = findTreeTool(kind)
+        if not tool then
+            return
+        end
+
+        tool = equipTreeTool(tool)
+        if not tool then
+            return
+        end
+
+        setStatus("Trees: using " .. kind)
+        aimTreeTool(tool, point)
+
+        pcall(function()
+            tool:Activate()
+        end)
+
+        task.wait(0.10)
+
+        for _, keyCode in ipairs(keys) do
+            if not D.Enabled or D.QuestType ~= "Trees" then
+                break
+            end
+
+            aimTreeTool(tool, point)
+            pressTreeSkill(keyCode, 0.14)
+            fireEmberRemote()
+            task.wait(0.18)
+        end
+
+        pcall(function()
+            tool:Activate()
+        end)
+
+        task.wait(0.12)
+    end
+
     local function attackTreePoint(point)
         local root = GetCharacterRoot()
         if not root then
@@ -4630,29 +4778,48 @@ task.spawn(function()
             )
         end
 
-        local tool = State.StableCore:GetMeleeTool()
+        -- Tree Hunt is different from normal mob combat:
+        -- cycle through every available combat category instead of relying
+        -- only on the fighting style. Categories that are not owned are skipped.
+        useTreeCategory(
+            "Melee",
+            {
+                Enum.KeyCode.Z,
+                Enum.KeyCode.X,
+                Enum.KeyCode.C
+            },
+            point
+        )
 
-        for _ = 1, 5 do
-            if not D.Enabled or D.QuestType ~= "Trees" then
-                break
-            end
+        useTreeCategory(
+            "Sword",
+            {
+                Enum.KeyCode.Z,
+                Enum.KeyCode.X
+            },
+            point
+        )
 
-            if tool then
-                pcall(function()
-                    tool:Activate()
-                end)
-            end
+        useTreeCategory(
+            "Gun",
+            {
+                Enum.KeyCode.Z,
+                Enum.KeyCode.X
+            },
+            point
+        )
 
-            pcall(function()
-                local input = game:GetService("VirtualInputManager")
-                input:SendKeyEvent(true, Enum.KeyCode.Z, false, game)
-                task.wait(0.06)
-                input:SendKeyEvent(false, Enum.KeyCode.Z, false, game)
-            end)
-
-            fireEmberRemote()
-            task.wait(0.16)
-        end
+        useTreeCategory(
+            "Fruit",
+            {
+                Enum.KeyCode.Z,
+                Enum.KeyCode.X,
+                Enum.KeyCode.C,
+                Enum.KeyCode.V,
+                Enum.KeyCode.F
+            },
+            point
+        )
 
         collectBlazeEmber()
     end
