@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.6b
+    Version: 2.7.6c
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.6b",
+    Version = "2.7.6c",
 
     Width = 920,
     Height = 590,
@@ -3831,9 +3831,9 @@ Toggle(
 --==================================================
 
 State.StableCore = State.StableCore or {
-    TravelSpeed = 170,
+    TravelSpeed = 165,
     CombatSpeed = 115,
-    SegmentLength = 28,
+    SegmentLength = 28, -- kept for compatibility with older calls
     CombatHeight = 18,
     CombatDistance = 6,
     AttackCooldown = 0.11,
@@ -3862,31 +3862,35 @@ function State.StableCore:Move(targetCFrame, options)
 
     self.MoveNonce = (self.MoveNonce or 0) + 1
     local nonce = self.MoveNonce
-    local speed = tonumber(options.speed) or self.TravelSpeed or 170
-    local segmentLength = tonumber(options.segmentLength) or self.SegmentLength or 28
-    local yOffset = tonumber(options.yOffset) or 0
 
+    local speed = tonumber(options.speed) or self.TravelSpeed or 165
+    local yOffset = tonumber(options.yOffset) or 0
     local targetPosition = targetCFrame.Position + Vector3.new(0, yOffset, 0)
+
     local horizontalDistance = Vector3.new(
         targetPosition.X - root.Position.X,
         0,
         targetPosition.Z - root.Position.Z
     ).Magnitude
+
     local verticalDifference = math.abs(targetPosition.Y - root.Position.Y)
 
     local horizontalFirst = options.horizontalFirst
+
     if horizontalFirst == nil then
-        -- Prevent the classic "start climbing from across the map" problem.
+        -- Core rule:
+        -- never begin a large climb while we are still far from the destination.
         horizontalFirst = horizontalDistance > 700 and verticalDifference > 180
     end
 
     MovementService:Stop()
     MovementService.Active = true
+    MovementService.Target = targetCFrame
     MovementService.DestinationName = tostring(options.name or "Stable Core")
     MovementService.Status = "Moving"
-    MovementService:SetCollision(false)
 
     humanoid.Sit = false
+    MovementService:SetCollision(false)
 
     pcall(function()
         root.Anchored = false
@@ -3894,113 +3898,125 @@ function State.StableCore:Move(targetCFrame, options)
         root.AssemblyAngularVelocity = Vector3.zero
     end)
 
-    local function moveLine(destinationPosition, finalLookAt)
+    -- 2.7.6c:
+    -- Previous StableCore restarted a tween every ~28 studs.
+    -- That was stable, but visually looked like many tiny pushes.
+    -- A phase is now one continuous tween, preserving the no-initial-rise rule.
+    local function smoothPhase(destinationPosition, phaseSpeed, statusText)
+        if nonce ~= self.MoveNonce
+            or State.Destroyed
+            or not MovementService.Active
+        then
+            return false
+        end
+
         local currentRoot = GetCharacterRoot()
         if not currentRoot then
             return false
         end
 
-        local startPosition = currentRoot.Position
-        local delta = destinationPosition - startPosition
+        local delta = destinationPosition - currentRoot.Position
         local distance = delta.Magnitude
 
         if distance <= 3 then
-            local lookAt = finalLookAt
-            if not lookAt or (lookAt - destinationPosition).Magnitude < 0.1 then
-                lookAt = destinationPosition + currentRoot.CFrame.LookVector
-            end
-
             pcall(function()
-                currentRoot.CFrame = CFrame.lookAt(destinationPosition, lookAt)
+                local rotation = currentRoot.CFrame.Rotation
+                currentRoot.CFrame = CFrame.new(destinationPosition) * rotation
+                currentRoot.AssemblyLinearVelocity = Vector3.zero
+                currentRoot.AssemblyAngularVelocity = Vector3.zero
             end)
             return true
         end
 
-        local direction = delta.Unit
-        local travelled = 0
+        MovementService.Status = statusText or "Moving"
 
-        while travelled < distance do
-            if nonce ~= self.MoveNonce
-                or State.Destroyed
-                or not MovementService.Active
-            then
-                return false
-            end
+        local rotation = currentRoot.CFrame.Rotation
+        local destinationCFrame = CFrame.new(destinationPosition) * rotation
+        local duration = math.clamp(
+            distance / math.max(phaseSpeed or speed, 1),
+            0.10,
+            90
+        )
 
-            currentRoot = GetCharacterRoot()
-            if not currentRoot then
-                return false
-            end
+        local tween = TweenService:Create(
+            currentRoot,
+            TweenInfo.new(
+                duration,
+                Enum.EasingStyle.Linear,
+                Enum.EasingDirection.Out
+            ),
+            {CFrame = destinationCFrame}
+        )
 
-            travelled = math.min(travelled + segmentLength, distance)
-            local nextPosition = startPosition + direction * travelled
+        MovementService.Tween = tween
 
-            local lookAt = finalLookAt
-            if not lookAt or (lookAt - nextPosition).Magnitude < 0.1 then
-                lookAt = destinationPosition
-            end
-            if (lookAt - nextPosition).Magnitude < 0.1 then
-                lookAt = nextPosition + currentRoot.CFrame.LookVector
-            end
+        local ok = pcall(function()
+            tween:Play()
+            tween.Completed:Wait()
+        end)
 
-            local nextCFrame = CFrame.lookAt(nextPosition, lookAt)
-            local stepDistance = (currentRoot.Position - nextPosition).Magnitude
-            local duration = math.max(stepDistance / speed, 0.035)
-
-            local tween = TweenService:Create(
-                currentRoot,
-                TweenInfo.new(duration, Enum.EasingStyle.Linear),
-                {CFrame = nextCFrame}
-            )
-
-            MovementService.Tween = tween
-
-            local ok = pcall(function()
-                tween:Play()
-                tween.Completed:Wait()
-            end)
-
-            if MovementService.Tween == tween then
-                MovementService.Tween = nil
-            end
-
-            if not ok then
-                return false
-            end
+        if MovementService.Tween == tween then
+            MovementService.Tween = nil
         end
 
-        return true
+        if not ok
+            or nonce ~= self.MoveNonce
+            or State.Destroyed
+            or not MovementService.Active
+        then
+            return false
+        end
+
+        currentRoot = GetCharacterRoot()
+        if not currentRoot then
+            return false
+        end
+
+        pcall(function()
+            currentRoot.AssemblyLinearVelocity = Vector3.zero
+            currentRoot.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        return (currentRoot.Position - destinationPosition).Magnitude <= 10
     end
 
     local ok = true
 
     if horizontalFirst then
-        MovementService.Status = "Horizontal travel"
+        -- Travel X/Z at the SAME current Y.
+        -- This prevents the old vertical flick / early climb.
+        local currentRoot = GetCharacterRoot()
 
-        -- Keep the player's current Y until X/Z already match the destination.
-        local horizontalTarget = Vector3.new(
-            targetPosition.X,
-            root.Position.Y,
-            targetPosition.Z
-        )
+        if not currentRoot then
+            ok = false
+        else
+            local horizontalTarget = Vector3.new(
+                targetPosition.X,
+                currentRoot.Position.Y,
+                targetPosition.Z
+            )
 
-        ok = moveLine(
-            horizontalTarget,
-            horizontalTarget + targetCFrame.LookVector
-        )
+            ok = smoothPhase(
+                horizontalTarget,
+                speed,
+                "Horizontal travel"
+            )
+        end
 
+        -- Only after the account is already over the destination X/Z
+        -- do we make the local height correction.
         if ok then
-            MovementService.Status = "Local height adjustment"
-            ok = moveLine(
+            ok = smoothPhase(
                 targetPosition,
-                targetPosition + targetCFrame.LookVector
+                math.min(speed, 125),
+                "Local height adjustment"
             )
         end
     else
-        MovementService.Status = "Direct travel"
-        ok = moveLine(
+        ok = smoothPhase(
             targetPosition,
-            targetPosition + targetCFrame.LookVector
+            speed,
+            "Direct travel"
         )
     end
 
@@ -4012,12 +4028,14 @@ function State.StableCore:Move(targetCFrame, options)
     end
 
     root = GetCharacterRoot()
+
     if not ok or not root then
         return false
     end
 
     return (root.Position - targetPosition).Magnitude <= 18
 end
+
 
 function State.StableCore:NameMatches(actualName, wantedName)
     local actual = string.lower(tostring(actualName or ""))
