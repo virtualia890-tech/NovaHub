@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.5h
+    Version: 2.7.5i
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.5h",
+    Version = "2.7.5i",
 
     Width = 920,
     Height = 590,
@@ -3820,6 +3820,633 @@ Toggle(
         Notify("Auto Quest", enabled and "Enabled" or "Disabled")
     end
 )
+
+--==================================================
+-- DRAGON HUNTER / BLAZE EMBER 2.7.5i
+-- Dragon Hunter -> detect hunt -> complete objective -> collect embers -> repeat
+--==================================================
+
+Section(
+    QuestPage,
+    "Dragon Hunter",
+    "Auto Hunt: Hydra Enforcer / Venomous Assailant / 10 trees + Blaze Ember collection"
+)
+
+task.spawn(function()
+    local D = {
+        Enabled = false,
+        Status = "Idle",
+        Quest = "None",
+        LastQuestRequest = 0,
+        LastEmberRemote = 0,
+        LastEmberScan = 0,
+        LastTreeAttack = 0,
+        TreeIndex = 1,
+
+        NpcPos = CFrame.new(5864.86377, 1209.55066, 812.775024),
+
+        MobPositions = {
+            ["Hydra Enforcer"] = CFrame.new(4547.11523, 1003.10217, 334.194824),
+            ["Venomous Assailant"] = CFrame.new(4674.92676, 1134.82654, 996.308838)
+        },
+
+        TreePositions = {
+            CFrame.new(5255.1049, 1004.1949, 344.7700),
+            CFrame.new(5340.3584, 1004.1949, 362.6387),
+            CFrame.new(5323.6436, 1004.1949, 440.7161),
+            CFrame.new(5244.3618, 1004.1949, 422.4569)
+        }
+    }
+
+    local _, dragonStatusValue = Card(
+        QuestPage,
+        "DRAGON HUNTER STATUS",
+        "Idle"
+    )
+
+    local _, dragonQuestValue = Card(
+        QuestPage,
+        "DRAGON HUNTER QUEST",
+        "None"
+    )
+
+    local function setStatus(value)
+        D.Status = tostring(value or "Idle")
+        dragonStatusValue.Text = D.Status
+    end
+
+    local function setQuest(value)
+        D.Quest = tostring(value or "None")
+        dragonQuestValue.Text = D.Quest
+    end
+
+    local function getDragonHunterRemote()
+        local modules = ReplicatedStorage:FindFirstChild("Modules")
+        local net = modules and modules:FindFirstChild("Net")
+        return net and net:FindFirstChild("RF/DragonHunter")
+    end
+
+    local function getEmberRemote()
+        local modules = ReplicatedStorage:FindFirstChild("Modules")
+        local net = modules and modules:FindFirstChild("Net")
+        return net and net:FindFirstChild("RE/DragonDojoEmber")
+    end
+
+    local function deepFindQuestText(value, depth)
+        depth = depth or 0
+        if depth > 6 then
+            return nil
+        end
+
+        if type(value) == "string" then
+            local lower = string.lower(value)
+
+            if string.find(lower, "hydra enforcer", 1, true)
+                or string.find(lower, "venomous assailant", 1, true)
+                or string.find(lower, "destroy 10 tree", 1, true)
+                or string.find(lower, "head back to the dojo", 1, true)
+            then
+                return value
+            end
+
+            return nil
+        end
+
+        if type(value) == "table" then
+            if type(value.Text) == "string" then
+                local found = deepFindQuestText(value.Text, depth + 1)
+                if found then
+                    return found
+                end
+            end
+
+            for _, child in pairs(value) do
+                local found = deepFindQuestText(child, depth + 1)
+                if found then
+                    return found
+                end
+            end
+        end
+
+        return nil
+    end
+
+    local function classifyQuest(value)
+        local lower = string.lower(tostring(value or ""))
+
+        if string.find(lower, "hydra enforcer", 1, true) then
+            return "Hydra Enforcer"
+        end
+
+        if string.find(lower, "venomous assailant", 1, true) then
+            return "Venomous Assailant"
+        end
+
+        if string.find(lower, "destroy 10 tree", 1, true) then
+            return "Trees"
+        end
+
+        if string.find(lower, "head back to the dojo", 1, true) then
+            return "Complete"
+        end
+
+        return nil
+    end
+
+    local function checkQuest()
+        local remote = getDragonHunterRemote()
+
+        if not remote then
+            setStatus("RF/DragonHunter not found")
+            return nil, nil
+        end
+
+        local ok, result = pcall(function()
+            return remote:InvokeServer({
+                Context = "Check"
+            })
+        end)
+
+        if not ok then
+            setStatus("Dragon Hunter quest check failed")
+            return nil, nil
+        end
+
+        local questText = deepFindQuestText(result)
+        local questType = classifyQuest(questText)
+
+        if questText then
+            setQuest(questText)
+        else
+            setQuest("None")
+        end
+
+        return questType, questText
+    end
+
+    local function requestQuest()
+        local remote = getDragonHunterRemote()
+
+        if not remote then
+            setStatus("RF/DragonHunter not found")
+            return false
+        end
+
+        local root = GetCharacterRoot()
+
+        if not root then
+            setStatus("Waiting for character")
+            return false
+        end
+
+        local distance = (root.Position - D.NpcPos.Position).Magnitude
+
+        if distance > 35 then
+            setStatus("Going to Dragon Hunter")
+            MovementService:GoTo(D.NpcPos, 3, "Dragon Hunter")
+
+            root = GetCharacterRoot()
+
+            if not root
+                or (root.Position - D.NpcPos.Position).Magnitude > 70
+            then
+                return false
+            end
+        end
+
+        if os.clock() - D.LastQuestRequest < 1.25 then
+            return false
+        end
+
+        D.LastQuestRequest = os.clock()
+        setStatus("Requesting Dragon Hunter quest")
+
+        local ok = pcall(function()
+            remote:InvokeServer({
+                Context = "RequestQuest"
+            })
+        end)
+
+        if ok then
+            task.wait(0.45)
+
+            local questType = checkQuest()
+
+            if questType then
+                setStatus("Quest received: " .. tostring(questType))
+                return true
+            end
+        end
+
+        setStatus("Waiting for Dragon Hunter quest")
+        return false
+    end
+
+    local function fireEmberRemote()
+        if os.clock() - D.LastEmberRemote < 0.25 then
+            return
+        end
+
+        D.LastEmberRemote = os.clock()
+
+        local remote = getEmberRemote()
+
+        if remote then
+            pcall(function()
+                remote:FireServer()
+            end)
+        end
+    end
+
+    local function objectLooksLikeBlazeEmber(object)
+        local current = object
+
+        for _ = 1, 5 do
+            if not current or current == workspace then
+                break
+            end
+
+            local lower = string.lower(tostring(current.Name or ""))
+
+            if string.find(lower, "azure", 1, true) then
+                return false
+            end
+
+            if string.find(lower, "ember", 1, true) then
+                return true
+            end
+
+            current = current.Parent
+        end
+
+        return false
+    end
+
+    local function findNearestVisibleEmber(maxDistance)
+        local root = GetCharacterRoot()
+
+        if not root then
+            return nil
+        end
+
+        local bestPart = nil
+        local bestDistance = maxDistance or 600
+
+        for _, object in ipairs(workspace:GetDescendants()) do
+            if object:IsA("BasePart")
+                and object.Transparency < 0.98
+                and objectLooksLikeBlazeEmber(object)
+            then
+                local distance = (object.Position - root.Position).Magnitude
+
+                if distance < bestDistance then
+                    bestPart = object
+                    bestDistance = distance
+                end
+            end
+        end
+
+        return bestPart, bestDistance
+    end
+
+    local function collectVisibleEmber()
+        fireEmberRemote()
+
+        local ember, distance = findNearestVisibleEmber(500)
+
+        if not ember then
+            return false
+        end
+
+        local root = GetCharacterRoot()
+
+        if not root then
+            return false
+        end
+
+        if distance and distance > 10 then
+            setStatus("Collecting Blaze Ember")
+            MovementService:GoTo(
+                CFrame.new(ember.Position),
+                0,
+                "Blaze Ember"
+            )
+
+            root = GetCharacterRoot()
+        end
+
+        if root and ember and ember.Parent then
+            pcall(function()
+                if firetouchinterest then
+                    firetouchinterest(root, ember, 0)
+                    task.wait()
+                    firetouchinterest(root, ember, 1)
+                else
+                    root.CFrame = CFrame.new(ember.Position)
+                end
+            end)
+
+            fireEmberRemote()
+            return true
+        end
+
+        return false
+    end
+
+    local function findDragonMob(mobName)
+        local root = GetCharacterRoot()
+        local best = nil
+        local bestDistance = math.huge
+
+        for _, container in ipairs(FindEnemyContainers()) do
+            for _, enemy in ipairs(container:GetChildren()) do
+                if enemy.Name == mobName
+                    and IsValidFarmTarget(enemy)
+                then
+                    local enemyRoot = GetTargetRoot(enemy)
+
+                    if enemyRoot then
+                        local distance = root
+                            and (enemyRoot.Position - root.Position).Magnitude
+                            or 0
+
+                        if distance < bestDistance then
+                            best = enemy
+                            bestDistance = distance
+                        end
+                    end
+                end
+            end
+        end
+
+        return best
+    end
+
+    local function attackDragonMob(mobName)
+        local target = findDragonMob(mobName)
+
+        if target then
+            setStatus("Farming " .. mobName)
+
+            FarmState.CurrentTarget = target
+            FarmState.TargetName = mobName
+            FarmState.FarmAnchor = nil
+
+            SpecialEquipAndAttack(target)
+            fireEmberRemote()
+            return true
+        end
+
+        local spawnPos = D.MobPositions[mobName]
+
+        if spawnPos then
+            setStatus("Going to " .. mobName .. " spawn")
+
+            MovementService:GoTo(
+                spawnPos,
+                12,
+                "Dragon Hunter: " .. mobName
+            )
+        else
+            setStatus("Spawn not mapped: " .. mobName)
+        end
+
+        fireEmberRemote()
+        return false
+    end
+
+    local function pressKey(keyName)
+        local input = game:GetService("VirtualInputManager")
+
+        pcall(function()
+            input:SendKeyEvent(true, keyName, false, game)
+            task.wait(0.08)
+            input:SendKeyEvent(false, keyName, false, game)
+        end)
+    end
+
+    local function treeAttackBurst()
+        local tool = EquipFirstTool()
+
+        if tool then
+            pcall(function()
+                tool:Activate()
+            end)
+        end
+
+        pcall(function()
+            local camera = workspace.CurrentCamera
+            local viewport = camera
+                and camera.ViewportSize
+                or Vector2.new(800, 600)
+
+            local input = game:GetService("VirtualInputManager")
+            local x = math.floor(viewport.X / 2)
+            local y = math.floor(viewport.Y / 2)
+
+            input:SendMouseButtonEvent(
+                x,
+                y,
+                0,
+                true,
+                game,
+                0
+            )
+
+            input:SendMouseButtonEvent(
+                x,
+                y,
+                0,
+                false,
+                game,
+                0
+            )
+        end)
+
+        pressKey("Z")
+        task.wait(0.12)
+        pressKey("X")
+        task.wait(0.12)
+        pressKey("C")
+
+        fireEmberRemote()
+    end
+
+    local function treeQuestStep()
+        local root = GetCharacterRoot()
+
+        if not root then
+            setStatus("Waiting for character")
+            return
+        end
+
+        local index = math.clamp(
+            D.TreeIndex,
+            1,
+            #D.TreePositions
+        )
+
+        local point = D.TreePositions[index]
+        local distance = (root.Position - point.Position).Magnitude
+
+        if distance > 18 then
+            setStatus(
+                "Tree route "
+                .. index
+                .. "/"
+                .. #D.TreePositions
+            )
+
+            MovementService:GoTo(
+                point,
+                2,
+                "Dragon Hunter Tree " .. index
+            )
+
+            return
+        end
+
+        if os.clock() - D.LastTreeAttack < 0.65 then
+            return
+        end
+
+        D.LastTreeAttack = os.clock()
+
+        setStatus(
+            "Destroying Hydra trees "
+            .. index
+            .. "/"
+            .. #D.TreePositions
+        )
+
+        for _ = 1, 3 do
+            if not D.Enabled then
+                break
+            end
+
+            treeAttackBurst()
+            task.wait(0.20)
+        end
+
+        collectVisibleEmber()
+
+        D.TreeIndex = (
+            index % #D.TreePositions
+        ) + 1
+    end
+
+    Toggle(
+        QuestPage,
+        "Auto Dragon Hunter",
+        "Pega a Hunt, detecta qual das 3 quests veio, completa e coleta Blaze Embers.",
+        false,
+        function(enabled)
+            D.Enabled = enabled
+
+            if enabled then
+                StopSpecialFarms()
+                DisableNormalQuestFarmForSpecial()
+
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+
+                D.TreeIndex = 1
+                D.LastQuestRequest = 0
+                D.LastEmberScan = 0
+
+                setStatus("Starting Dragon Hunter")
+                setQuest("Checking...")
+
+                Notify(
+                    "Auto Dragon Hunter",
+                    "Enabled"
+                )
+            else
+                MovementService:Stop()
+
+                FarmState.CurrentTarget = nil
+                FarmState.FarmAnchor = nil
+
+                setStatus("Idle")
+                setQuest("None")
+
+                Notify(
+                    "Auto Dragon Hunter",
+                    "Disabled"
+                )
+            end
+        end
+    )
+
+    task.spawn(function()
+        while not State.Destroyed do
+            task.wait(0.20)
+
+            if D.Enabled then
+                local root = GetCharacterRoot()
+                local humanoid = GetCharacterHumanoid()
+
+                if not root
+                    or not humanoid
+                    or humanoid.Health <= 0
+                then
+                    setStatus("Waiting for character")
+                    task.wait(0.8)
+                else
+                    fireEmberRemote()
+
+                    local ember = nil
+
+                    if os.clock() - D.LastEmberScan >= 0.45 then
+                        D.LastEmberScan = os.clock()
+                        ember = findNearestVisibleEmber(220)
+                    end
+
+                    if ember then
+                        collectVisibleEmber()
+                    else
+                        local questType, questText = checkQuest()
+
+                        if questType == "Complete" then
+                            setStatus(
+                                "Quest complete - returning to Dragon Hunter"
+                            )
+
+                            MovementService:GoTo(
+                                D.NpcPos,
+                                3,
+                                "Dragon Hunter"
+                            )
+
+                            task.wait(0.25)
+                            requestQuest()
+
+                        elseif questType == "Hydra Enforcer" then
+                            attackDragonMob(
+                                "Hydra Enforcer"
+                            )
+
+                        elseif questType == "Venomous Assailant" then
+                            attackDragonMob(
+                                "Venomous Assailant"
+                            )
+
+                        elseif questType == "Trees" then
+                            treeQuestStep()
+
+                        else
+                            if questText then
+                                setQuest(questText)
+                            end
+
+                            requestQuest()
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end)
 
 --==================================================
 -- RAIDS
