@@ -1,6 +1,6 @@
 --[[
     FLOQUITAVE HUB
-    Version: 2.7.6r
+    Version: 2.7.7a
     UI / Player / Teleport Directory / Themes / Server Info
 
     Safe test build:
@@ -29,7 +29,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Config = {
     Name = "Floquitave",
-    Version = "2.7.6r",
+    Version = "2.7.7a",
 
     Width = 920,
     Height = 590,
@@ -5213,6 +5213,646 @@ task.spawn(function()
             goRaceDoor()
         end)
     end)
+
+    --==================================================
+    -- DRACO V4 / TRIAL OF FLAMES 2.7.7a
+    -- Dynamic-object implementation:
+    --   PrehistoricIsland -> cave/statue -> 3 relics -> 3 extractors -> portal -> Hearth
+    -- Kept in a nested closure to protect the main Luau local-register budget.
+    --==================================================
+    Section(
+        RacesPage,
+        "Draco V4",
+        "Prehistoric Island • Trial door • Trial of Flames"
+    )
+
+    task.spawn(function()
+        local D = {
+            Running = false,
+            Cancelled = false,
+            UsedPickups = {},
+            UsedPlacements = {},
+            LastShield = 0
+        }
+
+        local _, dracoStatus = Card(
+            RacesPage,
+            "DRACO TRIAL STATUS",
+            "Idle"
+        )
+
+        local function status(value)
+            dracoStatus.Text = tostring(value or "Idle")
+        end
+
+        local function lower(value)
+            return string.lower(tostring(value or ""))
+        end
+
+        local function containsAny(value, words)
+            local s = lower(value)
+            for _, word in ipairs(words) do
+                if string.find(s, lower(word), 1, true) then
+                    return true
+                end
+            end
+            return false
+        end
+
+        local function objectText(object)
+            if not object then
+                return ""
+            end
+
+            local parts = {object.Name}
+
+            if object:IsA("ProximityPrompt") then
+                table.insert(parts, object.ActionText)
+                table.insert(parts, object.ObjectText)
+            end
+
+            local current = object.Parent
+            for _ = 1, 4 do
+                if not current then
+                    break
+                end
+                table.insert(parts, current.Name)
+                current = current.Parent
+            end
+
+            return table.concat(parts, " ")
+        end
+
+        local function objectPart(object)
+            if not object then
+                return nil
+            end
+
+            if object:IsA("BasePart") then
+                return object
+            end
+
+            if object:IsA("ProximityPrompt")
+                or object:IsA("ClickDetector")
+                or object:IsA("Attachment")
+            then
+                local current = object.Parent
+                for _ = 1, 5 do
+                    if not current then
+                        break
+                    end
+                    if current:IsA("BasePart") then
+                        return current
+                    end
+                    if current:IsA("Model") then
+                        local part = current.PrimaryPart
+                            or current:FindFirstChild("HumanoidRootPart")
+                            or current:FindFirstChildWhichIsA("BasePart", true)
+                        if part then
+                            return part
+                        end
+                    end
+                    current = current.Parent
+                end
+            end
+
+            if object:IsA("Model") then
+                return object.PrimaryPart
+                    or object:FindFirstChild("HumanoidRootPart")
+                    or object:FindFirstChildWhichIsA("BasePart", true)
+            end
+
+            return nil
+        end
+
+        local function movePart(part, label, offset)
+            if not part or not part.Parent then
+                return false
+            end
+
+            local cf = part.CFrame * CFrame.new(0, offset or 3, 0)
+            return move(cf, label or "Draco")
+        end
+
+        local function interact(object)
+            if not object or not object.Parent then
+                return false
+            end
+
+            local part = objectPart(object)
+            local root = GetCharacterRoot()
+
+            if part and root and (root.Position - part.Position).Magnitude > 10 then
+                if not movePart(part, "Draco interaction", 2) then
+                    return false
+                end
+                task.wait(0.15)
+                root = GetCharacterRoot()
+            end
+
+            if object:IsA("ProximityPrompt") then
+                if fireproximityprompt then
+                    local ok = pcall(function()
+                        fireproximityprompt(object)
+                    end)
+                    if ok then
+                        return true
+                    end
+                end
+
+                pcall(function()
+                    local input = game:GetService("VirtualInputManager")
+                    input:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                    task.wait(0.08)
+                    input:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                end)
+                return true
+            end
+
+            if object:IsA("ClickDetector") and fireclickdetector then
+                return pcall(function()
+                    fireclickdetector(object)
+                end)
+            end
+
+            if part and root then
+                local prompt = part:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt then
+                    return interact(prompt)
+                end
+
+                local click = part:FindFirstChildWhichIsA("ClickDetector", true)
+                if click then
+                    return interact(click)
+                end
+
+                if firetouchinterest then
+                    local ok = pcall(function()
+                        firetouchinterest(root, part, 0)
+                        task.wait()
+                        firetouchinterest(root, part, 1)
+                    end)
+                    return ok
+                end
+            end
+
+            return false
+        end
+
+        local function getPrehistoricIsland()
+            local map = workspace:FindFirstChild("Map")
+            return map and map:FindFirstChild("PrehistoricIsland")
+        end
+
+        local function getIslandAnchor(island)
+            if not island then
+                return nil
+            end
+
+            local core = island:FindFirstChild("Core")
+            local relic = core and core:FindFirstChild("PrehistoricRelic")
+            local skull = relic and relic:FindFirstChild("Skull")
+
+            if skull and skull:IsA("BasePart") then
+                return skull
+            end
+
+            return island.PrimaryPart
+                or island:FindFirstChildWhichIsA("BasePart", true)
+        end
+
+        local function goPrehistoric()
+            local island = getPrehistoricIsland()
+            if not island then
+                status("Prehistoric Island is not spawned")
+                return false
+            end
+
+            local anchor = getIslandAnchor(island)
+            if not anchor then
+                status("Prehistoric Island anchor not found")
+                return false
+            end
+
+            status("Going to Prehistoric Island")
+            local ok = movePart(anchor, "Prehistoric Island", 8)
+            status(ok and "At Prehistoric Island" or "Could not reach island")
+            return ok
+        end
+
+        local function nearestMatching(scope, includeWords, excludeWords, used, maxDistance)
+            local root = GetCharacterRoot()
+            if not root or not scope then
+                return nil
+            end
+
+            local best = nil
+            local bestDistance = math.huge
+
+            for _, object in ipairs(scope:GetDescendants()) do
+                if not used or not used[object] then
+                    local usable = object:IsA("ProximityPrompt")
+                        or object:IsA("ClickDetector")
+                        or object:IsA("BasePart")
+                        or object:IsA("Model")
+
+                    if usable then
+                        local description = objectText(object)
+
+                        if containsAny(description, includeWords)
+                            and not containsAny(description, excludeWords or {})
+                        then
+                            local part = objectPart(object)
+                            if part then
+                                local distance = (part.Position - root.Position).Magnitude
+                                if distance <= (maxDistance or math.huge)
+                                    and distance < bestDistance
+                                then
+                                    -- Prefer actual interaction objects over a containing Model/Part.
+                                    if object:IsA("ProximityPrompt")
+                                        or object:IsA("ClickDetector")
+                                        or not best
+                                    then
+                                        best = object
+                                        bestDistance = distance
+                                    elseif distance < bestDistance then
+                                        best = object
+                                        bestDistance = distance
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            return best
+        end
+
+        local function findTrialDoorOrStatue(island)
+            if not island then
+                return nil
+            end
+
+            -- Prefer the actual Statue/start prompt after the volcano event.
+            local prompt = nearestMatching(
+                island,
+                {"statue", "trial", "flame"},
+                {"prehistoricrelic", "volcanorock", "lava golem"},
+                nil,
+                math.huge
+            )
+
+            if prompt then
+                return prompt
+            end
+
+            -- Fallback to the cave/door/entrance object if no prompt is visible yet.
+            return nearestMatching(
+                island,
+                {"cave", "door", "entrance"},
+                {"dragon egg"},
+                nil,
+                math.huge
+            )
+        end
+
+        local function goTrialDoor()
+            local island = getPrehistoricIsland()
+            if not island then
+                status("Prehistoric Island is not spawned")
+                return false
+            end
+
+            local object = findTrialDoorOrStatue(island)
+            if not object then
+                status("Trial cave/Statue not found - finish Volcano Event first")
+                return false
+            end
+
+            local part = objectPart(object)
+            if not part then
+                status("Trial entrance has no movable part")
+                return false
+            end
+
+            status("Going to Draco Trial entrance")
+            local ok = movePart(part, "Draco Trial Entrance", 3)
+            status(ok and "At Draco Trial entrance" or "Could not reach Trial entrance")
+            return ok
+        end
+
+        local function standForShield(force)
+            if not force and os.clock() - D.LastShield < 18 then
+                return
+            end
+
+            D.LastShield = os.clock()
+            local root = GetCharacterRoot()
+            if not root then
+                return
+            end
+
+            status("Waiting for lava shield")
+
+            MovementService:Stop()
+            pcall(function()
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+
+            -- Current Trial of Flames grants protection after remaining still briefly.
+            task.wait(2.25)
+        end
+
+        local function localTrialCandidate(includeWords, excludeWords, used)
+            local root = GetCharacterRoot()
+            if not root then
+                return nil
+            end
+
+            -- Trial objects are not reliably parented under PrehistoricIsland after entry.
+            -- Scan only when we need the next objective, and cap by distance.
+            return nearestMatching(
+                workspace,
+                includeWords,
+                excludeWords,
+                used,
+                2200
+            )
+        end
+
+        local function findRelic()
+            return localTrialCandidate(
+                {"relic", "flame relic", "ember"},
+                {
+                    "prehistoricrelic",
+                    "statue",
+                    "hearth",
+                    "extractor",
+                    "holder",
+                    "altar",
+                    "portal",
+                    "volcanorock"
+                },
+                D.UsedPickups
+            )
+        end
+
+        local function findExtractor()
+            return localTrialCandidate(
+                {"extractor", "place", "holder", "altar"},
+                {
+                    "prehistoricrelic",
+                    "statue",
+                    "portal",
+                    "hearth"
+                },
+                D.UsedPlacements
+            )
+        end
+
+        local function findPortal()
+            return localTrialCandidate(
+                {"portal", "magical gate", "exit gate", "circular"},
+                {"temple of time"},
+                nil
+            )
+        end
+
+        local function findHearthPrompt()
+            local root = GetCharacterRoot()
+            if not root then
+                return nil
+            end
+
+            return nearestMatching(
+                workspace,
+                {"flames of hearth", "hearth"},
+                {"trial", "prehistoric"},
+                nil,
+                1800
+            )
+        end
+
+        local function startTrial()
+            local island = getPrehistoricIsland()
+            if not island then
+                status("Prehistoric Island is not spawned")
+                return false
+            end
+
+            local object = findTrialDoorOrStatue(island)
+            if not object then
+                status("Statue not found - Volcano Event may still be closed")
+                return false
+            end
+
+            local textValue = objectText(object)
+            if not containsAny(textValue, {"statue", "trial", "flame"}) then
+                status("At cave - looking for Trial Statue")
+                if not goTrialDoor() then
+                    return false
+                end
+                task.wait(0.5)
+                object = findTrialDoorOrStatue(island)
+            end
+
+            if object then
+                status("Starting Trial of Flames")
+                local ok = interact(object)
+                task.wait(1.25)
+                return ok
+            end
+
+            return false
+        end
+
+        local function runTrial()
+            if D.Running then
+                return
+            end
+
+            D.Running = true
+            D.Cancelled = false
+            D.UsedPickups = {}
+            D.UsedPlacements = {}
+            D.LastShield = 0
+
+            local function finish(message)
+                status(message)
+                D.Running = false
+            end
+
+            local island = getPrehistoricIsland()
+            if not island then
+                finish("Prehistoric Island is not spawned")
+                return
+            end
+
+            -- If the account is not already on the island, go there first.
+            local anchor = getIslandAnchor(island)
+            local root = GetCharacterRoot()
+            if anchor and root and (root.Position - anchor.Position).Magnitude > 1500 then
+                if not goPrehistoric() then
+                    finish("Could not reach Prehistoric Island")
+                    return
+                end
+            end
+
+            if D.Cancelled then
+                finish("Draco Trial cancelled")
+                return
+            end
+
+            if not goTrialDoor() then
+                finish("Trial entrance unavailable")
+                return
+            end
+
+            if D.Cancelled then
+                finish("Draco Trial cancelled")
+                return
+            end
+
+            if not startTrial() then
+                finish("Could not start Trial - interact with Statue once and retry")
+                return
+            end
+
+            -- Allow the trial chamber to load/teleport the character.
+            status("Waiting for Trial room")
+            task.wait(2.0)
+
+            -- Collect and place three relics.
+            for relicIndex = 1, 3 do
+                if D.Cancelled then
+                    finish("Draco Trial cancelled")
+                    return
+                end
+
+                standForShield(relicIndex == 1)
+
+                status("Finding relic " .. tostring(relicIndex) .. "/3")
+                local relic = nil
+
+                for _ = 1, 20 do
+                    relic = findRelic()
+                    if relic then break end
+                    task.wait(0.25)
+                end
+
+                if not relic then
+                    finish("Relic " .. tostring(relicIndex) .. " not detected")
+                    return
+                end
+
+                D.UsedPickups[relic] = true
+
+                status("Collecting relic " .. tostring(relicIndex) .. "/3")
+                if not interact(relic) then
+                    finish("Could not collect relic " .. tostring(relicIndex))
+                    return
+                end
+
+                task.wait(0.45)
+                standForShield(false)
+
+                status("Finding extractor " .. tostring(relicIndex) .. "/3")
+                local extractor = nil
+
+                for _ = 1, 20 do
+                    extractor = findExtractor()
+                    if extractor then break end
+                    task.wait(0.25)
+                end
+
+                if not extractor then
+                    finish("Extractor " .. tostring(relicIndex) .. " not detected")
+                    return
+                end
+
+                D.UsedPlacements[extractor] = true
+
+                status("Placing relic " .. tostring(relicIndex) .. "/3")
+                if not interact(extractor) then
+                    finish("Could not place relic " .. tostring(relicIndex))
+                    return
+                end
+
+                task.wait(0.55)
+            end
+
+            if D.Cancelled then
+                finish("Draco Trial cancelled")
+                return
+            end
+
+            -- Once all three relics are placed the circular gate opens.
+            status("All relics placed - finding exit portal")
+            local portal = nil
+
+            for _ = 1, 32 do
+                portal = findPortal()
+                if portal then break end
+                task.wait(0.25)
+            end
+
+            if not portal then
+                finish("Relics placed - exit portal not detected")
+                return
+            end
+
+            standForShield(false)
+            status("Entering Trial exit")
+            interact(portal)
+
+            -- The portal returns the player to Dragon Dojo.
+            task.wait(2.0)
+
+            status("Looking for Flames of Hearth")
+            local hearth = nil
+
+            for _ = 1, 40 do
+                if D.Cancelled then
+                    finish("Draco Trial cancelled")
+                    return
+                end
+
+                hearth = findHearthPrompt()
+                if hearth then break end
+                task.wait(0.25)
+            end
+
+            if hearth then
+                status("Interacting with Flames of Hearth")
+                interact(hearth)
+                task.wait(0.8)
+                finish("Trial complete - Hearth interaction sent")
+            else
+                finish("Trial complete - Flames of Hearth not detected")
+            end
+        end
+
+        ActionButton(RacesPage, "Draco: Go to Prehistoric Island", function()
+            task.spawn(goPrehistoric)
+        end)
+
+        ActionButton(RacesPage, "Draco: Go to Trial Door", function()
+            task.spawn(goTrialDoor)
+        end)
+
+        ActionButton(RacesPage, "Draco: Run Full Trial", function()
+            task.spawn(runTrial)
+        end)
+
+        ActionButton(RacesPage, "Draco: Stop Trial", function()
+            D.Cancelled = true
+            D.Running = false
+            MovementService:Stop()
+            status("Draco Trial stopped")
+        end)
+    end)
 end)
 
 --==================================================
@@ -5392,7 +6032,7 @@ task.spawn(function()
     end
 
     local function queueReload()
-        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=276r"))()'
+        local loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=277a"))()'
         local q = queue_on_teleport
             or (syn and syn.queue_on_teleport)
             or (fluxus and fluxus.queue_on_teleport)
