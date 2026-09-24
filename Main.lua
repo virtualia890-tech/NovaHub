@@ -190,3 +190,131 @@ function MovementService:GoTo(targetCFrame, yOffset, destinationName)
         self.Status = "Failed"
         return false
     end
+
+    local remaining = (root.Position - destination.Position).Magnitude
+    self.Status = remaining <= 60 and "Arrived" or ("Failed (" .. math.floor(remaining) .. " studs)")
+    return remaining <= 60
+end
+
+--==================================================
+-- WATER WALK 2.6.5
+--==================================================
+
+local WaterWalkService = {
+    Enabled = false,
+    Platform = nil
+}
+
+function WaterWalkService:SetEnabled(enabled)
+    self.Enabled = enabled
+
+    if not enabled and self.Platform then
+        self.Platform:Destroy()
+        self.Platform = nil
+    end
+end
+
+function WaterWalkService:Update()
+    if not self.Enabled then return end
+
+    local root = MovementService:GetRoot()
+    if not root then return end
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    rayParams.IgnoreWater = false
+
+    local result = workspace:Raycast(
+        root.Position + Vector3.new(0, 8, 0),
+        Vector3.new(0, -18, 0),
+        rayParams
+    )
+
+    local overWater = result and result.Material == Enum.Material.Water
+
+    if overWater then
+        if not self.Platform or not self.Platform.Parent then
+            self.Platform = Instance.new("Part")
+            self.Platform.Name = "Floquitave_WaterWalk"
+            self.Platform.Size = Vector3.new(7, 0.5, 7)
+            self.Platform.Anchored = true
+            self.Platform.CanCollide = true
+            self.Platform.Transparency = 1
+            self.Platform.Parent = workspace
+        end
+
+        self.Platform.CFrame = CFrame.new(
+            root.Position.X,
+            result.Position.Y + 1.7,
+            root.Position.Z
+        )
+    elseif self.Platform then
+        self.Platform:Destroy()
+        self.Platform = nil
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    WaterWalkService:Update()
+end)
+
+--==================================================
+-- TELEPORT DIRECTORY
+--==================================================
+
+local IslandCFrames = {
+    ["Sea 1"] = {
+        ["Bandit Island"] = CFrame.new(1060, 16, 1547),
+        ["Jungle"] = CFrame.new(-1602, 37, 153),
+        ["Pirate Village"] = CFrame.new(-1140, 5, 3828),
+        ["Desert"] = CFrame.new(896, 6, 4390),
+        ["Frozen Village"] = CFrame.new(1389, 87, -1298),
+        ["Marine Fortress"] = CFrame.new(-5035, 29, 4325),
+        ["Skylands"] = CFrame.new(-4842, 718, -2623),
+        ["Prison"] = CFrame.new(5308, 2, 475),
+        ["Colosseum"] = CFrame.new(-1577, 7, -2984),
+        ["Magma Village"] = CFrame.new(-5316, 12, 8517),
+        ["Underwater City"] = CFrame.new(61122, 18, 1569),
+        ["Fountain City"] = CFrame.new(5259, 39, 4050)
+    },
+    ["Sea 2"] = {
+        ["Kingdom of Rose"] = CFrame.new(-425, 73, 1836),
+        ["Green Zone"] = CFrame.new(-2448, 73, -3210),
+        ["Graveyard"] = CFrame.new(-5494, 49, -794),
+        ["Snow Mountain"] = CFrame.new(561, 402, -5297),
+        ["Hot and Cold"] = CFrame.new(-6026, 15, -5071),
+        ["Cursed Ship"] = CFrame.new(923, 126, 32852),
+        ["Ice Castle"] = CFrame.new(5400, 28, -6236),
+        ["Forgotten Island"] = CFrame.new(-3052, 237, -10148)
+    },
+    ["Sea 3"] = {
+        ["Port Town"] = CFrame.new(-290, 44, 5454),
+        ["Hydra Island"] = CFrame.new(5228, 604, 345),
+        ["Great Tree"] = CFrame.new(2276, 25, -6493),
+        ["Floating Turtle"] = CFrame.new(-13274, 332, -7621),
+        ["Haunted Castle"] = CFrame.new(-9515, 142, 5537),
+        ["Sea of Treats"] = CFrame.new(-2062, 38, -12032),
+        ["Tiki Outpost"] = CFrame.new(-16224, 9, 439),
+        ["Chocolate Land"] = CFrame.new(100, 25, -12300),
+        ["Cake Land"] = CFrame.new(-1900, 20, -11600),
+        ["Peanut Island"] = CFrame.new(-2100, 50, -10100),
+        ["Ice Cream Island"] = CFrame.new(-900, 65, -10900)
+    }
+}
+
+local TeleportLocations = {
+    ["Sea 1"] = {
+        "Bandit Island",
+        "Jungle",
+        "Pirate Village",
+        "Desert",
+        "Frozen Village",
+        "Marine Fortress",
+        "Skylands",
+        "Prison",
+        "Colosseum",
+        "Magma Village",
+        "Underwater City",
+        "Fountain City"
+    },
