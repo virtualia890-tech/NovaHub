@@ -1,7 +1,8 @@
 
--- NovaHub UI Base 1
+-- NovaHub UI Base 2
 -- UI-only prototype based on the layout shown in the supplied screenshots/videos.
 -- No farming/combat/shop logic is connected in this build.
+-- Base 2: purple accent theme + fully adjustable sliders (mouse/touch) across all pages.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -11,24 +12,25 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 pcall(function()
-    local old = (typeof(gethui) == "function" and gethui() or CoreGui):FindFirstChild("NovaHub_UI_Base_1")
+    local old = (typeof(gethui) == "function" and gethui() or CoreGui):FindFirstChild("NovaHub_UI_Base_2")
     if old then old:Destroy() end
 end)
 
 local Theme = {
-    Main = Color3.fromRGB(12, 13, 17),
-    Header = Color3.fromRGB(21, 23, 29),
-    Sidebar = Color3.fromRGB(15, 16, 21),
-    Panel = Color3.fromRGB(10, 11, 14),
-    Row = Color3.fromRGB(29, 29, 35),
-    RowHover = Color3.fromRGB(36, 36, 43),
-    Input = Color3.fromRGB(34, 34, 41),
-    Gold = Color3.fromRGB(244, 199, 62),
-    Gold2 = Color3.fromRGB(171, 132, 41),
-    Text = Color3.fromRGB(244, 244, 244),
-    Muted = Color3.fromRGB(180, 181, 186),
-    Outline = Color3.fromRGB(86, 97, 138),
-    Blue = Color3.fromRGB(46, 89, 170),
+    Main = Color3.fromRGB(12, 10, 18),
+    Header = Color3.fromRGB(19, 16, 28),
+    Sidebar = Color3.fromRGB(14, 12, 21),
+    Panel = Color3.fromRGB(10, 9, 15),
+    Row = Color3.fromRGB(27, 24, 35),
+    RowHover = Color3.fromRGB(35, 30, 47),
+    Input = Color3.fromRGB(31, 27, 41),
+    Accent = Color3.fromRGB(151, 92, 255),
+    AccentDark = Color3.fromRGB(94, 53, 178),
+    AccentSoft = Color3.fromRGB(125, 78, 215),
+    Text = Color3.fromRGB(246, 245, 249),
+    Muted = Color3.fromRGB(174, 170, 184),
+    Outline = Color3.fromRGB(73, 57, 103),
+    Track = Color3.fromRGB(55, 51, 64),
 }
 
 local function New(className, props, parent)
@@ -530,7 +532,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "NovaHub_UI_Base_1",
+    Name = "NovaHub_UI_Base_2",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -560,7 +562,7 @@ local Main = New("Frame", {
     ClipsDescendants = true
 }, ScreenGui)
 Corner(Main, 7)
-Stroke(Main, Theme.Outline, 1.4, 0.15)
+Stroke(Main, Theme.AccentDark, 1.4, 0.28)
 
 local Scale = New("UIScale", {}, Main)
 local function UpdateScale()
@@ -589,7 +591,7 @@ local Logo = New("TextLabel", {
     Size = UDim2.fromOffset(24, 24),
     BackgroundTransparency = 1,
     Text = "⚡",
-    TextColor3 = Theme.Gold,
+    TextColor3 = Theme.Accent,
     Font = Enum.Font.GothamBold,
     TextSize = 17
 }, Header)
@@ -599,7 +601,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#F4C73E"><b>NovaHub</b></font>  - Blox Fruit',
+    Text = '<font color="#975CFF"><b>NovaHub</b></font>  - Blox Fruit',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 15,
@@ -635,7 +637,7 @@ local Sidebar = New("Frame", {
     BorderSizePixel = 0
 }, Body)
 Corner(Sidebar, 5)
-Stroke(Sidebar, Theme.Outline, 1, 0.55)
+Stroke(Sidebar, Theme.AccentDark, 1, 0.62)
 
 local SearchHolder = New("Frame", {
     Position = UDim2.fromOffset(6, 6),
@@ -644,6 +646,7 @@ local SearchHolder = New("Frame", {
     BorderSizePixel = 0
 }, Sidebar)
 Corner(SearchHolder, 4)
+Stroke(SearchHolder, Theme.AccentDark, 1, 0.72)
 
 New("TextLabel", {
     Position = UDim2.fromOffset(7, 0),
@@ -689,7 +692,7 @@ local Right = New("Frame", {
     BorderSizePixel = 0
 }, Body)
 Corner(Right, 5)
-Stroke(Right, Theme.Outline, 1, 0.60)
+Stroke(Right, Theme.AccentDark, 1, 0.66)
 
 local PageTitle = New("TextLabel", {
     Position = UDim2.fromOffset(10, 5),
@@ -742,7 +745,7 @@ local function SectionHeader(parent, text)
     New("Frame", {
         Position = UDim2.new(0, 4, 1, -3),
         Size = UDim2.new(1, -8, 0, 1),
-        BackgroundColor3 = Theme.Gold2,
+        BackgroundColor3 = Theme.AccentDark,
         BorderSizePixel = 0
     }, holder)
     return holder
@@ -752,10 +755,17 @@ local function RowBase(parent, height)
     local row = New("Frame", {
         Size = UDim2.new(1, 0, 0, height or 38),
         BackgroundColor3 = Theme.Row,
-        BorderSizePixel = 0
+        BorderSizePixel = 0,
+        Active = true
     }, parent)
-    Corner(row, 5)
-    Stroke(row, Color3.fromRGB(58, 59, 68), 1, 0.55)
+    Corner(row, 6)
+    Stroke(row, Theme.Outline, 1, 0.62)
+    row.MouseEnter:Connect(function()
+        Tween(row, {BackgroundColor3 = Theme.RowHover}, 0.10)
+    end)
+    row.MouseLeave:Connect(function()
+        Tween(row, {BackgroundColor3 = Theme.Row}, 0.10)
+    end)
     return row
 end
 
@@ -776,30 +786,31 @@ local function AddButton(parent, text)
         AnchorPoint = Vector2.new(1, 0.5),
         Position = UDim2.new(1, -10, 0.5, 0),
         Size = UDim2.fromOffset(94, 30),
-        BackgroundColor3 = Color3.fromRGB(177, 146, 75),
+        BackgroundColor3 = Theme.AccentSoft,
         BorderSizePixel = 0,
         Text = "Click",
-        TextColor3 = Color3.fromRGB(25, 25, 25),
+        TextColor3 = Theme.Text,
         Font = Enum.Font.GothamBold,
         TextSize = 10,
         AutoButtonColor = false
     }, row)
     Corner(button, 12)
-    local grad = New("UIGradient", {
+    Stroke(button, Theme.Accent, 1, 0.34)
+    New("UIGradient", {
         Rotation = 90,
         Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, Color3.fromRGB(210, 183, 107)),
-            ColorSequenceKeypoint.new(1, Color3.fromRGB(145, 113, 50))
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(169, 117, 255)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(101, 57, 185))
         })
     }, button)
     button.MouseButton1Click:Connect(function()
         local old = button.Text
         button.Text = "..."
-        Tween(button, {BackgroundColor3 = Theme.Gold}, 0.08)
+        Tween(button, {BackgroundColor3 = Theme.Accent}, 0.08)
         task.delay(0.18, function()
             if button.Parent then
                 button.Text = old
-                Tween(button, {BackgroundColor3 = Color3.fromRGB(177, 146, 75)}, 0.12)
+                Tween(button, {BackgroundColor3 = Theme.AccentSoft}, 0.12)
             end
         end)
     end)
@@ -829,13 +840,13 @@ local function AddToggle(parent, text)
         AutoButtonColor = false
     }, row)
     Corner(box, 4)
-    Stroke(box, Theme.Gold, 1.5, 0)
+    Stroke(box, Theme.Accent, 1.5, 0)
 
     local fill = New("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(12, 12),
-        BackgroundColor3 = Theme.Gold,
+        BackgroundColor3 = Theme.Accent,
         BorderSizePixel = 0,
         Visible = false
     }, box)
@@ -922,13 +933,13 @@ local function AddDropdown(parent, text, options)
         BackgroundColor3 = Theme.Row,
         BorderSizePixel = 0,
         Text = "⌄",
-        TextColor3 = Theme.Gold,
+        TextColor3 = Theme.Accent,
         Font = Enum.Font.GothamBold,
         TextSize = 12,
         AutoButtonColor = false
     }, row)
     Corner(btn, 4)
-    Stroke(btn, Theme.Gold, 1.4, 0)
+    Stroke(btn, Theme.Accent, 1.4, 0)
 
     btn.MouseButton1Click:Connect(function()
         current += 1
@@ -938,35 +949,132 @@ local function AddDropdown(parent, text, options)
     return row
 end
 
-local function AddSlider(parent, text, value, minValue, maxValue)
-    local row = RowBase(parent, 46)
+local function AddSlider(parent, text, value, minValue, maxValue, onChanged)
+    local row = RowBase(parent, 52)
+    local currentValue = tonumber(value) or tonumber(minValue) or 0
+    minValue = tonumber(minValue) or 0
+    maxValue = tonumber(maxValue) or 100
+    if maxValue < minValue then
+        minValue, maxValue = maxValue, minValue
+    end
+
+    -- Decimal defaults (0.5, 29.5, etc.) keep tenths; whole-number defaults move in integers.
+    local step = (math.abs(currentValue - math.floor(currentValue)) > 0.0001) and 0.1 or 1
+    local decimals = step < 1 and 1 or 0
+
     local valueLabel = New("TextLabel", {
         Position = UDim2.fromOffset(11, 3),
-        Size = UDim2.new(1, -22, 0, 19),
+        Size = UDim2.new(1, -22, 0, 20),
         BackgroundTransparency = 1,
-        Text = text .. ": " .. tostring(value),
+        Text = "",
         TextColor3 = Theme.Text,
         Font = Enum.Font.GothamBold,
         TextSize = 11,
         TextXAlignment = Enum.TextXAlignment.Left
     }, row)
+
     local bar = New("Frame", {
-        Position = UDim2.new(0, 11, 1, -13),
-        Size = UDim2.new(1, -22, 0, 5),
-        BackgroundColor3 = Color3.fromRGB(58, 58, 64),
-        BorderSizePixel = 0
+        Position = UDim2.new(0, 11, 1, -16),
+        Size = UDim2.new(1, -22, 0, 6),
+        BackgroundColor3 = Theme.Track,
+        BorderSizePixel = 0,
+        Active = true
     }, row)
     Corner(bar, 3)
-    local ratio = 0
-    if maxValue ~= minValue then
-        ratio = math.clamp((value - minValue) / (maxValue - minValue), 0, 1)
-    end
+
     local fill = New("Frame", {
-        Size = UDim2.new(ratio, 0, 1, 0),
-        BackgroundColor3 = Theme.Gold,
+        Size = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = Theme.Accent,
         BorderSizePixel = 0
     }, bar)
     Corner(fill, 3)
+
+    local knob = New("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 0, 0.5, 0),
+        Size = UDim2.fromOffset(14, 14),
+        BackgroundColor3 = Color3.fromRGB(225, 210, 255),
+        BorderSizePixel = 0,
+        ZIndex = 3
+    }, bar)
+    Corner(knob, 7)
+    Stroke(knob, Theme.Accent, 1.5, 0.05)
+
+    local hitbox = New("TextButton", {
+        Position = UDim2.fromOffset(-5, -10),
+        Size = UDim2.new(1, 10, 1, 20),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 5
+    }, bar)
+
+    local function roundToStep(v)
+        if step <= 0 then return v end
+        return math.floor((v / step) + 0.5) * step
+    end
+
+    local function valueString(v)
+        if decimals == 0 then
+            return tostring(math.floor(v + 0.5))
+        end
+        return string.format("%.1f", v)
+    end
+
+    local function setValue(v, fireCallback)
+        v = math.clamp(roundToStep(tonumber(v) or minValue), minValue, maxValue)
+        currentValue = v
+        local ratio = (maxValue == minValue) and 0 or ((v - minValue) / (maxValue - minValue))
+        fill.Size = UDim2.new(ratio, 0, 1, 0)
+        knob.Position = UDim2.new(ratio, 0, 0.5, 0)
+        valueLabel.Text = text .. ": " .. valueString(v)
+        row:SetAttribute("Value", v)
+        if fireCallback and onChanged then
+            pcall(onChanged, v)
+        end
+    end
+
+    local function setFromX(x)
+        local width = math.max(bar.AbsoluteSize.X, 1)
+        local ratio = math.clamp((x - bar.AbsolutePosition.X) / width, 0, 1)
+        setValue(minValue + ((maxValue - minValue) * ratio), true)
+    end
+
+    local dragging = false
+    local activeInput = nil
+
+    hitbox.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            activeInput = input
+            setFromX(input.Position.X)
+        end
+    end)
+
+    hitbox.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.Touch then
+            setFromX(input.Position.X)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            setFromX(input.Position.X)
+        elseif input.UserInputType == Enum.UserInputType.Touch and (activeInput == input or activeInput == nil) then
+            setFromX(input.Position.X)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            activeInput = nil
+        end
+    end)
+
+    setValue(currentValue, false)
     return row
 end
 
@@ -1013,7 +1121,7 @@ local function BuildPage(pageData)
             elseif item.type == "dropdown" then
                 obj = AddDropdown(page, item.text, item.options)
             elseif item.type == "slider" then
-                obj = AddSlider(page, item.text, item.value, item.min, item.max)
+                obj = AddSlider(page, item.text, item.value, item.min, item.max, function(v) item.value = v end)
             end
             if obj then
                 table.insert(sectionRecord.items, {object=obj, item=item})
@@ -1039,7 +1147,7 @@ local function ShowPage(name)
     end
     for pageName, rec in pairs(PageButtons) do
         local selected = pageName == name
-        rec.button.BackgroundColor3 = selected and Color3.fromRGB(25, 26, 31) or Theme.Sidebar
+        rec.button.BackgroundColor3 = selected and Color3.fromRGB(30, 25, 40) or Theme.Sidebar
         rec.button.TextColor3 = selected and Theme.Text or Theme.Text
         rec.bar.Visible = selected
     end
@@ -1063,7 +1171,7 @@ for index, pageData in ipairs(PagesData) do
     local selectedBar = New("Frame", {
         Position = UDim2.fromOffset(3, 5),
         Size = UDim2.fromOffset(4, 20),
-        BackgroundColor3 = Theme.Gold,
+        BackgroundColor3 = Theme.Accent,
         BorderSizePixel = 0,
         Visible = false
     }, button)
@@ -1071,7 +1179,7 @@ for index, pageData in ipairs(PagesData) do
 
     button.MouseEnter:Connect(function()
         if SelectedPage ~= pageData.name then
-            Tween(button, {BackgroundColor3 = Color3.fromRGB(23, 24, 29)}, 0.10)
+            Tween(button, {BackgroundColor3 = Color3.fromRGB(25, 21, 33)}, 0.10)
         end
     end)
     button.MouseLeave:Connect(function()
@@ -1141,14 +1249,14 @@ local Floating = New("TextButton", {
     BackgroundColor3 = Theme.Header,
     BorderSizePixel = 0,
     Text = "N",
-    TextColor3 = Theme.Gold,
+    TextColor3 = Theme.Accent,
     Font = Enum.Font.GothamBlack,
     TextSize = 20,
     Visible = false,
     AutoButtonColor = false
 }, ScreenGui)
 Corner(Floating, 24)
-Stroke(Floating, Theme.Gold, 1.3, 0.2)
+Stroke(Floating, Theme.Accent, 1.3, 0.2)
 
 HideBtn.MouseButton1Click:Connect(function()
     Main.Visible = false
@@ -1161,4 +1269,4 @@ end)
 
 ShowPage("Shop")
 
-print("[NovaHub] UI Base 1 loaded (visual prototype only).")
+print("[NovaHub] UI Base 2 loaded (visual prototype only).")
