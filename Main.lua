@@ -1,7 +1,7 @@
 
--- Tave Hub Shop 1.2 - Fighting NPC
+-- Tave Hub Shop 1.3 - Fighting Fallback
 -- UI based on the supplied screenshots/videos.
--- Shop 1.2: Fighting Style toggles travel to the matching NPC first, then buy/re-equip the style.
+-- Shop 1.3: adds long-distance region fallbacks for Electric Claw, Dragon Talon and Sanguine Art.
 -- Other categories remain UI-only.
 
 local Players = game:GetService("Players")
@@ -25,6 +25,8 @@ pcall(function()
     old = guiParent:FindFirstChild("TaveHub_Shop_1_1_FIGHTING_FIX")
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_Shop_1_2_FIGHTING_NPC")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_Shop_1_3_FIGHTING_FALLBACK")
     if old then old:Destroy() end
 end)
 
@@ -393,6 +395,10 @@ do
             toolNames = {"Electric Claw"},
             npcNames = {"Previous Hero"},
             seas = {3},
+            fallbackCFrames = {
+                -- Previous Hero / Floating Turtle
+                CFrame.new(-10371.4717, 330.764496, -10131.4199),
+            },
             buy = function(remote)
                 return remote:InvokeServer("BuyElectricClaw")
             end,
@@ -403,6 +409,22 @@ do
             toolNames = {"Dragon Talon"},
             npcNames = {"Uzoth"},
             seas = {3},
+            fallbackCFrames = {
+                -- Current Dragon Dojo / Hydra region
+                CFrame.new(5841.298828125, 1208.32177734375, 884.3173217773438),
+                -- Older Uzoth/Haunted Castle fallback for compatible maps
+                CFrame.new(-9785, 852, 6667),
+            },
+            beforeFallback = function(remote)
+                -- Harmless if unavailable; helps load the Dragon Dojo region in compatible maps.
+                pcall(function()
+                    remote:InvokeServer(
+                        "requestEntrance",
+                        Vector3.new(5661.5322265625, 1013.0907592773438, -334.9649963378906)
+                    )
+                end)
+                task.wait(0.35)
+            end,
             buy = function(remote)
                 remote:InvokeServer("BuyDragonTalon", true)
                 task.wait(0.12)
@@ -425,6 +447,12 @@ do
             toolNames = {"Sanguine Art"},
             npcNames = {"Shafi"},
             seas = {3},
+            fallbackCFrames = {
+                -- Tiki Outpost main region
+                CFrame.new(-16218.6826, 9.08636189, 445.618408),
+                -- Island Boy side of Tiki, close to Shafi's tunnel/base
+                CFrame.new(-16901.26171875, 84.06756591796875, -192.88906860351562),
+            },
             buy = function(remote)
                 remote:InvokeServer("BuySanguineArt", true)
                 task.wait(0.12)
@@ -868,6 +896,12 @@ do
             if not moveToCFrame(npcCF, actionName) then
                 return false
             end
+        else
+            local fallback = FightStyles.buy_electric_claw.fallbackCFrames
+                and FightStyles.buy_electric_claw.fallbackCFrames[1]
+            if fallback and not moveToCFrame(fallback, actionName) then
+                return false
+            end
         end
 
         task.wait(0.4)
@@ -883,6 +917,54 @@ do
 
         notify("Electric Claw", formatServerResult(buyResult))
         return true
+    end
+
+    local function loadFallbackRegion(actionName, style)
+        local fallbacks = style.fallbackCFrames
+        if not fallbacks or #fallbacks == 0 then
+            return nil
+        end
+
+        local remote = getCommF()
+
+        if style.beforeFallback and remote then
+            pcall(style.beforeFallback, remote)
+        end
+
+        for index, fallbackCF in ipairs(fallbacks) do
+            if FightEngine.enabled[actionName] ~= true
+                or FightEngine.activeAction ~= actionName
+            then
+                return nil
+            end
+
+            notify(
+                style.label,
+                "NPC is far away. Loading region " .. tostring(index) .. "/" .. tostring(#fallbacks) .. "..."
+            )
+
+            local moved = moveToCFrame(fallbackCF, actionName)
+            if not moved then
+                if FightEngine.enabled[actionName] ~= true then
+                    return nil
+                end
+            end
+
+            -- Give StreamingEnabled / NPC folders time to populate after arriving.
+            local started = os.clock()
+            while FightEngine.enabled[actionName] == true
+                and FightEngine.activeAction == actionName
+                and os.clock() - started < 5.0
+            do
+                local npcPart = findNpc(style)
+                if npcPart then
+                    return npcPart
+                end
+                task.wait(0.25)
+            end
+        end
+
+        return nil
     end
 
     local function runFightStyle(actionName)
@@ -920,18 +1002,30 @@ do
         end
 
         if not npcPart then
-            local sea = currentSea()
-            notify(style.label, "NPC not found in Sea " .. tostring(sea) .. ".")
+            npcPart = loadFallbackRegion(actionName, style)
+        end
+
+        if FightEngine.enabled[actionName] ~= true then
             return
         end
 
-        notify(style.label, "Going to NPC...")
+        if npcPart then
+            notify(style.label, "Going to NPC...")
 
-        local targetCF = npcPart.CFrame * CFrame.new(0, 0, 5)
-        if not moveToCFrame(targetCF, actionName) then
-            if FightEngine.enabled[actionName] then
-                notify(style.label, "Movement stopped or failed.")
+            local targetCF = npcPart.CFrame * CFrame.new(0, 0, 5)
+            if not moveToCFrame(targetCF, actionName) then
+                if FightEngine.enabled[actionName] then
+                    notify(style.label, "Movement stopped or failed.")
+                end
+                return
             end
+        elseif style.fallbackCFrames and #style.fallbackCFrames > 0 then
+            -- Region is loaded but NPC may be hidden inside a base/interior.
+            -- Stay at the last fallback and still try the purchase/equip remote.
+            notify(style.label, "Region loaded. Trying the style purchase...")
+        else
+            local sea = currentSea()
+            notify(style.label, "NPC not found in Sea " .. tostring(sea) .. ".")
             return
         end
 
@@ -1570,7 +1664,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_Shop_1_2_FIGHTING_NPC",
+    Name = "TaveHub_Shop_1_3_FIGHTING_FALLBACK",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -2434,4 +2528,4 @@ end)
 
 ShowPage("Shop")
 
-print("[Tave Hub] Shop 1.2 loaded - Fighting Style NPC toggles active.")
+print("[Tave Hub] Shop 1.3 loaded - long-distance Fighting Style fallbacks active.")
