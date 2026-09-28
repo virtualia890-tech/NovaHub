@@ -1,8 +1,8 @@
 
--- Tave Hub Shop 1
+-- Tave Hub Shop 1.1 - Fighting Fix
 -- UI-only prototype based on the layout shown in the supplied screenshots/videos.
 -- No farming/combat/shop logic is connected in this build.
--- Shop 1: same confirmed UI + first functional category (Shop). Other categories remain UI-only.
+-- Shop 1.1: Fighting Style purchase buttons rebuilt with direct CommF_ calls and visible server feedback.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -20,6 +20,8 @@ pcall(function()
     old = guiParent:FindFirstChild("TaveHub_UI_Base_3_1_FIXED")
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_Shop_1")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_Shop_1_1_FIGHTING_FIX")
     if old then old:Destroy() end
 end)
 
@@ -113,6 +115,72 @@ do
             return false
         end
         return true, result
+    end
+
+    local function getCommF()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("CommF_")
+        if not remote then
+            notify("Fighting Shop", "CommF_ not found.")
+            return nil
+        end
+        return remote
+    end
+
+    local function formatServerResult(result)
+        if result == nil then
+            return "Request sent."
+        end
+        local s = tostring(result)
+        if #s > 90 then
+            s = string.sub(s, 1, 87) .. "..."
+        end
+        return s
+    end
+
+    local function directFightCall(styleName, ...)
+        local remote = getCommF()
+        if not remote then
+            return false
+        end
+
+        local args = table.pack(...)
+        local ok, result = pcall(function()
+            return remote:InvokeServer(table.unpack(args, 1, args.n))
+        end)
+
+        if not ok then
+            notify(styleName, "Remote error: " .. tostring(result))
+            return false
+        end
+
+        notify(styleName, formatServerResult(result))
+        return true, result
+    end
+
+    local function directFightSequence(styleName, calls)
+        local remote = getCommF()
+        if not remote then
+            return false
+        end
+
+        local lastResult = nil
+        for _, callArgs in ipairs(calls) do
+            local ok, result = pcall(function()
+                return remote:InvokeServer(table.unpack(callArgs, 1, #callArgs))
+            end)
+
+            if not ok then
+                notify(styleName, "Remote error: " .. tostring(result))
+                return false
+            end
+
+            lastResult = result
+            task.wait(0.12)
+        end
+
+        notify(styleName, formatServerResult(lastResult))
+        return true, lastResult
     end
 
     ShopActions.redeem_codes = function()
@@ -228,55 +296,83 @@ do
     end
 
     ShopActions.buy_black_leg = function()
-        return simpleRemote("BuyBlackLeg")
+        return directFightCall("Black Leg", "BuyBlackLeg")
     end
 
     ShopActions.buy_fishman_karate = function()
-        return simpleRemote("BuyFishmanKarate")
+        return directFightCall("Fishman Karate", "BuyFishmanKarate")
     end
 
     ShopActions.buy_electro = function()
-        return simpleRemote("BuyElectro")
+        return directFightCall("Electro", "BuyElectro")
     end
 
     ShopActions.buy_dragon_breath = function()
-        simpleRemote("BlackbeardReward", "DragonClaw", "1")
-        task.wait(0.10)
-        return simpleRemote("BlackbeardReward", "DragonClaw", "2")
+        return directFightSequence("Dragon Breath", {
+            {"BlackbeardReward", "DragonClaw", "1"},
+            {"BlackbeardReward", "DragonClaw", "2"},
+        })
     end
 
     ShopActions.buy_superhuman = function()
-        return simpleRemote("BuySuperhuman")
+        return directFightCall("SuperHuman", "BuySuperhuman")
     end
 
     ShopActions.buy_death_step = function()
-        return simpleRemote("BuyDeathStep")
+        return directFightCall("Death Step", "BuyDeathStep")
     end
 
     ShopActions.buy_sharkman_karate = function()
-        simpleRemote("BuySharkmanKarate", true)
-        task.wait(0.08)
-        return simpleRemote("BuySharkmanKarate")
+        return directFightSequence("Sharkman Karate", {
+            {"BuySharkmanKarate", true},
+            {"BuySharkmanKarate"},
+        })
     end
 
     ShopActions.buy_electric_claw = function()
-        return simpleRemote("BuyElectricClaw")
+        local remote = getCommF()
+        if not remote then
+            return false
+        end
+
+        -- First try the normal direct purchase, exactly like the Shop references.
+        local ok, result = pcall(function()
+            return remote:InvokeServer("BuyElectricClaw")
+        end)
+
+        if not ok then
+            notify("Electric Claw", "Remote error: " .. tostring(result))
+            return false
+        end
+
+        -- If the server explicitly reports the quest-start state used by older/current flows,
+        -- start it without teleporting the player; the user can finish the requirement normally.
+        if result == 4 then
+            pcall(function()
+                remote:InvokeServer("BuyElectricClaw", "Start")
+            end)
+        end
+
+        notify("Electric Claw", formatServerResult(result))
+        return true, result
     end
 
     ShopActions.buy_dragon_talon = function()
-        simpleRemote("BuyDragonTalon", true)
-        task.wait(0.08)
-        return simpleRemote("BuyDragonTalon")
+        return directFightSequence("Dragon Talon", {
+            {"BuyDragonTalon", true},
+            {"BuyDragonTalon"},
+        })
     end
 
     ShopActions.buy_godhuman = function()
-        return simpleRemote("BuyGodhuman")
+        return directFightCall("God Human", "BuyGodhuman")
     end
 
     ShopActions.buy_sanguine_art = function()
-        simpleRemote("BuySanguineArt", true)
-        task.wait(0.08)
-        return simpleRemote("BuySanguineArt")
+        return directFightSequence("Sanguine Art", {
+            {"BuySanguineArt", true},
+            {"BuySanguineArt"},
+        })
     end
 
     ShopActions.buy_geppo = function()
@@ -793,7 +889,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_Shop_1",
+    Name = "TaveHub_Shop_1_1_FIGHTING_FIX",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -1657,4 +1753,4 @@ end)
 
 ShowPage("Shop")
 
-print("[Tave Hub] Shop 1 loaded - Shop functional; remaining pages UI-only.")
+print("[Tave Hub] Shop 1.1 loaded - Fighting Style buttons rebuilt.")
