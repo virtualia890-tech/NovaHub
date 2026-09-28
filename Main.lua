@@ -1,7 +1,7 @@
 
--- Tave Hub Shop 1.3 - Fighting Fallback
+-- Tave Hub Shop 1.4 - Go To Fighting NPC
 -- UI based on the supplied screenshots/videos.
--- Shop 1.3: adds long-distance region fallbacks for Electric Claw, Dragon Talon and Sanguine Art.
+-- Shop 1.4: every Fighting Style travels to its teacher region first, loads the NPC, then buys/re-equips.
 -- Other categories remain UI-only.
 
 local Players = game:GetService("Players")
@@ -27,6 +27,8 @@ pcall(function()
     old = guiParent:FindFirstChild("TaveHub_Shop_1_2_FIGHTING_NPC")
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_Shop_1_3_FIGHTING_FALLBACK")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_Shop_1_4_FIGHTING_GOTO_NPC")
     if old then old:Destroy() end
 end)
 
@@ -321,6 +323,11 @@ do
             toolNames = {"Black Leg", "Dark Step"},
             npcNames = {"Dark Step Teacher", "Black Leg Teacher"},
             seas = {1, 2, 3},
+            stageCFrames = {
+                [1] = CFrame.new(-987.873047, 13.7778397, 3989.4978),
+                [2] = CFrame.new(-6127.654296875, 15.951762199402, -5040.2861328125),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
             buy = function(remote)
                 return remote:InvokeServer("BuyBlackLeg")
             end,
@@ -331,6 +338,11 @@ do
             toolNames = {"Fishman Karate", "Water Kung Fu"},
             npcNames = {"Water Kung-fu Teacher", "Water Kung Fu Teacher", "Fishman Karate Teacher"},
             seas = {1, 2, 3},
+            stageCFrames = {
+                [1] = CFrame.new(61581.8047, 18.8965912, 987.832703),
+                [2] = CFrame.new(-6127.654296875, 15.951762199402, -5040.2861328125),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
             buy = function(remote)
                 return remote:InvokeServer("BuyFishmanKarate")
             end,
@@ -341,6 +353,11 @@ do
             toolNames = {"Electro", "Electric"},
             npcNames = {"Mad Scientist"},
             seas = {1, 2, 3},
+            stageCFrames = {
+                [1] = CFrame.new(-5389.49561, 13.283, -2149.80151),
+                [2] = CFrame.new(-6127.654296875, 15.951762199402, -5040.2861328125),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
             buy = function(remote)
                 return remote:InvokeServer("BuyElectro")
             end,
@@ -351,6 +368,10 @@ do
             toolNames = {"Dragon Claw", "Dragon Breath"},
             npcNames = {"Sabi"},
             seas = {2, 3},
+            stageCFrames = {
+                [2] = CFrame.new(703.372986, 186.985519, 654.522034),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
             buy = function(remote)
                 remote:InvokeServer("BlackbeardReward", "DragonClaw", "1")
                 task.wait(0.12)
@@ -363,6 +384,10 @@ do
             toolNames = {"Superhuman", "SuperHuman"},
             npcNames = {"Martial Arts Master"},
             seas = {2, 3},
+            stageCFrames = {
+                [2] = CFrame.new(753.14288330078, 408.23559570313, -5274.6147460938),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
             buy = function(remote)
                 return remote:InvokeServer("BuySuperhuman")
             end,
@@ -373,6 +398,10 @@ do
             toolNames = {"Death Step"},
             npcNames = {"Phoeyu, the Reformed", "Phoeyu"},
             seas = {2, 3},
+            stageCFrames = {
+                [2] = CFrame.new(6148.4116210938, 294.38687133789, -6741.1166992188),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
             buy = function(remote)
                 return remote:InvokeServer("BuyDeathStep")
             end,
@@ -383,6 +412,10 @@ do
             toolNames = {"Sharkman Karate"},
             npcNames = {"Sharkman Teacher", "Daigrock, the Sharkman", "Daigrock"},
             seas = {2, 3},
+            stageCFrames = {
+                [2] = CFrame.new(-3032.7641601563, 317.89672851563, -10075.373046875),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
             buy = function(remote)
                 remote:InvokeServer("BuySharkmanKarate", true)
                 task.wait(0.12)
@@ -395,6 +428,9 @@ do
             toolNames = {"Electric Claw"},
             npcNames = {"Previous Hero"},
             seas = {3},
+            stageCFrames = {
+                [3] = CFrame.new(-10368, 332, -10128),
+            },
             fallbackCFrames = {
                 -- Previous Hero / Floating Turtle
                 CFrame.new(-10371.4717, 330.764496, -10131.4199),
@@ -409,6 +445,9 @@ do
             toolNames = {"Dragon Talon"},
             npcNames = {"Uzoth"},
             seas = {3},
+            stageCFrames = {
+                [3] = CFrame.new(5841.298828125, 1208.32177734375, 884.3173217773438),
+            },
             fallbackCFrames = {
                 -- Current Dragon Dojo / Hydra region
                 CFrame.new(5841.298828125, 1208.32177734375, 884.3173217773438),
@@ -437,6 +476,9 @@ do
             toolNames = {"Godhuman", "God Human"},
             npcNames = {"Ancient Monk"},
             seas = {3},
+            stageCFrames = {
+                [3] = CFrame.new(-12462, 375, -7552),
+            },
             buy = function(remote)
                 return remote:InvokeServer("BuyGodhuman")
             end,
@@ -447,6 +489,9 @@ do
             toolNames = {"Sanguine Art"},
             npcNames = {"Shafi"},
             seas = {3},
+            stageCFrames = {
+                [3] = CFrame.new(-16218.6826, 9.08636189, 445.618408),
+            },
             fallbackCFrames = {
                 -- Tiki Outpost main region
                 CFrame.new(-16218.6826, 9.08636189, 445.618408),
@@ -919,6 +964,54 @@ do
         return true
     end
 
+    local function goToTeacherRegion(actionName, style)
+        local sea = currentSea()
+        local stage = style.stageCFrames and style.stageCFrames[sea]
+        if not stage then
+            return true
+        end
+
+        if FightEngine.enabled[actionName] ~= true
+            or FightEngine.activeAction ~= actionName
+        then
+            return false
+        end
+
+        local remote = getCommF()
+
+        -- Dragon Talon / special interiors may expose a supported entrance request.
+        if style.beforeFallback and remote then
+            pcall(style.beforeFallback, remote)
+        end
+
+        notify(style.label, "Going to teacher location...")
+
+        local moved = moveToCFrame(stage, actionName)
+        if not moved then
+            if FightEngine.enabled[actionName] then
+                notify(style.label, "Could not reach teacher region.")
+            end
+            return false
+        end
+
+        -- Let StreamingEnabled load the island/interior/NPC after arrival.
+        local started = os.clock()
+        while FightEngine.enabled[actionName] == true
+            and FightEngine.activeAction == actionName
+            and os.clock() - started < 4.5
+        do
+            local npcPart = findNpc(style)
+            if npcPart then
+                return true
+            end
+            task.wait(0.25)
+        end
+
+        -- Reaching the known region is enough to attempt the fallback/buy flow.
+        return FightEngine.enabled[actionName] == true
+            and FightEngine.activeAction == actionName
+    end
+
     local function loadFallbackRegion(actionName, style)
         local fallbacks = style.fallbackCFrames
         if not fallbacks or #fallbacks == 0 then
@@ -977,30 +1070,38 @@ do
             return
         end
 
+        -- If this style does not exist in the current Sea, use the existing
+        -- Sea-change flow first. Continuation is queued when supported.
         if travelForStyle(actionName, style) then
             return
         end
 
-        notify(style.label, "Searching for " .. tostring(style.npcNames[1]) .. "...")
-
-        local npcPart = nil
-        local searchStart = os.clock()
-
-        while FightEngine.enabled[actionName] == true
-            and FightEngine.activeAction == actionName
-            and os.clock() - searchStart < 12
-        do
-            npcPart = findNpc(style)
-            if npcPart then
-                break
-            end
-            task.wait(0.5)
+        -- IMPORTANT: always go to the known teacher region FIRST.
+        -- This avoids relying on a far-away NPC being streamed into Workspace.
+        if not goToTeacherRegion(actionName, style) then
+            return
         end
 
         if FightEngine.enabled[actionName] ~= true then
             return
         end
 
+        -- Once the region is loaded, find the actual NPC and move right next to it.
+        local npcPart = nil
+        local searchStart = os.clock()
+
+        while FightEngine.enabled[actionName] == true
+            and FightEngine.activeAction == actionName
+            and os.clock() - searchStart < 6.0
+        do
+            npcPart = findNpc(style)
+            if npcPart then
+                break
+            end
+            task.wait(0.25)
+        end
+
+        -- Some interiors/NPCs still need a second staging point.
         if not npcPart then
             npcPart = loadFallbackRegion(actionName, style)
         end
@@ -1010,30 +1111,26 @@ do
         end
 
         if npcPart then
-            notify(style.label, "Going to NPC...")
+            notify(style.label, "NPC loaded. Moving next to teacher...")
 
-            local targetCF = npcPart.CFrame * CFrame.new(0, 0, 5)
+            local targetCF = npcPart.CFrame * CFrame.new(0, 0, 4)
             if not moveToCFrame(targetCF, actionName) then
                 if FightEngine.enabled[actionName] then
-                    notify(style.label, "Movement stopped or failed.")
+                    notify(style.label, "Could not reach the NPC.")
                 end
                 return
             end
-        elseif style.fallbackCFrames and #style.fallbackCFrames > 0 then
-            -- Region is loaded but NPC may be hidden inside a base/interior.
-            -- Stay at the last fallback and still try the purchase/equip remote.
-            notify(style.label, "Region loaded. Trying the style purchase...")
         else
-            local sea = currentSea()
-            notify(style.label, "NPC not found in Sea " .. tostring(sea) .. ".")
-            return
+            -- We are already at the verified teacher region. This is useful for
+            -- NPCs hidden inside an interior whose model is not exposed to the client.
+            notify(style.label, "Teacher region loaded. Trying purchase/equip...")
         end
 
         if FightEngine.enabled[actionName] ~= true then
             return
         end
 
-        task.wait(0.35)
+        task.wait(0.40)
 
         local remote = getCommF()
         if not remote then
@@ -1664,7 +1761,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_Shop_1_3_FIGHTING_FALLBACK",
+    Name = "TaveHub_Shop_1_4_FIGHTING_GOTO_NPC",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -2528,4 +2625,4 @@ end)
 
 ShowPage("Shop")
 
-print("[Tave Hub] Shop 1.3 loaded - long-distance Fighting Style fallbacks active.")
+print("[Tave Hub] Shop 1.4 loaded - all Fighting Styles go to teacher location before purchase.")
