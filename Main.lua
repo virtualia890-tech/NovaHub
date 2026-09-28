@@ -1,7 +1,7 @@
 
--- Tave Hub Shop 1.4 - Go To Fighting NPC
+-- Tave Hub Shop 1.5 - Smooth Fighting Travel
 -- UI based on the supplied screenshots/videos.
--- Shop 1.4: every Fighting Style travels to its teacher region first, loads the NPC, then buys/re-equips.
+-- Shop 1.5: same functional Fighting Shop, but teacher travel now uses one continuous smooth tween (no 28-stud stepping/flick).
 -- Other categories remain UI-only.
 
 local Players = game:GetService("Players")
@@ -29,6 +29,8 @@ pcall(function()
     old = guiParent:FindFirstChild("TaveHub_Shop_1_3_FIGHTING_FALLBACK")
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_Shop_1_4_FIGHTING_GOTO_NPC")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_Shop_1_5_SMOOTH_TRAVEL")
     if old then old:Destroy() end
 end)
 
@@ -313,7 +315,9 @@ do
         enabled = {},
         moveNonce = 0,
         travelSpeed = 170,
+        -- segmentLength is kept only for backwards compatibility; Shop 1.5 no longer steps CFrames.
         segmentLength = 28,
+        smoothTravel = true,
         sourceUrl = "https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua",
     }
 
@@ -683,10 +687,10 @@ do
             return false
         end
 
+        -- Cancel any older Fighting Shop movement.
         FightEngine.moveNonce = FightEngine.moveNonce + 1
         local nonce = FightEngine.moveNonce
         local speed = FightEngine.travelSpeed
-        local segmentLength = FightEngine.segmentLength
 
         humanoid.Sit = false
 
@@ -697,11 +701,15 @@ do
         end)
 
         local oldCollision = {}
+
+        -- Noclip stays active for the whole continuous tween so terrain/buildings
+        -- do not push the character upward or cause the old flick effect.
         local noclipConnection = RunService.Stepped:Connect(function()
             local character = LocalPlayer.Character
             if not character then
                 return
             end
+
             for _, part in ipairs(character:GetDescendants()) do
                 if part:IsA("BasePart") then
                     if oldCollision[part] == nil then
@@ -710,6 +718,14 @@ do
                     part.CanCollide = false
                 end
             end
+
+            local currentRoot = getRoot()
+            if currentRoot then
+                pcall(function()
+                    currentRoot.AssemblyLinearVelocity = Vector3.zero
+                    currentRoot.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
         end)
 
         local function restoreCollision()
@@ -717,6 +733,7 @@ do
                 noclipConnection:Disconnect()
                 noclipConnection = nil
             end
+
             for part, state in pairs(oldCollision) do
                 if part and part.Parent then
                     pcall(function()
@@ -726,110 +743,106 @@ do
             end
         end
 
-        local targetPosition = targetCFrame.Position
-        local horizontalDistance = Vector3.new(
-            targetPosition.X - root.Position.X,
-            0,
-            targetPosition.Z - root.Position.Z
-        ).Magnitude
-        local verticalDifference = math.abs(targetPosition.Y - root.Position.Y)
-        local horizontalFirst = horizontalDistance > 700 and verticalDifference > 180
-
         local function stillEnabled()
             return FightEngine.enabled[actionName] == true
                 and FightEngine.activeAction == actionName
                 and nonce == FightEngine.moveNonce
         end
 
-        local function moveLine(destinationPosition, finalLookAt)
-            local currentRoot = getRoot()
-            if not currentRoot then
-                return false
-            end
-
-            local startPosition = currentRoot.Position
-            local delta = destinationPosition - startPosition
-            local distance = delta.Magnitude
-
-            if distance <= 4 then
-                pcall(function()
-                    currentRoot.CFrame = CFrame.lookAt(
-                        destinationPosition,
-                        finalLookAt or (destinationPosition + currentRoot.CFrame.LookVector)
-                    )
-                end)
-                return true
-            end
-
-            local direction = delta.Unit
-            local travelled = 0
-
-            while travelled < distance do
-                if not stillEnabled() then
-                    return false
-                end
-
-                currentRoot = getRoot()
-                if not currentRoot then
-                    return false
-                end
-
-                travelled = math.min(travelled + segmentLength, distance)
-                local nextPosition = startPosition + direction * travelled
-                local lookAt = finalLookAt or destinationPosition
-
-                if (lookAt - nextPosition).Magnitude < 0.1 then
-                    lookAt = nextPosition + currentRoot.CFrame.LookVector
-                end
-
-                local nextCFrame = CFrame.lookAt(nextPosition, lookAt)
-                local stepDistance = (currentRoot.Position - nextPosition).Magnitude
-                local duration = math.max(stepDistance / speed, 0.035)
-
-                local tween = TweenService:Create(
-                    currentRoot,
-                    TweenInfo.new(duration, Enum.EasingStyle.Linear),
-                    {CFrame = nextCFrame}
-                )
-
-                local ok = pcall(function()
-                    tween:Play()
-                    tween.Completed:Wait()
-                end)
-
-                if not ok then
-                    return false
-                end
-            end
-
-            return true
-        end
-
-        local ok = true
-
-        if horizontalFirst then
-            local horizontalTarget = Vector3.new(
-                targetPosition.X,
-                root.Position.Y,
-                targetPosition.Z
-            )
-            ok = moveLine(horizontalTarget, horizontalTarget + targetCFrame.LookVector)
-
-            if ok then
-                ok = moveLine(targetPosition, targetPosition + targetCFrame.LookVector)
-            end
-        else
-            ok = moveLine(targetPosition, targetPosition + targetCFrame.LookVector)
-        end
-
-        restoreCollision()
-
         root = getRoot()
-        if not ok or not root then
+        if not root then
+            restoreCollision()
             return false
         end
 
-        return (root.Position - targetPosition).Magnitude <= 18
+        local distance = (root.Position - targetCFrame.Position).Magnitude
+
+        if distance <= 4 then
+            if stillEnabled() then
+                pcall(function()
+                    root.CFrame = targetCFrame
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+                restoreCollision()
+                return true
+            end
+
+            restoreCollision()
+            return false
+        end
+
+        -- One single linear Tween from the current position to the teacher.
+        -- No intermediate CFrame snaps, no artificial rise, no horizontal-first phase.
+        local duration = math.max(distance / speed, 0.12)
+
+        local tween = TweenService:Create(
+            root,
+            TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+            {CFrame = targetCFrame}
+        )
+
+        local finished = false
+        local playbackState = nil
+
+        local completedConnection = tween.Completed:Connect(function(state)
+            playbackState = state
+            finished = true
+        end)
+
+        local played = pcall(function()
+            tween:Play()
+        end)
+
+        if not played then
+            completedConnection:Disconnect()
+            restoreCollision()
+            return false
+        end
+
+        while not finished do
+            if not stillEnabled() then
+                pcall(function()
+                    tween:Cancel()
+                end)
+                completedConnection:Disconnect()
+                restoreCollision()
+                return false
+            end
+
+            -- If the character respawns while traveling, stop cleanly instead of
+            -- snapping the new character to an old CFrame.
+            local currentRoot = getRoot()
+            if currentRoot ~= root then
+                pcall(function()
+                    tween:Cancel()
+                end)
+                completedConnection:Disconnect()
+                restoreCollision()
+                return false
+            end
+
+            task.wait(0.03)
+        end
+
+        completedConnection:Disconnect()
+        restoreCollision()
+
+        if playbackState ~= Enum.PlaybackState.Completed then
+            return false
+        end
+
+        root = getRoot()
+        if not root then
+            return false
+        end
+
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        return (root.Position - targetCFrame.Position).Magnitude <= 20
     end
 
     local function getQueueOnTeleport()
@@ -1761,7 +1774,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_Shop_1_4_FIGHTING_GOTO_NPC",
+    Name = "TaveHub_Shop_1_5_SMOOTH_TRAVEL",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -2625,4 +2638,4 @@ end)
 
 ShowPage("Shop")
 
-print("[Tave Hub] Shop 1.4 loaded - all Fighting Styles go to teacher location before purchase.")
+print("[Tave Hub] Shop 1.5 loaded - Fighting Style travel uses continuous smooth tween.")
