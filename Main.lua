@@ -1,22 +1,26 @@
 
--- Tave Hub UI Base 3
+-- Tave Hub Shop 1
 -- UI-only prototype based on the layout shown in the supplied screenshots/videos.
 -- No farming/combat/shop logic is connected in this build.
--- Base 3: larger/clearer Tave UI + close button + true expanding dropdowns.
+-- Shop 1: same confirmed UI + first functional category (Shop). Other categories remain UI-only.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 
 pcall(function()
-    local parent = (typeof(gethui) == "function" and gethui() or CoreGui)
-    for _, guiName in ipairs({"NovaHub_UI_Base_1", "NovaHub_UI_Base_2", "TaveHub_UI_Base_3"}) do
-        local old = parent:FindFirstChild(guiName)
-        if old then old:Destroy() end
-    end
+    local guiParent = (typeof(gethui) == "function" and gethui() or CoreGui)
+    local old = guiParent:FindFirstChild("NovaHub_UI_Base_2")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_UI_Base_3_1_FIXED")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_Shop_1")
+    if old then old:Destroy() end
 end)
 
 local Theme = {
@@ -62,39 +66,293 @@ local function Tween(obj, props, time)
     TweenService:Create(obj, TweenInfo.new(time or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
 end
 
+
+-- =========================
+-- SHOP RUNTIME (Shop 1)
+-- Only the Shop category is connected in this build.
+-- =========================
+local ShopRuntime = {
+    autoLegendarySword = false,
+    autoTrueTripleKatana = false,
+}
+
+local ShopActions = {}
+
+do
+    local function notify(title, message)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = tostring(title or "Tave Hub"),
+                Text = tostring(message or ""),
+                Duration = 3
+            })
+        end)
+    end
+
+    local function commF(...)
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("CommF_")
+        if not remote then
+            return false, "CommF_ not found"
+        end
+
+        local ok, result = pcall(function(...)
+            return remote:InvokeServer(...)
+        end, ...)
+
+        if not ok then
+            return false, result
+        end
+        return true, result
+    end
+
+    local function simpleRemote(...)
+        local ok, result = commF(...)
+        if not ok then
+            notify("Shop", "Remote error: " .. tostring(result))
+            return false
+        end
+        return true, result
+    end
+
+    ShopActions.redeem_codes = function()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local redeem = remotes and remotes:FindFirstChild("Redeem")
+        if not redeem then
+            notify("Redeem Code", "Redeem remote not found.")
+            return false
+        end
+
+        local codes = {
+            "EASTEREXP",
+            "KITT_RESET",
+            "SUB2GAMERROBOT_EXP1",
+            "SUB2GAMERROBOT_RESET1",
+            "Sub2UncleKizaru",
+            "Sub2CaptainMaui",
+            "Sub2Fer999",
+            "Enyu_is_Pro",
+            "Magicbus",
+            "JCWK",
+            "kittgaming",
+            "Starcodeheo",
+            "Bluxxy",
+            "Axiore",
+            "Sub2Daigrock",
+            "Sub2NoobMaster123",
+            "TheGreatAce",
+            "Sub2OfficialNoobie",
+            "TantaiGaming",
+            "StrawHatMaine",
+            "Fudd10",
+            "Fudd10_v2",
+            "Bignews",
+            "Chandler",
+        }
+
+        task.spawn(function()
+            for _, code in ipairs(codes) do
+                pcall(function()
+                    redeem:InvokeServer(code)
+                end)
+                task.wait(0.08)
+            end
+            notify("Redeem Code", "Finished trying the current code list.")
+        end)
+        return true
+    end
+
+    ShopActions.travel_main = function()
+        return simpleRemote("TravelMain")
+    end
+
+    ShopActions.travel_dressrosa = function()
+        return simpleRemote("TravelDressrosa")
+    end
+
+    ShopActions.travel_zou = function()
+        return simpleRemote("TravelZou")
+    end
+
+    ShopActions.buy_dual_flintlock = function()
+        local ok, result = simpleRemote("BuyItem", "Dual Flintlock")
+        if not ok then
+            return false, result
+        end
+        notify("Shop", "Dual Flintlock purchase requested.")
+        return true
+    end
+
+    ShopActions.reroll_race = function()
+        simpleRemote("BlackbeardReward", "Reroll", "1")
+        task.wait(0.10)
+        local ok = simpleRemote("BlackbeardReward", "Reroll", "2")
+        return ok
+    end
+
+    ShopActions.reset_stats = function()
+        simpleRemote("BlackbeardReward", "Refund", "1")
+        task.wait(0.10)
+        local ok = simpleRemote("BlackbeardReward", "Refund", "2")
+        return ok
+    end
+
+    ShopActions.buy_cyborg = function()
+        local ok = simpleRemote("CyborgTrainer", "Buy")
+        if ok then
+            notify("Shop", "Cyborg purchase requested.")
+        end
+        return ok
+    end
+
+    ShopActions.buy_ghoul = function()
+        simpleRemote("Ectoplasm", "BuyCheck", 4)
+        task.wait(0.10)
+        local ok = simpleRemote("Ectoplasm", "Change", 4)
+        if ok then
+            notify("Shop", "Ghoul purchase requested.")
+        end
+        return ok
+    end
+
+    ShopActions.auto_legendary_sword = function(enabled)
+        ShopRuntime.autoLegendarySword = enabled == true
+        notify("Shop", ShopRuntime.autoLegendarySword and "Auto Legendary Sword ON" or "Auto Legendary Sword OFF")
+        return true
+    end
+
+    ShopActions.auto_true_triple_katana = function(enabled)
+        ShopRuntime.autoTrueTripleKatana = enabled == true
+        notify("Shop", ShopRuntime.autoTrueTripleKatana and "True Triple Katana ON" or "True Triple Katana OFF")
+        return true
+    end
+
+    ShopActions.buy_black_leg = function()
+        return simpleRemote("BuyBlackLeg")
+    end
+
+    ShopActions.buy_fishman_karate = function()
+        return simpleRemote("BuyFishmanKarate")
+    end
+
+    ShopActions.buy_electro = function()
+        return simpleRemote("BuyElectro")
+    end
+
+    ShopActions.buy_dragon_breath = function()
+        simpleRemote("BlackbeardReward", "DragonClaw", "1")
+        task.wait(0.10)
+        return simpleRemote("BlackbeardReward", "DragonClaw", "2")
+    end
+
+    ShopActions.buy_superhuman = function()
+        return simpleRemote("BuySuperhuman")
+    end
+
+    ShopActions.buy_death_step = function()
+        return simpleRemote("BuyDeathStep")
+    end
+
+    ShopActions.buy_sharkman_karate = function()
+        simpleRemote("BuySharkmanKarate", true)
+        task.wait(0.08)
+        return simpleRemote("BuySharkmanKarate")
+    end
+
+    ShopActions.buy_electric_claw = function()
+        return simpleRemote("BuyElectricClaw")
+    end
+
+    ShopActions.buy_dragon_talon = function()
+        simpleRemote("BuyDragonTalon", true)
+        task.wait(0.08)
+        return simpleRemote("BuyDragonTalon")
+    end
+
+    ShopActions.buy_godhuman = function()
+        return simpleRemote("BuyGodhuman")
+    end
+
+    ShopActions.buy_sanguine_art = function()
+        simpleRemote("BuySanguineArt", true)
+        task.wait(0.08)
+        return simpleRemote("BuySanguineArt")
+    end
+
+    ShopActions.buy_geppo = function()
+        return simpleRemote("BuyHaki", "Geppo")
+    end
+
+    ShopActions.buy_buso = function()
+        return simpleRemote("BuyHaki", "Buso")
+    end
+
+    ShopActions.buy_observation = function()
+        return simpleRemote("KenTalk", "Buy")
+    end
+
+    ShopActions.buy_soru = function()
+        return simpleRemote("BuyHaki", "Soru")
+    end
+
+    task.spawn(function()
+        while task.wait(0.85) do
+            if ShopRuntime.autoLegendarySword then
+                for slot = 1, 3 do
+                    if not ShopRuntime.autoLegendarySword then
+                        break
+                    end
+                    commF("LegendarySwordDealer", tostring(slot))
+                    task.wait(0.12)
+                end
+            end
+        end
+    end)
+
+    task.spawn(function()
+        while task.wait(0.85) do
+            if ShopRuntime.autoTrueTripleKatana then
+                commF("MysteriousMan", "1")
+                task.wait(0.10)
+                commF("MysteriousMan", "2")
+            end
+        end
+    end)
+end
+
 local PagesData = {
     { name = "Shop", sections = {
         { title = "Misc Shop", items = {
-            { type = "button", text = "Redeem Code" },
-            { type = "button", text = "Teleport Old World" },
-            { type = "button", text = "Teleport New World" },
-            { type = "button", text = "Teleport Third Sea" },
-            { type = "button", text = "Buy Dual Flintlock" },
-            { type = "button", text = "Reroll Race" },
-            { type = "button", text = "Reset Stats" },
-            { type = "button", text = "Buy Cyborg Race" },
-            { type = "button", text = "Buy Ghoul Race" },
-            { type = "toggle", text = "Auto Buy Legendary Sword" },
-            { type = "toggle", text = "True Triple Katana" },
+            { type = "button", text = "Redeem Code", action = "redeem_codes" },
+            { type = "button", text = "Teleport Old World", action = "travel_main" },
+            { type = "button", text = "Teleport New World", action = "travel_dressrosa" },
+            { type = "button", text = "Teleport Third Sea", action = "travel_zou" },
+            { type = "button", text = "Buy Dual Flintlock", action = "buy_dual_flintlock" },
+            { type = "button", text = "Reroll Race", action = "reroll_race" },
+            { type = "button", text = "Reset Stats", action = "reset_stats" },
+            { type = "button", text = "Buy Cyborg Race", action = "buy_cyborg" },
+            { type = "button", text = "Buy Ghoul Race", action = "buy_ghoul" },
+            { type = "toggle", text = "Auto Buy Legendary Sword", action = "auto_legendary_sword" },
+            { type = "toggle", text = "True Triple Katana", action = "auto_true_triple_katana" },
         } },
         { title = "Fighting Shop", items = {
-            { type = "button", text = "Black Leg" },
-            { type = "button", text = "Fishman Karate" },
-            { type = "button", text = "Electro" },
-            { type = "button", text = "Dragon Breath" },
-            { type = "button", text = "SuperHuman" },
-            { type = "button", text = "Death Step" },
-            { type = "button", text = "Sharkman Karate" },
-            { type = "button", text = "Electric Claw" },
-            { type = "button", text = "Dragon Talon" },
-            { type = "button", text = "God Human" },
-            { type = "button", text = "Sanguine Art" },
+            { type = "button", text = "Black Leg", action = "buy_black_leg" },
+            { type = "button", text = "Fishman Karate", action = "buy_fishman_karate" },
+            { type = "button", text = "Electro", action = "buy_electro" },
+            { type = "button", text = "Dragon Breath", action = "buy_dragon_breath" },
+            { type = "button", text = "SuperHuman", action = "buy_superhuman" },
+            { type = "button", text = "Death Step", action = "buy_death_step" },
+            { type = "button", text = "Sharkman Karate", action = "buy_sharkman_karate" },
+            { type = "button", text = "Electric Claw", action = "buy_electric_claw" },
+            { type = "button", text = "Dragon Talon", action = "buy_dragon_talon" },
+            { type = "button", text = "God Human", action = "buy_godhuman" },
+            { type = "button", text = "Sanguine Art", action = "buy_sanguine_art" },
         } },
         { title = "Abilities Shop", items = {
-            { type = "button", text = "Skyjump [ $10,000 Beli ]" },
-            { type = "button", text = "Buso Haki [ $25,000 Beli ]" },
-            { type = "button", text = "Observation haki [ $750,000 Beli ]" },
-            { type = "button", text = "Soru [ $100,000 Beli ]" },
+            { type = "button", text = "Skyjump [ $10,000 Beli ]", action = "buy_geppo" },
+            { type = "button", text = "Buso Haki [ $25,000 Beli ]", action = "buy_buso" },
+            { type = "button", text = "Observation haki [ $750,000 Beli ]", action = "buy_observation" },
+            { type = "button", text = "Soru [ $100,000 Beli ]", action = "buy_soru" },
         } },
     } },
     { name = "Status & Server", sections = {
@@ -535,7 +793,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_UI_Base_3",
+    Name = "TaveHub_Shop_1",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -558,7 +816,7 @@ local Main = New("Frame", {
     Name = "Main",
     AnchorPoint = Vector2.new(0.5, 0.5),
     Position = UDim2.fromScale(0.5, 0.5),
-    Size = UDim2.fromOffset(820, 560),
+    Size = UDim2.fromOffset(810, 555),
     BackgroundColor3 = Theme.Main,
     BackgroundTransparency = 0.05,
     BorderSizePixel = 0,
@@ -569,14 +827,14 @@ Stroke(Main, Theme.AccentDark, 1.4, 0.28)
 
 local Scale = New("UIScale", {}, Main)
 local function UpdateScale()
-    local wanted = UserInputService.TouchEnabled and 0.52 or 0.92
+    local wanted = UserInputService.TouchEnabled and 0.52 or 0.91
     local cam = workspace.CurrentCamera
     if cam then
         local vp = cam.ViewportSize
-        local fit = math.min((vp.X * 0.94) / 820, (vp.Y * 0.92) / 560)
+        local fit = math.min((vp.X * 0.94) / 810, (vp.Y * 0.92) / 555)
         wanted = math.min(wanted, fit)
     end
-    Scale.Scale = math.clamp(wanted, 0.34, 0.96)
+    Scale.Scale = math.clamp(wanted, 0.34, 0.95)
 end
 UpdateScale()
 if workspace.CurrentCamera then
@@ -623,21 +881,14 @@ local CloseBtn = New("TextButton", {
     Size = UDim2.fromOffset(24, 22),
     BackgroundColor3 = Theme.Row,
     BorderSizePixel = 0,
-    Text = "×",
+    Text = "X",
     TextColor3 = Theme.Muted,
     Font = Enum.Font.GothamBold,
-    TextSize = 16,
+    TextSize = 15,
     AutoButtonColor = false
 }, Header)
 Corner(CloseBtn, 5)
 Stroke(CloseBtn, Theme.Outline, 1, 0.55)
-
-CloseBtn.MouseEnter:Connect(function()
-    Tween(CloseBtn, {BackgroundColor3 = Theme.AccentDark, TextColor3 = Theme.Text}, 0.10)
-end)
-CloseBtn.MouseLeave:Connect(function()
-    Tween(CloseBtn, {BackgroundColor3 = Theme.Row, TextColor3 = Theme.Muted}, 0.10)
-end)
 
 local Body = New("Frame", {
     Position = UDim2.fromOffset(0, 38),
@@ -647,7 +898,7 @@ local Body = New("Frame", {
 
 local Sidebar = New("Frame", {
     Position = UDim2.fromOffset(6, 5),
-    Size = UDim2.new(0, 220, 1, -10),
+    Size = UDim2.new(0, 218, 1, -10),
     BackgroundColor3 = Theme.Sidebar,
     BackgroundTransparency = 0.08,
     BorderSizePixel = 0
@@ -701,8 +952,8 @@ local PageList = New("ScrollingFrame", {
 New("UIListLayout", {Padding = UDim.new(0, 1), SortOrder = Enum.SortOrder.LayoutOrder}, PageList)
 
 local Right = New("Frame", {
-    Position = UDim2.fromOffset(232, 5),
-    Size = UDim2.new(1, -238, 1, -10),
+    Position = UDim2.fromOffset(230, 5),
+    Size = UDim2.new(1, -236, 1, -10),
     BackgroundColor3 = Theme.Panel,
     BackgroundTransparency = 0.08,
     BorderSizePixel = 0
@@ -785,7 +1036,7 @@ local function RowBase(parent, height)
     return row
 end
 
-local function AddButton(parent, text)
+local function AddButton(parent, text, callback)
     local row = RowBase(parent, 39)
     local label = New("TextLabel", {
         Position = UDim2.fromOffset(11, 0),
@@ -823,17 +1074,32 @@ local function AddButton(parent, text)
         local old = button.Text
         button.Text = "..."
         Tween(button, {BackgroundColor3 = Theme.Accent}, 0.08)
+
+        local callbackOk = true
+        if callback then
+            local ok, result = pcall(callback)
+            callbackOk = ok and result ~= false
+        end
+
         task.delay(0.18, function()
             if button.Parent then
-                button.Text = old
-                Tween(button, {BackgroundColor3 = Theme.AccentSoft}, 0.12)
+                button.Text = callbackOk and old or "Error"
+                Tween(button, {BackgroundColor3 = callbackOk and Theme.AccentSoft or Color3.fromRGB(145, 55, 76)}, 0.12)
+                if not callbackOk then
+                    task.delay(0.65, function()
+                        if button.Parent then
+                            button.Text = old
+                            Tween(button, {BackgroundColor3 = Theme.AccentSoft}, 0.12)
+                        end
+                    end)
+                end
             end
         end)
     end)
     return row
 end
 
-local function AddToggle(parent, text)
+local function AddToggle(parent, text, callback)
     local row = RowBase(parent, 35)
     New("TextLabel", {
         Position = UDim2.fromOffset(11, 0),
@@ -872,7 +1138,18 @@ local function AddToggle(parent, text)
     box.MouseButton1Click:Connect(function()
         enabled = not enabled
         fill.Visible = enabled
+        row:SetAttribute("Value", enabled)
+
+        if callback then
+            local ok, result = pcall(callback, enabled)
+            if not ok or result == false then
+                enabled = not enabled
+                fill.Visible = enabled
+                row:SetAttribute("Value", enabled)
+            end
+        end
     end)
+    row:SetAttribute("Value", enabled)
     return row
 end
 
@@ -926,161 +1203,132 @@ local function AddInput(parent, text, placeholder)
     return holder
 end
 
-local ActiveDropdownClose = nil
-
 local function AddDropdown(parent, text, options)
     options = options or {"Select..."}
-    if #options == 0 then
+    if #options < 1 then
         options = {"Select..."}
     end
 
-    local topHeight = 41
-    local optionHeight = 31
-    local maxVisibleOptions = 5
-    local visibleOptions = math.max(1, math.min(#options, maxVisibleOptions))
-    local listHeight = (visibleOptions * optionHeight) + 8
+    local closedHeight = 39
+    local optionHeight = 30
+    local maxVisible = 5
+    local visibleCount = math.min(#options, maxVisible)
+    local menuHeight = (visibleCount * optionHeight) + 6
 
     local holder = New("Frame", {
-        Size = UDim2.new(1, 0, 0, topHeight),
+        Size = UDim2.new(1, 0, 0, closedHeight),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         ClipsDescendants = true
     }, parent)
 
-    local row = RowBase(holder, topHeight)
-    row.LayoutOrder = 1
+    local row = RowBase(holder, closedHeight)
 
-    local current = 1
-    local selectedValue = tostring(options[current] or "Select...")
+    local current = tostring(options[1] or "Select...")
 
     local label = New("TextLabel", {
         Position = UDim2.fromOffset(11, 0),
-        Size = UDim2.new(1, -54, 1, 0),
+        Size = UDim2.new(1, -58, 1, 0),
         BackgroundTransparency = 1,
-        Text = text .. ": " .. selectedValue,
+        Text = text .. ": " .. current,
         TextColor3 = Theme.Text,
         Font = Enum.Font.GothamBold,
         TextSize = 12,
         TextXAlignment = Enum.TextXAlignment.Left,
-        TextTruncate = Enum.TextTruncate.AtEnd,
-        ZIndex = 3
+        TextTruncate = Enum.TextTruncate.AtEnd
     }, row)
 
-    local arrow = New("TextLabel", {
+    local arrow = New("TextButton", {
         AnchorPoint = Vector2.new(1, 0.5),
         Position = UDim2.new(1, -10, 0.5, 0),
-        Size = UDim2.fromOffset(24, 24),
+        Size = UDim2.fromOffset(24, 22),
         BackgroundColor3 = Theme.Row,
         BorderSizePixel = 0,
         Text = "▼",
         TextColor3 = Theme.Accent,
         Font = Enum.Font.GothamBold,
         TextSize = 11,
-        ZIndex = 4
+        AutoButtonColor = false
     }, row)
     Corner(arrow, 4)
-    Stroke(arrow, Theme.Accent, 1.3, 0.08)
+    Stroke(arrow, Theme.Accent, 1.4, 0)
 
-    local clickArea = New("TextButton", {
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        Text = "",
-        AutoButtonColor = false,
-        ZIndex = 5
-    }, row)
-
-    local listFrame = New("Frame", {
-        Position = UDim2.fromOffset(0, topHeight + 4),
-        Size = UDim2.new(1, 0, 0, listHeight),
+    local menu = New("Frame", {
+        Position = UDim2.fromOffset(0, closedHeight + 3),
+        Size = UDim2.new(1, 0, 0, menuHeight),
         BackgroundColor3 = Theme.Panel,
         BorderSizePixel = 0,
-        Visible = false,
-        ZIndex = 15
+        Visible = false
     }, holder)
-    Corner(listFrame, 6)
-    Stroke(listFrame, Theme.AccentDark, 1, 0.25)
+    Corner(menu, 5)
+    Stroke(menu, Theme.AccentDark, 1, 0.35)
 
-    local list = New("ScrollingFrame", {
-        Position = UDim2.fromOffset(4, 4),
-        Size = UDim2.new(1, -8, 1, -8),
+    local scroll = New("ScrollingFrame", {
+        Position = UDim2.fromOffset(3, 3),
+        Size = UDim2.new(1, -6, 1, -6),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        CanvasSize = UDim2.new(),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ScrollBarThickness = (#options > maxVisibleOptions) and 3 or 0,
-        ScrollBarImageColor3 = Theme.AccentSoft,
-        ZIndex = 16
-    }, listFrame)
+        CanvasSize = UDim2.new(0, 0, 0, #options * optionHeight),
+        ScrollBarThickness = #options > maxVisible and 3 or 0,
+        ScrollBarImageColor3 = Theme.AccentSoft
+    }, menu)
 
-    New("UIListLayout", {
-        Padding = UDim.new(0, 2),
+    local layout = New("UIListLayout", {
+        Padding = UDim.new(0, 1),
         SortOrder = Enum.SortOrder.LayoutOrder
-    }, list)
+    }, scroll)
 
     local opened = false
 
-    local function closeDropdown()
-        if not opened then return end
-        opened = false
-        listFrame.Visible = false
-        arrow.Text = "▼"
-        holder.Size = UDim2.new(1, 0, 0, topHeight)
-        if ActiveDropdownClose == closeDropdown then
-            ActiveDropdownClose = nil
-        end
-    end
-
-    local function openDropdown()
-        if opened then
-            closeDropdown()
-            return
-        end
-        if ActiveDropdownClose and ActiveDropdownClose ~= closeDropdown then
-            pcall(ActiveDropdownClose)
-        end
-        opened = true
-        ActiveDropdownClose = closeDropdown
-        listFrame.Visible = true
-        arrow.Text = "▲"
-        holder.Size = UDim2.new(1, 0, 0, topHeight + listHeight + 5)
+    local function setOpen(state)
+        opened = state == true
+        menu.Visible = opened
+        arrow.Text = opened and "▲" or "▼"
+        holder.Size = UDim2.new(
+            1, 0, 0,
+            opened and (closedHeight + menuHeight + 5) or closedHeight
+        )
     end
 
     for index, option in ipairs(options) do
         local optionText = tostring(option)
         local optionButton = New("TextButton", {
-            Size = UDim2.new(1, -2, 0, optionHeight - 2),
+            Size = UDim2.new(1, -4, 0, optionHeight - 1),
             BackgroundColor3 = Theme.Row,
             BorderSizePixel = 0,
-            Text = "   " .. optionText,
+            Text = "  " .. optionText,
             TextColor3 = Theme.Text,
             Font = Enum.Font.Gotham,
             TextSize = 12,
             TextXAlignment = Enum.TextXAlignment.Left,
             AutoButtonColor = false,
-            LayoutOrder = index,
-            ZIndex = 17
-        }, list)
+            LayoutOrder = index
+        }, scroll)
         Corner(optionButton, 4)
 
-        optionButton.MouseEnter:Connect(function()
-            Tween(optionButton, {BackgroundColor3 = Theme.RowHover}, 0.08)
-        end)
-        optionButton.MouseLeave:Connect(function()
-            Tween(optionButton, {BackgroundColor3 = Theme.Row}, 0.08)
-        end)
-
         optionButton.MouseButton1Click:Connect(function()
-            current = index
-            selectedValue = optionText
-            label.Text = text .. ": " .. selectedValue
-            holder:SetAttribute("Value", selectedValue)
-            closeDropdown()
+            current = optionText
+            label.Text = text .. ": " .. current
+            holder:SetAttribute("Value", current)
+            setOpen(false)
         end)
     end
 
-    holder:SetAttribute("Value", selectedValue)
-    clickArea.MouseButton1Click:Connect(openDropdown)
+    holder:SetAttribute("Value", current)
+
+    arrow.MouseButton1Click:Connect(function()
+        setOpen(not opened)
+    end)
+
+    row.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+            local x = input.Position.X
+            if x < arrow.AbsolutePosition.X then
+                setOpen(not opened)
+            end
+        end
+    end)
 
     return holder
 end
@@ -1247,9 +1495,9 @@ local function BuildPage(pageData)
         for _, item in ipairs(section.items) do
             local obj
             if item.type == "button" then
-                obj = AddButton(page, item.text)
+                obj = AddButton(page, item.text, item.action and ShopActions[item.action] or nil)
             elseif item.type == "toggle" then
-                obj = AddToggle(page, item.text)
+                obj = AddToggle(page, item.text, item.action and ShopActions[item.action] or nil)
             elseif item.type == "info" then
                 obj = AddInfo(page, item.text)
             elseif item.type == "input" then
@@ -1275,10 +1523,6 @@ end
 
 local SelectedPage = nil
 local function ShowPage(name)
-    if ActiveDropdownClose then
-        pcall(ActiveDropdownClose)
-        ActiveDropdownClose = nil
-    end
     SelectedPage = name
     PageTitle.Text = name
     for pageName, page in pairs(PageFrames) do
@@ -1408,13 +1652,9 @@ Floating.MouseButton1Click:Connect(function()
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
-    if ActiveDropdownClose then
-        pcall(ActiveDropdownClose)
-        ActiveDropdownClose = nil
-    end
     ScreenGui:Destroy()
 end)
 
 ShowPage("Shop")
 
-print("[Tave Hub] UI Base 3 loaded (visual prototype only).")
+print("[Tave Hub] Shop 1 loaded - Shop functional; remaining pages UI-only.")
