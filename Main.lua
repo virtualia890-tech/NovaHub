@@ -1,8 +1,8 @@
 
--- Tave Hub Shop 1.1 - Fighting Fix
--- UI-only prototype based on the layout shown in the supplied screenshots/videos.
--- No farming/combat/shop logic is connected in this build.
--- Shop 1.1: Fighting Style purchase buttons rebuilt with direct CommF_ calls and visible server feedback.
+-- Tave Hub Shop 1.2 - Fighting NPC
+-- UI based on the supplied screenshots/videos.
+-- Shop 1.2: Fighting Style toggles travel to the matching NPC first, then buy/re-equip the style.
+-- Other categories remain UI-only.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -10,6 +10,7 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
+local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -22,6 +23,8 @@ pcall(function()
     old = guiParent:FindFirstChild("TaveHub_Shop_1")
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_Shop_1_1_FIGHTING_FIX")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_Shop_1_2_FIGHTING_NPC")
     if old then old:Destroy() end
 end)
 
@@ -295,47 +298,537 @@ do
         return true
     end
 
-    ShopActions.buy_black_leg = function()
-        return directFightCall("Black Leg", "BuyBlackLeg")
+    -- ============================================================
+    -- FIGHTING STYLE NPC ENGINE
+    -- One active style at a time. Toggle OFF cancels travel immediately.
+    -- Dynamic NPC search is preferred so the same code works with copies
+    -- of the teachers across First / Second / Third Sea.
+    -- ============================================================
+    local FightEngine = {
+        activeAction = nil,
+        enabled = {},
+        moveNonce = 0,
+        travelSpeed = 170,
+        segmentLength = 28,
+        sourceUrl = "https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua",
+    }
+
+    local FightStyles = {
+        buy_black_leg = {
+            label = "Black Leg",
+            toolNames = {"Black Leg", "Dark Step"},
+            npcNames = {"Dark Step Teacher", "Black Leg Teacher"},
+            seas = {1, 2, 3},
+            buy = function(remote)
+                return remote:InvokeServer("BuyBlackLeg")
+            end,
+        },
+
+        buy_fishman_karate = {
+            label = "Fishman Karate",
+            toolNames = {"Fishman Karate", "Water Kung Fu"},
+            npcNames = {"Water Kung-fu Teacher", "Water Kung Fu Teacher", "Fishman Karate Teacher"},
+            seas = {1, 2, 3},
+            buy = function(remote)
+                return remote:InvokeServer("BuyFishmanKarate")
+            end,
+        },
+
+        buy_electro = {
+            label = "Electro",
+            toolNames = {"Electro", "Electric"},
+            npcNames = {"Mad Scientist"},
+            seas = {1, 2, 3},
+            buy = function(remote)
+                return remote:InvokeServer("BuyElectro")
+            end,
+        },
+
+        buy_dragon_breath = {
+            label = "Dragon Breath",
+            toolNames = {"Dragon Claw", "Dragon Breath"},
+            npcNames = {"Sabi"},
+            seas = {2, 3},
+            buy = function(remote)
+                remote:InvokeServer("BlackbeardReward", "DragonClaw", "1")
+                task.wait(0.12)
+                return remote:InvokeServer("BlackbeardReward", "DragonClaw", "2")
+            end,
+        },
+
+        buy_superhuman = {
+            label = "SuperHuman",
+            toolNames = {"Superhuman", "SuperHuman"},
+            npcNames = {"Martial Arts Master"},
+            seas = {2, 3},
+            buy = function(remote)
+                return remote:InvokeServer("BuySuperhuman")
+            end,
+        },
+
+        buy_death_step = {
+            label = "Death Step",
+            toolNames = {"Death Step"},
+            npcNames = {"Phoeyu, the Reformed", "Phoeyu"},
+            seas = {2, 3},
+            buy = function(remote)
+                return remote:InvokeServer("BuyDeathStep")
+            end,
+        },
+
+        buy_sharkman_karate = {
+            label = "Sharkman Karate",
+            toolNames = {"Sharkman Karate"},
+            npcNames = {"Sharkman Teacher", "Daigrock, the Sharkman", "Daigrock"},
+            seas = {2, 3},
+            buy = function(remote)
+                remote:InvokeServer("BuySharkmanKarate", true)
+                task.wait(0.12)
+                return remote:InvokeServer("BuySharkmanKarate")
+            end,
+        },
+
+        buy_electric_claw = {
+            label = "Electric Claw",
+            toolNames = {"Electric Claw"},
+            npcNames = {"Previous Hero"},
+            seas = {3},
+            buy = function(remote)
+                return remote:InvokeServer("BuyElectricClaw")
+            end,
+        },
+
+        buy_dragon_talon = {
+            label = "Dragon Talon",
+            toolNames = {"Dragon Talon"},
+            npcNames = {"Uzoth"},
+            seas = {3},
+            buy = function(remote)
+                remote:InvokeServer("BuyDragonTalon", true)
+                task.wait(0.12)
+                return remote:InvokeServer("BuyDragonTalon")
+            end,
+        },
+
+        buy_godhuman = {
+            label = "God Human",
+            toolNames = {"Godhuman", "God Human"},
+            npcNames = {"Ancient Monk"},
+            seas = {3},
+            buy = function(remote)
+                return remote:InvokeServer("BuyGodhuman")
+            end,
+        },
+
+        buy_sanguine_art = {
+            label = "Sanguine Art",
+            toolNames = {"Sanguine Art"},
+            npcNames = {"Shafi"},
+            seas = {3},
+            buy = function(remote)
+                remote:InvokeServer("BuySanguineArt", true)
+                task.wait(0.12)
+                return remote:InvokeServer("BuySanguineArt")
+            end,
+        },
+    }
+
+    local function containsSea(list, sea)
+        for _, value in ipairs(list or {}) do
+            if value == sea then
+                return true
+            end
+        end
+        return false
     end
 
-    ShopActions.buy_fishman_karate = function()
-        return directFightCall("Fishman Karate", "BuyFishmanKarate")
+    local function currentSea()
+        local id = game.PlaceId
+        if id == 2753915549 then
+            return 1
+        elseif id == 4442272183 then
+            return 2
+        elseif id == 7449423635 then
+            return 3
+        end
+
+        -- Fallback for games/copies that keep Blox Fruits map naming.
+        local map = workspace:FindFirstChild("Map")
+        if map then
+            local function mapHas(name)
+                local wanted = string.lower(name)
+                for _, obj in ipairs(map:GetDescendants()) do
+                    if string.find(string.lower(obj.Name), wanted, 1, true) then
+                        return true
+                    end
+                end
+                return false
+            end
+
+            if mapHas("tiki") or mapHas("hydra") or mapHas("floating turtle") or mapHas("great tree") then
+                return 3
+            end
+            if mapHas("kingdom") or mapHas("hot and cold") or mapHas("forgotten") or mapHas("snow mountain") then
+                return 2
+            end
+            if mapHas("jungle") or mapHas("pirate village") or mapHas("sky") or mapHas("underwater") then
+                return 1
+            end
+        end
+
+        return 0
     end
 
-    ShopActions.buy_electro = function()
-        return directFightCall("Electro", "BuyElectro")
+    local function getRoot()
+        local character = LocalPlayer.Character
+        if not character then
+            return nil
+        end
+        return character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("Torso")
+            or character.PrimaryPart
     end
 
-    ShopActions.buy_dragon_breath = function()
-        return directFightSequence("Dragon Breath", {
-            {"BlackbeardReward", "DragonClaw", "1"},
-            {"BlackbeardReward", "DragonClaw", "2"},
-        })
+    local function getHumanoid()
+        local character = LocalPlayer.Character
+        return character and character:FindFirstChildOfClass("Humanoid") or nil
     end
 
-    ShopActions.buy_superhuman = function()
-        return directFightCall("SuperHuman", "BuySuperhuman")
+    local function hasStyleTool(style)
+        local character = LocalPlayer.Character
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+
+        local function containerHas(container)
+            if not container then
+                return false
+            end
+            for _, obj in ipairs(container:GetChildren()) do
+                if obj:IsA("Tool") then
+                    local low = string.lower(obj.Name)
+                    for _, toolName in ipairs(style.toolNames or {}) do
+                        if low == string.lower(toolName) then
+                            return true
+                        end
+                    end
+                end
+            end
+            return false
+        end
+
+        return containerHas(character) or containerHas(backpack)
     end
 
-    ShopActions.buy_death_step = function()
-        return directFightCall("Death Step", "BuyDeathStep")
+    local function npcPartFromObject(obj)
+        if not obj then
+            return nil
+        end
+
+        if obj:IsA("BasePart") then
+            return obj
+        end
+
+        if obj:IsA("Model") then
+            return obj:FindFirstChild("HumanoidRootPart")
+                or obj:FindFirstChild("Torso")
+                or obj:FindFirstChild("UpperTorso")
+                or obj:FindFirstChild("Head")
+                or obj.PrimaryPart
+        end
+
+        local model = obj:FindFirstAncestorOfClass("Model")
+        if model then
+            return model:FindFirstChild("HumanoidRootPart")
+                or model:FindFirstChild("Torso")
+                or model:FindFirstChild("UpperTorso")
+                or model:FindFirstChild("Head")
+                or model.PrimaryPart
+        end
+
+        return nil
     end
 
-    ShopActions.buy_sharkman_karate = function()
-        return directFightSequence("Sharkman Karate", {
-            {"BuySharkmanKarate", true},
-            {"BuySharkmanKarate"},
-        })
+    local function findNpc(style)
+        local aliases = style.npcNames or {}
+        local bestPart = nil
+        local bestDistance = math.huge
+        local playerRoot = getRoot()
+
+        local containers = {}
+        local npcs = workspace:FindFirstChild("NPCs")
+        if npcs then
+            table.insert(containers, npcs)
+        end
+        table.insert(containers, workspace)
+
+        local visited = {}
+
+        for _, container in ipairs(containers) do
+            for _, obj in ipairs(container:GetDescendants()) do
+                if not visited[obj] then
+                    visited[obj] = true
+
+                    local lowName = string.lower(obj.Name)
+                    local matches = false
+
+                    for _, alias in ipairs(aliases) do
+                        local lowAlias = string.lower(alias)
+                        if lowName == lowAlias or string.find(lowName, lowAlias, 1, true) then
+                            matches = true
+                            break
+                        end
+                    end
+
+                    if matches then
+                        local part = npcPartFromObject(obj)
+                        if part then
+                            local distance = playerRoot and (playerRoot.Position - part.Position).Magnitude or 0
+                            if distance < bestDistance then
+                                bestDistance = distance
+                                bestPart = part
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        return bestPart
     end
 
-    ShopActions.buy_electric_claw = function()
+    local function cancelFightMove()
+        FightEngine.moveNonce = FightEngine.moveNonce + 1
+    end
+
+    local function moveToCFrame(targetCFrame, actionName)
+        if not targetCFrame then
+            return false
+        end
+
+        local root = getRoot()
+        local humanoid = getHumanoid()
+        if not root or not humanoid then
+            return false
+        end
+
+        FightEngine.moveNonce = FightEngine.moveNonce + 1
+        local nonce = FightEngine.moveNonce
+        local speed = FightEngine.travelSpeed
+        local segmentLength = FightEngine.segmentLength
+
+        humanoid.Sit = false
+
+        pcall(function()
+            root.Anchored = false
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        local oldCollision = {}
+        local noclipConnection = RunService.Stepped:Connect(function()
+            local character = LocalPlayer.Character
+            if not character then
+                return
+            end
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if oldCollision[part] == nil then
+                        oldCollision[part] = part.CanCollide
+                    end
+                    part.CanCollide = false
+                end
+            end
+        end)
+
+        local function restoreCollision()
+            if noclipConnection then
+                noclipConnection:Disconnect()
+                noclipConnection = nil
+            end
+            for part, state in pairs(oldCollision) do
+                if part and part.Parent then
+                    pcall(function()
+                        part.CanCollide = state
+                    end)
+                end
+            end
+        end
+
+        local targetPosition = targetCFrame.Position
+        local horizontalDistance = Vector3.new(
+            targetPosition.X - root.Position.X,
+            0,
+            targetPosition.Z - root.Position.Z
+        ).Magnitude
+        local verticalDifference = math.abs(targetPosition.Y - root.Position.Y)
+        local horizontalFirst = horizontalDistance > 700 and verticalDifference > 180
+
+        local function stillEnabled()
+            return FightEngine.enabled[actionName] == true
+                and FightEngine.activeAction == actionName
+                and nonce == FightEngine.moveNonce
+        end
+
+        local function moveLine(destinationPosition, finalLookAt)
+            local currentRoot = getRoot()
+            if not currentRoot then
+                return false
+            end
+
+            local startPosition = currentRoot.Position
+            local delta = destinationPosition - startPosition
+            local distance = delta.Magnitude
+
+            if distance <= 4 then
+                pcall(function()
+                    currentRoot.CFrame = CFrame.lookAt(
+                        destinationPosition,
+                        finalLookAt or (destinationPosition + currentRoot.CFrame.LookVector)
+                    )
+                end)
+                return true
+            end
+
+            local direction = delta.Unit
+            local travelled = 0
+
+            while travelled < distance do
+                if not stillEnabled() then
+                    return false
+                end
+
+                currentRoot = getRoot()
+                if not currentRoot then
+                    return false
+                end
+
+                travelled = math.min(travelled + segmentLength, distance)
+                local nextPosition = startPosition + direction * travelled
+                local lookAt = finalLookAt or destinationPosition
+
+                if (lookAt - nextPosition).Magnitude < 0.1 then
+                    lookAt = nextPosition + currentRoot.CFrame.LookVector
+                end
+
+                local nextCFrame = CFrame.lookAt(nextPosition, lookAt)
+                local stepDistance = (currentRoot.Position - nextPosition).Magnitude
+                local duration = math.max(stepDistance / speed, 0.035)
+
+                local tween = TweenService:Create(
+                    currentRoot,
+                    TweenInfo.new(duration, Enum.EasingStyle.Linear),
+                    {CFrame = nextCFrame}
+                )
+
+                local ok = pcall(function()
+                    tween:Play()
+                    tween.Completed:Wait()
+                end)
+
+                if not ok then
+                    return false
+                end
+            end
+
+            return true
+        end
+
+        local ok = true
+
+        if horizontalFirst then
+            local horizontalTarget = Vector3.new(
+                targetPosition.X,
+                root.Position.Y,
+                targetPosition.Z
+            )
+            ok = moveLine(horizontalTarget, horizontalTarget + targetCFrame.LookVector)
+
+            if ok then
+                ok = moveLine(targetPosition, targetPosition + targetCFrame.LookVector)
+            end
+        else
+            ok = moveLine(targetPosition, targetPosition + targetCFrame.LookVector)
+        end
+
+        restoreCollision()
+
+        root = getRoot()
+        if not ok or not root then
+            return false
+        end
+
+        return (root.Position - targetPosition).Magnitude <= 18
+    end
+
+    local function getQueueOnTeleport()
+        if typeof(queue_on_teleport) == "function" then
+            return queue_on_teleport
+        end
+        if syn and typeof(syn.queue_on_teleport) == "function" then
+            return syn.queue_on_teleport
+        end
+        if fluxus and typeof(fluxus.queue_on_teleport) == "function" then
+            return fluxus.queue_on_teleport
+        end
+        return nil
+    end
+
+    local function queueContinuation(actionName)
+        local queue = getQueueOnTeleport()
+        if not queue then
+            return false
+        end
+
+        local pending = string.format("%q", actionName)
+        local source = string.format("%q", FightEngine.sourceUrl)
+        local code = "getgenv().__TavePendingFight=" .. pending
+            .. ";task.wait(3);"
+            .. "local u=" .. source .. ";"
+            .. "local ok,s=pcall(function() return game:HttpGet(u..'?v='..tostring(os.time())) end);"
+            .. "if ok and s then pcall(function() loadstring(s)() end) end"
+
+        local ok = pcall(queue, code)
+        return ok
+    end
+
+    local function travelForStyle(actionName, style)
+        local sea = currentSea()
+        if sea == 0 or containsSea(style.seas, sea) then
+            return false
+        end
+
         local remote = getCommF()
         if not remote then
             return false
         end
 
-        -- First try the normal direct purchase, exactly like the Shop references.
+        local queued = queueContinuation(actionName)
+
+        if sea == 1 then
+            notify(style.label, queued
+                and "Changing to Second Sea. Automation will continue after teleport."
+                or "Changing to Second Sea. Re-run the hub after teleport if needed.")
+            pcall(function()
+                remote:InvokeServer("TravelDressrosa")
+            end)
+            return true
+        end
+
+        if sea == 2 and containsSea(style.seas, 3) then
+            notify(style.label, queued
+                and "Changing to Third Sea. Automation will continue after teleport."
+                or "Changing to Third Sea. Re-run the hub after teleport if needed.")
+            pcall(function()
+                remote:InvokeServer("TravelZou")
+            end)
+            return true
+        end
+
+        return false
+    end
+
+    local function runElectricClawQuest(remote, npcPart, actionName)
+        -- Current/reference flow:
+        -- Previous Hero -> start challenge -> Mansion -> Previous Hero -> buy.
         local ok, result = pcall(function()
             return remote:InvokeServer("BuyElectricClaw")
         end)
@@ -345,34 +838,211 @@ do
             return false
         end
 
-        -- If the server explicitly reports the quest-start state used by older/current flows,
-        -- start it without teleporting the player; the user can finish the requirement normally.
-        if result == 4 then
-            pcall(function()
-                remote:InvokeServer("BuyElectricClaw", "Start")
-            end)
+        if hasStyleTool(FightStyles.buy_electric_claw) then
+            return true
         end
 
-        notify("Electric Claw", formatServerResult(result))
-        return true, result
+        -- The source flow starts the challenge explicitly.
+        pcall(function()
+            remote:InvokeServer("BuyElectricClaw", "Start")
+        end)
+
+        if FightEngine.enabled[actionName] ~= true then
+            return false
+        end
+
+        local mansion = CFrame.new(-12550.532226563, 336.22631835938, -7510.4233398438)
+        if not moveToCFrame(mansion, actionName) then
+            return false
+        end
+
+        task.wait(0.8)
+
+        if FightEngine.enabled[actionName] ~= true then
+            return false
+        end
+
+        local refreshedNpc = findNpc(FightStyles.buy_electric_claw) or npcPart
+        if refreshedNpc then
+            local npcCF = refreshedNpc.CFrame * CFrame.new(0, 0, 5)
+            if not moveToCFrame(npcCF, actionName) then
+                return false
+            end
+        end
+
+        task.wait(0.4)
+
+        local buyOk, buyResult = pcall(function()
+            return remote:InvokeServer("BuyElectricClaw")
+        end)
+
+        if not buyOk then
+            notify("Electric Claw", "Remote error: " .. tostring(buyResult))
+            return false
+        end
+
+        notify("Electric Claw", formatServerResult(buyResult))
+        return true
     end
 
-    ShopActions.buy_dragon_talon = function()
-        return directFightSequence("Dragon Talon", {
-            {"BuyDragonTalon", true},
-            {"BuyDragonTalon"},
-        })
+    local function runFightStyle(actionName)
+        local style = FightStyles[actionName]
+        if not style then
+            return
+        end
+
+        if FightEngine.enabled[actionName] ~= true then
+            return
+        end
+
+        if travelForStyle(actionName, style) then
+            return
+        end
+
+        notify(style.label, "Searching for " .. tostring(style.npcNames[1]) .. "...")
+
+        local npcPart = nil
+        local searchStart = os.clock()
+
+        while FightEngine.enabled[actionName] == true
+            and FightEngine.activeAction == actionName
+            and os.clock() - searchStart < 12
+        do
+            npcPart = findNpc(style)
+            if npcPart then
+                break
+            end
+            task.wait(0.5)
+        end
+
+        if FightEngine.enabled[actionName] ~= true then
+            return
+        end
+
+        if not npcPart then
+            local sea = currentSea()
+            notify(style.label, "NPC not found in Sea " .. tostring(sea) .. ".")
+            return
+        end
+
+        notify(style.label, "Going to NPC...")
+
+        local targetCF = npcPart.CFrame * CFrame.new(0, 0, 5)
+        if not moveToCFrame(targetCF, actionName) then
+            if FightEngine.enabled[actionName] then
+                notify(style.label, "Movement stopped or failed.")
+            end
+            return
+        end
+
+        if FightEngine.enabled[actionName] ~= true then
+            return
+        end
+
+        task.wait(0.35)
+
+        local remote = getCommF()
+        if not remote then
+            return
+        end
+
+        if actionName == "buy_electric_claw" then
+            runElectricClawQuest(remote, npcPart, actionName)
+            return
+        end
+
+        local ok, result = pcall(function()
+            return style.buy(remote)
+        end)
+
+        if not ok then
+            notify(style.label, "Remote error: " .. tostring(result))
+            return
+        end
+
+        task.wait(0.25)
+
+        if hasStyleTool(style) then
+            notify(style.label, "Style equipped.")
+        else
+            notify(style.label, formatServerResult(result))
+        end
     end
 
-    ShopActions.buy_godhuman = function()
-        return directFightCall("God Human", "BuyGodhuman")
+    local function setFightStyle(actionName, enabled)
+        local style = FightStyles[actionName]
+        if not style then
+            return false
+        end
+
+        if enabled then
+            if FightEngine.activeAction and FightEngine.activeAction ~= actionName then
+                local other = FightStyles[FightEngine.activeAction]
+                notify("Fighting Shop", "Turn OFF " .. tostring(other and other.label or "the other style") .. " first.")
+                return false
+            end
+
+            FightEngine.activeAction = actionName
+            FightEngine.enabled[actionName] = true
+
+            task.spawn(function()
+                runFightStyle(actionName)
+            end)
+
+            return true
+        end
+
+        FightEngine.enabled[actionName] = false
+        if FightEngine.activeAction == actionName then
+            FightEngine.activeAction = nil
+        end
+        cancelFightMove()
+        notify(style.label, "Automation OFF")
+        return true
     end
 
-    ShopActions.buy_sanguine_art = function()
-        return directFightSequence("Sanguine Art", {
-            {"BuySanguineArt", true},
-            {"BuySanguineArt"},
-        })
+    ShopActions.buy_black_leg = function(enabled)
+        return setFightStyle("buy_black_leg", enabled)
+    end
+
+    ShopActions.buy_fishman_karate = function(enabled)
+        return setFightStyle("buy_fishman_karate", enabled)
+    end
+
+    ShopActions.buy_electro = function(enabled)
+        return setFightStyle("buy_electro", enabled)
+    end
+
+    ShopActions.buy_dragon_breath = function(enabled)
+        return setFightStyle("buy_dragon_breath", enabled)
+    end
+
+    ShopActions.buy_superhuman = function(enabled)
+        return setFightStyle("buy_superhuman", enabled)
+    end
+
+    ShopActions.buy_death_step = function(enabled)
+        return setFightStyle("buy_death_step", enabled)
+    end
+
+    ShopActions.buy_sharkman_karate = function(enabled)
+        return setFightStyle("buy_sharkman_karate", enabled)
+    end
+
+    ShopActions.buy_electric_claw = function(enabled)
+        return setFightStyle("buy_electric_claw", enabled)
+    end
+
+    ShopActions.buy_dragon_talon = function(enabled)
+        return setFightStyle("buy_dragon_talon", enabled)
+    end
+
+    ShopActions.buy_godhuman = function(enabled)
+        return setFightStyle("buy_godhuman", enabled)
+    end
+
+    ShopActions.buy_sanguine_art = function(enabled)
+        return setFightStyle("buy_sanguine_art", enabled)
     end
 
     ShopActions.buy_geppo = function()
@@ -390,6 +1060,17 @@ do
     ShopActions.buy_soru = function()
         return simpleRemote("BuyHaki", "Soru")
     end
+
+    task.spawn(function()
+        task.wait(2.0)
+        local pending = getgenv and getgenv().__TavePendingFight or nil
+        if pending and FightStyles[pending] then
+            if getgenv then
+                getgenv().__TavePendingFight = nil
+            end
+            ShopActions[pending](true)
+        end
+    end)
 
     task.spawn(function()
         while task.wait(0.85) do
@@ -432,17 +1113,17 @@ local PagesData = {
             { type = "toggle", text = "True Triple Katana", action = "auto_true_triple_katana" },
         } },
         { title = "Fighting Shop", items = {
-            { type = "button", text = "Black Leg", action = "buy_black_leg" },
-            { type = "button", text = "Fishman Karate", action = "buy_fishman_karate" },
-            { type = "button", text = "Electro", action = "buy_electro" },
-            { type = "button", text = "Dragon Breath", action = "buy_dragon_breath" },
-            { type = "button", text = "SuperHuman", action = "buy_superhuman" },
-            { type = "button", text = "Death Step", action = "buy_death_step" },
-            { type = "button", text = "Sharkman Karate", action = "buy_sharkman_karate" },
-            { type = "button", text = "Electric Claw", action = "buy_electric_claw" },
-            { type = "button", text = "Dragon Talon", action = "buy_dragon_talon" },
-            { type = "button", text = "God Human", action = "buy_godhuman" },
-            { type = "button", text = "Sanguine Art", action = "buy_sanguine_art" },
+            { type = "toggle", text = "Black Leg", action = "buy_black_leg" },
+            { type = "toggle", text = "Fishman Karate", action = "buy_fishman_karate" },
+            { type = "toggle", text = "Electro", action = "buy_electro" },
+            { type = "toggle", text = "Dragon Breath", action = "buy_dragon_breath" },
+            { type = "toggle", text = "SuperHuman", action = "buy_superhuman" },
+            { type = "toggle", text = "Death Step", action = "buy_death_step" },
+            { type = "toggle", text = "Sharkman Karate", action = "buy_sharkman_karate" },
+            { type = "toggle", text = "Electric Claw", action = "buy_electric_claw" },
+            { type = "toggle", text = "Dragon Talon", action = "buy_dragon_talon" },
+            { type = "toggle", text = "God Human", action = "buy_godhuman" },
+            { type = "toggle", text = "Sanguine Art", action = "buy_sanguine_art" },
         } },
         { title = "Abilities Shop", items = {
             { type = "button", text = "Skyjump [ $10,000 Beli ]", action = "buy_geppo" },
@@ -889,7 +1570,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_Shop_1_1_FIGHTING_FIX",
+    Name = "TaveHub_Shop_1_2_FIGHTING_NPC",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -1753,4 +2434,4 @@ end)
 
 ShowPage("Shop")
 
-print("[Tave Hub] Shop 1.1 loaded - Fighting Style buttons rebuilt.")
+print("[Tave Hub] Shop 1.2 loaded - Fighting Style NPC toggles active.")
