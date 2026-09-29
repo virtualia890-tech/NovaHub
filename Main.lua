@@ -1,8 +1,8 @@
 
--- Tave Hub Shop 1.5 - Smooth Fighting Travel
+-- Tave Hub Status & Server 2
 -- UI based on the supplied screenshots/videos.
--- Shop 1.5: same functional Fighting Shop, but teacher travel now uses one continuous smooth tween (no 28-stud stepping/flick).
--- Other categories remain UI-only.
+-- Status & Server 2: keeps Shop 1.5 intact and connects the complete Status & Server page.
+-- Shop + Status & Server are functional. Remaining categories stay UI-only.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -11,6 +11,9 @@ local CoreGui = game:GetService("CoreGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
 local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -31,6 +34,8 @@ pcall(function()
     old = guiParent:FindFirstChild("TaveHub_Shop_1_4_FIGHTING_GOTO_NPC")
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_Shop_1_5_SMOOTH_TRAVEL")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_StatusServer_2")
     if old then old:Destroy() end
 end)
 
@@ -1301,6 +1306,577 @@ do
     end)
 end
 
+
+-- ============================================================
+-- STATUS & SERVER RUNTIME
+-- Shop 1.5 stays untouched. This block only serves page #2.
+-- ============================================================
+local StatusRuntime = {
+    startedAt = os.clock(),
+    infoLabels = {},
+    jobId = "",
+    spamJoin = false,
+    monitorRunning = false,
+    lastHeavyUpdate = 0,
+    cachedElite = "--",
+    cachedTyrantEyes = 0,
+    cachedCakePrince = "--",
+}
+
+local StatusActions = {}
+
+do
+    local function statusNotify(message)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "Tave Hub - Server",
+                Text = tostring(message or ""),
+                Duration = 3
+            })
+        end)
+    end
+
+    local function formatTime(totalSeconds)
+        totalSeconds = math.max(0, math.floor(tonumber(totalSeconds) or 0))
+        local hours = math.floor(totalSeconds / 3600)
+        local minutes = math.floor((totalSeconds % 3600) / 60)
+        local seconds = totalSeconds % 60
+        return string.format("%dh %02dm %02ds", hours, minutes, seconds)
+    end
+
+    local function setInfo(key, value)
+        local label = StatusRuntime.infoLabels[key]
+        if label and label.Parent then
+            label.Text = tostring(value)
+        end
+    end
+
+    local function getCommFStatus()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        return remotes and remotes:FindFirstChild("CommF_") or nil
+    end
+
+    local function invokeStatus(...)
+        local remote = getCommFStatus()
+        if not remote then
+            return false, nil
+        end
+        local args = table.pack(...)
+        local ok, result = pcall(function()
+            return remote:InvokeServer(table.unpack(args, 1, args.n))
+        end)
+        return ok, result
+    end
+
+    local function hasChildName(container, wantedNames)
+        if not container then
+            return false, nil
+        end
+
+        for _, child in ipairs(container:GetChildren()) do
+            local low = string.lower(child.Name)
+            for _, wanted in ipairs(wantedNames) do
+                if string.find(low, string.lower(wanted), 1, true) then
+                    return true, child
+                end
+            end
+        end
+
+        return false, nil
+    end
+
+    local function hasRecursiveName(container, wantedNames)
+        if not container then
+            return false, nil
+        end
+
+        local ok, result = pcall(function()
+            for _, obj in ipairs(container:GetDescendants()) do
+                local low = string.lower(obj.Name)
+                for _, wanted in ipairs(wantedNames) do
+                    if string.find(low, string.lower(wanted), 1, true) then
+                        return true, obj
+                    end
+                end
+            end
+            return false, nil
+        end)
+
+        if ok then
+            return result
+        end
+
+        return false, nil
+    end
+
+    local function playerHasItem(names)
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        local character = LocalPlayer.Character
+
+        for _, container in ipairs({backpack, character}) do
+            if container then
+                for _, obj in ipairs(container:GetChildren()) do
+                    local low = string.lower(obj.Name)
+                    for _, name in ipairs(names) do
+                        if low == string.lower(name) then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+
+        return false
+    end
+
+    local function getEliteStatus()
+        local enemies = workspace:FindFirstChild("Enemies")
+        local names = {"Diablo", "Deandre", "Urban"}
+
+        local spawned = false
+        for _, name in ipairs(names) do
+            if (enemies and enemies:FindFirstChild(name))
+                or ReplicatedStorage:FindFirstChild(name)
+                or (enemies and enemies:FindFirstChild(name .. " [Lv. 1750] [Elite]"))
+            then
+                spawned = true
+                break
+            end
+        end
+
+        local progress = "?"
+        local ok, result = invokeStatus("EliteHunter", "Progress")
+        if ok and result ~= nil then
+            progress = tostring(result)
+        end
+
+        if spawned then
+            return "Elite Hunter: Spawned ✅ | Kills: " .. progress
+        end
+
+        return "Elite Hunter: Not spawned ❌ | Kills: " .. progress
+    end
+
+    local function getTyrantEyes()
+        local ok, inventory = invokeStatus("getInventory")
+        if not ok or type(inventory) ~= "table" then
+            return StatusRuntime.cachedTyrantEyes or 0
+        end
+
+        local count = 0
+        for _, entry in pairs(inventory) do
+            if type(entry) == "table" then
+                local name = tostring(entry.Name or entry.name or "")
+                local low = string.lower(name)
+                if string.find(low, "tyrant", 1, true)
+                    and string.find(low, "eye", 1, true)
+                then
+                    count = tonumber(entry.Count or entry.count or entry.Amount or entry.amount or 1) or 0
+                    break
+                end
+            end
+        end
+
+        return count
+    end
+
+    local function getCakePrinceStatus()
+        local ok, result = invokeStatus("CakePrinceSpawner")
+        if not ok or result == nil then
+            return "--"
+        end
+
+        local s = tostring(result)
+
+        -- Match the known Blox Fruits response layout used by older/current hubs.
+        local len = #s
+        local killed = nil
+        if len == 88 then
+            killed = tonumber(string.sub(s, 39, 41))
+        elseif len == 87 then
+            killed = tonumber(string.sub(s, 39, 40))
+        elseif len == 86 then
+            killed = tonumber(string.sub(s, 39, 39))
+        end
+
+        if killed then
+            return tostring(killed) .. " / 500 Mobs"
+        end
+
+        local enemies = workspace:FindFirstChild("Enemies")
+        local bossSpawned =
+            (enemies and (
+                enemies:FindFirstChild("Cake Prince")
+                or enemies:FindFirstChild("Cake Prince [Lv. 2300] [Raid Boss]")
+                or enemies:FindFirstChild("Dough King")
+                or enemies:FindFirstChild("Dough King [Lv. 2300] [Raid Boss]")
+            ))
+            or ReplicatedStorage:FindFirstChild("Cake Prince")
+            or ReplicatedStorage:FindFirstChild("Cake Prince [Lv. 2300] [Raid Boss]")
+            or ReplicatedStorage:FindFirstChild("Dough King")
+            or ReplicatedStorage:FindFirstChild("Dough King [Lv. 2300] [Raid Boss]")
+
+        if bossSpawned then
+            return "Boss Spawned ✅"
+        end
+
+        -- Fallback: show the server response itself, trimmed.
+        if #s > 62 then
+            s = string.sub(s, 1, 59) .. "..."
+        end
+        return s ~= "" and s or "--"
+    end
+
+    local function getMoonPhase()
+        local sky = Lighting:FindFirstChildOfClass("Sky")
+        if not sky then
+            return "--"
+        end
+
+        local texture = tostring(sky.MoonTextureId or "")
+        local phases = {
+            ["9709149431"] = "100% 🌕",
+            ["9709149052"] = "75%",
+            ["9709143733"] = "50%",
+            ["9709150401"] = "25%",
+            ["9709149680"] = "15%",
+            ["16223659141"] = "100% 🌕",
+        }
+
+        for id, phase in pairs(phases) do
+            if string.find(texture, id, 1, true) then
+                return phase
+            end
+        end
+
+        return "0%"
+    end
+
+    local function checkMapObject(names, recursive)
+        local map = workspace:FindFirstChild("Map")
+        if not map then
+            return false
+        end
+
+        if recursive then
+            local found = hasRecursiveName(map, names)
+            return found == true
+        end
+
+        local found = hasChildName(map, names)
+        return found == true
+    end
+
+    local function getLeviathanStatus()
+        local enemies = workspace:FindFirstChild("Enemies")
+        local foundEnemy = hasChildName(enemies, {"Leviathan"})
+        local foundStorage = hasChildName(ReplicatedStorage, {"Leviathan"})
+
+        if foundEnemy or foundStorage then
+            return "Spawned ✅"
+        end
+
+        return "Not found ❌"
+    end
+
+    local function getAncientOneStatus()
+        local npcs = workspace:FindFirstChild("NPCs")
+        if npcs then
+            local found = hasRecursiveName(npcs, {"Ancient One"})
+            if found == true then
+                return "Loaded ✅"
+            end
+        end
+
+        -- Ancient One belongs to the Third Sea race/V4 area. If the NPC is streamed
+        -- out, avoid falsely claiming the quest state; just report load state.
+        if game.PlaceId == 7449423635 then
+            return "Not loaded (far away)"
+        end
+
+        return "Third Sea only"
+    end
+
+    local function updateFastStatus()
+        local elapsed = os.clock() - StatusRuntime.startedAt
+        local serverTime = workspace.DistributedGameTime or 0
+
+        setInfo("timer", "Timer: " .. formatTime(elapsed))
+        setInfo("server_timer", "Server Timer: " .. formatTime(serverTime))
+        setInfo("place_id", "PlaceId: " .. tostring(game.PlaceId))
+
+        local hasFist = playerHasItem({"Fist of Darkness"})
+        local hasChalice = playerHasItem({"God's Chalice"})
+        if hasFist or hasChalice then
+            local available = {}
+            if hasFist then table.insert(available, "Fist ✅") end
+            if hasChalice then table.insert(available, "Chalice ✅") end
+            setInfo(
+                "fist_chalice",
+                "Next Time Spawn Fist of Darkness or God's Chalice: "
+                    .. table.concat(available, " | ")
+            )
+        else
+            local cycle = 4 * 60 * 60
+            local nextCycle = cycle - (math.floor(serverTime) % cycle)
+            setInfo(
+                "fist_chalice",
+                "Next Time Spawn Fist of Darkness or God's Chalice: Fist ~"
+                    .. formatTime(nextCycle)
+                    .. " | Chalice random"
+            )
+        end
+
+        setInfo("leviathan", "Leviathan: " .. getLeviathanStatus())
+        setInfo(
+            "mirage",
+            "Mirage Island: "
+                .. (checkMapObject({"MysticIsland", "MirageIsland", "Mirage Island"}, true) and "✅" or "❌")
+        )
+        setInfo(
+            "prehistoric",
+            "Prehistoric Island: "
+                .. (checkMapObject({"PrehistoricIsland", "Prehistoric Island"}, false) and "✅" or "❌")
+        )
+        setInfo(
+            "frozen",
+            "Frozen Dimension: "
+                .. (checkMapObject({"FrozenDimension", "Frozen Dimension"}, true) and "✅" or "❌")
+        )
+        setInfo("moon", "Moon Phase: " .. getMoonPhase())
+        setInfo("ancient_one", "Ancient One: " .. getAncientOneStatus())
+    end
+
+    local function updateHeavyStatus()
+        StatusRuntime.cachedElite = getEliteStatus()
+        StatusRuntime.cachedTyrantEyes = getTyrantEyes()
+        StatusRuntime.cachedCakePrince = getCakePrinceStatus()
+
+        setInfo("elite", StatusRuntime.cachedElite)
+        setInfo("tyrant_eyes", "Tyrant Eyes: " .. tostring(StatusRuntime.cachedTyrantEyes) .. " Eyes")
+        setInfo("cake_prince", "Cake Prince: " .. tostring(StatusRuntime.cachedCakePrince))
+    end
+
+    local function httpGet(url)
+        local ok, body = pcall(function()
+            return game:HttpGet(url)
+        end)
+        if ok and type(body) == "string" and body ~= "" then
+            return body
+        end
+
+        local requestFn = rawget(getgenv and getgenv() or _G, "request")
+            or rawget(getgenv and getgenv() or _G, "http_request")
+            or (syn and syn.request)
+
+        if typeof(requestFn) == "function" then
+            local reqOk, response = pcall(requestFn, {
+                Url = url,
+                Method = "GET"
+            })
+            if reqOk and response then
+                return response.Body or response.body
+            end
+        end
+
+        return nil
+    end
+
+    local function fetchServers(lowestFirst)
+        local servers = {}
+        local cursor = nil
+
+        for _ = 1, 3 do
+            local url = "https://games.roblox.com/v1/games/"
+                .. tostring(game.PlaceId)
+                .. "/servers/Public?sortOrder="
+                .. (lowestFirst and "Asc" or "Desc")
+                .. "&excludeFullGames=true&limit=100"
+
+            if cursor and cursor ~= "" then
+                url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
+            end
+
+            local body = httpGet(url)
+            if not body then
+                break
+            end
+
+            local ok, decoded = pcall(function()
+                return HttpService:JSONDecode(body)
+            end)
+
+            if not ok or type(decoded) ~= "table" then
+                break
+            end
+
+            for _, server in ipairs(decoded.data or {}) do
+                if server.id
+                    and server.id ~= game.JobId
+                    and tonumber(server.playing or 0) < tonumber(server.maxPlayers or math.huge)
+                then
+                    table.insert(servers, server)
+                end
+            end
+
+            cursor = decoded.nextPageCursor
+            if not cursor then
+                break
+            end
+        end
+
+        table.sort(servers, function(a, b)
+            local pa = tonumber(a.playing or 0) or 0
+            local pb = tonumber(b.playing or 0) or 0
+            if lowestFirst then
+                return pa < pb
+            end
+            return pa > pb
+        end)
+
+        return servers
+    end
+
+    local function joinJobId(jobId)
+        jobId = tostring(jobId or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if jobId == "" then
+            statusNotify("Enter a JobId first.")
+            return false
+        end
+
+        local ok, err = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+        end)
+
+        if not ok then
+            statusNotify("Join failed: " .. tostring(err))
+            return false
+        end
+
+        return true
+    end
+
+    StatusActions.set_job_id = function(value)
+        StatusRuntime.jobId = tostring(value or "")
+        return true
+    end
+
+    StatusActions.spam_join = function(enabled)
+        StatusRuntime.spamJoin = enabled == true
+
+        if StatusRuntime.spamJoin then
+            task.spawn(function()
+                while StatusRuntime.spamJoin do
+                    local jobId = tostring(StatusRuntime.jobId or "")
+                    if jobId ~= "" then
+                        joinJobId(jobId)
+                    end
+                    task.wait(1.5)
+                end
+            end)
+        end
+
+        return true
+    end
+
+    StatusActions.join_job_id = function()
+        return joinJobId(StatusRuntime.jobId)
+    end
+
+    StatusActions.copy_job_id = function()
+        local copyFn = nil
+        if typeof(setclipboard) == "function" then
+            copyFn = setclipboard
+        elseif typeof(toclipboard) == "function" then
+            copyFn = toclipboard
+        end
+
+        if not copyFn then
+            statusNotify("Clipboard function not supported by this executor.")
+            return false
+        end
+
+        local ok = pcall(copyFn, tostring(game.JobId))
+        if ok then
+            statusNotify("Current JobId copied.")
+            return true
+        end
+
+        statusNotify("Could not copy JobId.")
+        return false
+    end
+
+    StatusActions.hop_server = function()
+        statusNotify("Searching another server...")
+
+        task.spawn(function()
+            local servers = fetchServers(false)
+            if #servers == 0 then
+                statusNotify("No different public server found.")
+                return
+            end
+
+            local pick = servers[math.random(1, math.min(#servers, 25))]
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, pick.id, LocalPlayer)
+            end)
+        end)
+
+        return true
+    end
+
+    StatusActions.hop_server_less = function()
+        statusNotify("Searching low-player server...")
+
+        task.spawn(function()
+            local servers = fetchServers(true)
+            if #servers == 0 then
+                statusNotify("No low-player public server found.")
+                return
+            end
+
+            local pick = servers[1]
+            statusNotify(
+                "Joining server with "
+                    .. tostring(pick.playing or "?")
+                    .. "/"
+                    .. tostring(pick.maxPlayers or "?")
+                    .. " players."
+            )
+
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, pick.id, LocalPlayer)
+            end)
+        end)
+
+        return true
+    end
+
+    StatusRuntime.startMonitor = function()
+        if StatusRuntime.monitorRunning then
+            return
+        end
+
+        StatusRuntime.monitorRunning = true
+
+        task.spawn(function()
+            task.wait(0.5)
+            while StatusRuntime.monitorRunning and ScreenGui and ScreenGui.Parent do
+                pcall(updateFastStatus)
+
+                if os.clock() - StatusRuntime.lastHeavyUpdate >= 4 then
+                    StatusRuntime.lastHeavyUpdate = os.clock()
+                    pcall(updateHeavyStatus)
+                end
+
+                task.wait(1)
+            end
+        end)
+    end
+end
+
+local ActionRegistry = setmetatable(StatusActions, {__index = ShopActions})
+
 local PagesData = {
     { name = "Shop", sections = {
         { title = "Misc Shop", items = {
@@ -1338,27 +1914,27 @@ local PagesData = {
     } },
     { name = "Status & Server", sections = {
         { title = "Status", items = {
-            { type = "info", text = "Timer: 0h 00m 00s" },
-            { type = "info", text = "Server Timer: 0h 00m 00s" },
-            { type = "info", text = "Next Time Spawn Fist of Darkness or God's Chalice: --" },
-            { type = "info", text = "Elite Hunter: --" },
-            { type = "info", text = "Tyrant Eyes: 0 Eyes" },
-            { type = "info", text = "Cake Prince: -- Mobs" },
-            { type = "info", text = "Leviathan: I DON'T KNOW" },
-            { type = "info", text = "Mirage Island: ❌" },
-            { type = "info", text = "Prehistoric Island: ❌" },
-            { type = "info", text = "Frozen Dimension: ❌" },
-            { type = "info", text = "Moon Phase: --" },
-            { type = "info", text = "Ancient One: --" },
+            { type = "info", text = "Timer: 0h 00m 00s", infoKey = "timer" },
+            { type = "info", text = "Server Timer: 0h 00m 00s", infoKey = "server_timer" },
+            { type = "info", text = "Next Time Spawn Fist of Darkness or God's Chalice: --", infoKey = "fist_chalice" },
+            { type = "info", text = "Elite Hunter: --", infoKey = "elite" },
+            { type = "info", text = "Tyrant Eyes: 0 Eyes", infoKey = "tyrant_eyes" },
+            { type = "info", text = "Cake Prince: -- Mobs", infoKey = "cake_prince" },
+            { type = "info", text = "Leviathan: --", infoKey = "leviathan" },
+            { type = "info", text = "Mirage Island: ❌", infoKey = "mirage" },
+            { type = "info", text = "Prehistoric Island: ❌", infoKey = "prehistoric" },
+            { type = "info", text = "Frozen Dimension: ❌", infoKey = "frozen" },
+            { type = "info", text = "Moon Phase: --", infoKey = "moon" },
+            { type = "info", text = "Ancient One: --", infoKey = "ancient_one" },
         } },
         { title = "Server", items = {
-            { type = "info", text = "PlaceId: CURRENT_PLACE_ID" },
-            { type = "input", text = "Input JobId Normal And JobId", placeholder = "Type here" },
-            { type = "toggle", text = "Spam Join" },
-            { type = "button", text = "Join JobId" },
-            { type = "button", text = "Copy JobId" },
-            { type = "button", text = "Hop Server" },
-            { type = "button", text = "Hop Server Less People" },
+            { type = "info", text = "PlaceId: CURRENT_PLACE_ID", infoKey = "place_id" },
+            { type = "input", text = "Input JobId Normal And JobId", placeholder = "Paste JobId here", action = "set_job_id" },
+            { type = "toggle", text = "Spam Join", action = "spam_join" },
+            { type = "button", text = "Join JobId", action = "join_job_id" },
+            { type = "button", text = "Copy JobId", action = "copy_job_id" },
+            { type = "button", text = "Hop Server", action = "hop_server" },
+            { type = "button", text = "Hop Server Less People", action = "hop_server_less" },
         } },
     } },
     { name = "LocalPlayer", sections = {
@@ -1774,7 +2350,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_Shop_1_5_SMOOTH_TRAVEL",
+    Name = "TaveHub_StatusServer_2",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -2134,7 +2710,7 @@ local function AddToggle(parent, text, callback)
     return row
 end
 
-local function AddInfo(parent, text)
+local function AddInfo(parent, text, infoKey)
     local row = RowBase(parent, 31)
     local label = New("TextLabel", {
         Position = UDim2.fromOffset(11, 0),
@@ -2146,10 +2722,13 @@ local function AddInfo(parent, text)
         TextSize = 12,
         TextXAlignment = Enum.TextXAlignment.Left
     }, row)
+    if infoKey and StatusRuntime and StatusRuntime.infoLabels then
+        StatusRuntime.infoLabels[infoKey] = label
+    end
     return row
 end
 
-local function AddInput(parent, text, placeholder)
+local function AddInput(parent, text, placeholder, callback)
     local holder = New("Frame", {
         Size = UDim2.new(1, 0, 0, 58),
         BackgroundTransparency = 1
@@ -2181,6 +2760,15 @@ local function AddInput(parent, text, placeholder)
     Corner(box, 4)
     Stroke(box, Color3.fromRGB(55, 56, 63), 1, 0.55)
     New("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)}, box)
+
+    holder:SetAttribute("Value", "")
+    box:GetPropertyChangedSignal("Text"):Connect(function()
+        holder:SetAttribute("Value", box.Text)
+        if callback then
+            pcall(callback, box.Text)
+        end
+    end)
+
     return holder
 end
 
@@ -2476,13 +3064,13 @@ local function BuildPage(pageData)
         for _, item in ipairs(section.items) do
             local obj
             if item.type == "button" then
-                obj = AddButton(page, item.text, item.action and ShopActions[item.action] or nil)
+                obj = AddButton(page, item.text, item.action and ActionRegistry[item.action] or nil)
             elseif item.type == "toggle" then
-                obj = AddToggle(page, item.text, item.action and ShopActions[item.action] or nil)
+                obj = AddToggle(page, item.text, item.action and ActionRegistry[item.action] or nil)
             elseif item.type == "info" then
-                obj = AddInfo(page, item.text)
+                obj = AddInfo(page, item.text, item.infoKey)
             elseif item.type == "input" then
-                obj = AddInput(page, item.text, item.placeholder)
+                obj = AddInput(page, item.text, item.placeholder, item.action and ActionRegistry[item.action] or nil)
             elseif item.type == "dropdown" then
                 obj = AddDropdown(page, item.text, item.options)
             elseif item.type == "slider" then
@@ -2633,9 +3221,12 @@ Floating.MouseButton1Click:Connect(function()
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
+    StatusRuntime.spamJoin = false
+    StatusRuntime.monitorRunning = false
     ScreenGui:Destroy()
 end)
 
 ShowPage("Shop")
+StatusRuntime.startMonitor()
 
-print("[Tave Hub] Shop 1.5 loaded - Fighting Style travel uses continuous smooth tween.")
+print("[Tave Hub] Status & Server 2 loaded - Shop 1.5 preserved; page #2 functional.")
