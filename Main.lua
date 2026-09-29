@@ -41,6 +41,29 @@ local FarmSettings = {
     bringMob = false, resetTeleport = false, tweenSpeed = 170,
 }
 sessionEnvironment.__TaveFarmSettings = FarmSettings
+local SkillSettings = {
+    fastNoHold = false,
+    selected = {
+        Melee = {Z = false, X = false, C = false},
+        Sword = {Z = false, X = false},
+        Gun = {Z = false, X = false},
+        ["Blox Fruit"] = {Z = false, X = false, C = false, V = false, F = false},
+    },
+    holdSeconds = {
+        Melee = {Z = 0.5, X = 0.5, C = 0.5},
+        Sword = {Z = 0.5, X = 0.5},
+        Gun = {Z = 0.5, X = 0.5},
+        ["Blox Fruit"] = {Z = 0.5, X = 0.5, C = 0.5, V = 0.5, F = 0.5},
+    },
+}
+sessionEnvironment.__TaveSkillSettings = SkillSettings
+local FarmingConfig = {
+    method = "Farm Katakuri", auraDistance = 300,
+    ignoreKatakuriAttack = false, hopFindKatakuri = false,
+    autoQuest = false, masteryCategory = "Melee", masteryHealth = 40,
+    material = "Vampire Fang",
+}
+sessionEnvironment.__TaveFarmingConfig = FarmingConfig
 local function trackExternal(connection)
     table.insert(session.connections, connection)
     return connection
@@ -2267,16 +2290,23 @@ do
         end)
 
         local oldCollision = {}
-        local noclip = RunService.Stepped:Connect(function()
-            local character = getCharacter()
-            if not character then return end
+        local character = getCharacter()
+        local function disableCollision(part)
+            if not part:IsA("BasePart") then return end
+            if oldCollision[part] == nil then
+                oldCollision[part] = part.CanCollide
+            end
+            part.CanCollide = false
+        end
+        if character then
             for _, part in ipairs(character:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    if oldCollision[part] == nil then
-                        oldCollision[part] = part.CanCollide
-                    end
-                    part.CanCollide = false
-                end
+                disableCollision(part)
+            end
+        end
+        local added = character and character.DescendantAdded:Connect(disableCollision)
+        local noclip = RunService.Stepped:Connect(function()
+            for part in pairs(oldCollision) do
+                if part.Parent then part.CanCollide = false end
             end
             local currentRoot = getRootQuick()
             if currentRoot then
@@ -2291,6 +2321,10 @@ do
             if noclip then
                 noclip:Disconnect()
                 noclip = nil
+            end
+            if added then
+                added:Disconnect()
+                added = nil
             end
             for part, state in pairs(oldCollision) do
                 if part and part.Parent then
@@ -4470,7 +4504,7 @@ do
         SettingFarmActions[action] = function(enabled)
             FarmSettings[key] = enabled == true
             if enabled then
-                farmNotify("Saved for the Farming runtime; no target is active yet.")
+                farmNotify("Setting saved; this automation is not connected in this build yet.")
             end
             return true
         end
@@ -4505,10 +4539,411 @@ do
     end
 end
 
+-- Skill choices and hold times are read by the Farming combat controller.
+local SkillActions = {}
+do
+    local selectActions = {
+        skill_select_melee = "Melee",
+        skill_select_sword = "Sword",
+        skill_select_gun = "Gun",
+        skill_select_fruit = "Blox Fruit",
+    }
+    for action, category in pairs(selectActions) do
+        SkillActions[action] = function(letter, enabled)
+            local selected = SkillSettings.selected[category]
+            if selected[letter] == nil then return false end
+            selected[letter] = enabled == true
+            return true
+        end
+    end
+
+    SkillActions.skill_fast_no_hold = function(enabled)
+        SkillSettings.fastNoHold = enabled == true
+        return true
+    end
+
+    local delayActions = {
+        skill_delay_melee_z = {"Melee", "Z"},
+        skill_delay_melee_x = {"Melee", "X"},
+        skill_delay_melee_c = {"Melee", "C"},
+        skill_delay_sword_z = {"Sword", "Z"},
+        skill_delay_sword_x = {"Sword", "X"},
+        skill_delay_gun_z = {"Gun", "Z"},
+        skill_delay_gun_x = {"Gun", "X"},
+        skill_delay_fruit_z = {"Blox Fruit", "Z"},
+        skill_delay_fruit_x = {"Blox Fruit", "X"},
+        skill_delay_fruit_c = {"Blox Fruit", "C"},
+        skill_delay_fruit_v = {"Blox Fruit", "V"},
+        skill_delay_fruit_f = {"Blox Fruit", "F"},
+    }
+    for action, spec in pairs(delayActions) do
+        SkillActions[action] = function(value)
+            SkillSettings.holdSeconds[spec[1]][spec[2]] = math.clamp(tonumber(value) or 0.5, 0, 5)
+            return true
+        end
+    end
+
+    SkillSettings.getSelected = function(category)
+        local result = {}
+        local selected = SkillSettings.selected[category]
+        if not selected then return result end
+        for _, letter in ipairs({"Z", "X", "C", "V", "F"}) do
+            if selected[letter] then
+                table.insert(result, {
+                    key = letter,
+                    hold = SkillSettings.fastNoHold and 0.05
+                        or SkillSettings.holdSeconds[category][letter],
+                })
+            end
+        end
+        return result
+    end
+end
+
+-- ============================================================
+-- FARMING RUNTIME
+-- One worker owns movement and attacks. It only targets live, loaded models.
+-- ============================================================
+local FarmingActions = {}
+local FarmingRuntime = {
+    mode = nil, nonce = 0, status = "Farm: Idle", lastSkillAt = 0,
+    skillIndex = 0, missingSince = nil, hopAttempted = false,
+    inputWarningShown = false, inputUnsupported = false,
+    target = nil,
+}
+
+do
+    local targetGroups = {
+        ["Farm Katakuri"] = {"Cake Prince", "Dough King", "Katakuri"},
+        ["Farm Bone"] = {"Reborn Skeleton", "Living Zombie", "Demonic Soul", "Posessed Mummy", "Possessed Mummy"},
+        ["Farm Tyrant"] = {"Tyrant of the Skies", "Tyrant"},
+    }
+    local materialGroups = {
+        ["Vampire Fang"] = {"Vampire"},
+        ["Fish Tail"] = {"Fishman Warrior", "Fishman Commando", "Fishman Raider", "Fishman Captain"},
+        ["Gunpowder"] = {"Pistol Billionaire"},
+        ["Bones"] = targetGroups["Farm Bone"],
+        ["Mystic Droplet"] = {"Sea Soldier", "Water Fighter"},
+        ["Conjured Cocoa"] = {"Chocolate Bar Battler", "Sweet Thief", "Candy Rebel"},
+        ["Dragon Scale"] = {"Dragon Crew Warrior", "Dragon Crew Archer"},
+        ["Leather"] = {"Pirate", "Brute", "Mercenary"},
+        ["Ectoplasm"] = {"Ship Deckhand", "Ship Engineer", "Ship Steward", "Ship Officer"},
+        ["Mini Tusk"] = {"Mythological Pirate"},
+        ["Magma Ore"] = {"Military Soldier", "Military Spy", "Magma Ninja", "Lava Pirate"},
+        ["Scrap Metal"] = {"Pirate", "Brute", "Mercenary"},
+        ["Angel Wings"] = {"God's Guard"},
+        ["Radioactive Material"] = {"Factory Staff"},
+        ["Demonic Wisp"] = {"Demonic Soul"},
+    }
+
+    local function setFarmStatus(message)
+        local value = "Farm: " .. tostring(message)
+        if FarmingRuntime.status == value then return end
+        FarmingRuntime.status = value
+        local label = StatusRuntime.infoLabels.farm_status
+        if label and label.Parent then label.Text = value end
+    end
+
+    local function farmNotify(message)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "Tave Hub - Farming", Text = tostring(message), Duration = 4
+            })
+        end)
+    end
+
+    local function liveEnemy(model)
+        if not model:IsA("Model") then return nil, nil end
+        local humanoid = model:FindFirstChildOfClass("Humanoid")
+        local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+        if humanoid and root and humanoid.Health > 0 then return humanoid, root end
+        return nil, nil
+    end
+
+    local function findEnemy(mode, playerRoot)
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies then return nil, nil, nil end
+        local names = mode == "main" and targetGroups[FarmingConfig.method]
+            or (mode == "material" and materialGroups[FarmingConfig.material] or nil)
+        local best, bestHumanoid, bestRoot, bestDistance
+        for _, model in ipairs(enemies:GetChildren()) do
+            local humanoid, root = liveEnemy(model)
+            if humanoid then
+                local matched = not names
+                if names then
+                    local low = string.lower(model.Name)
+                    for _, alias in ipairs(names) do
+                        if string.find(low, string.lower(alias), 1, true) then
+                            matched = true
+                            break
+                        end
+                    end
+                end
+                if matched then
+                    local distance = (root.Position - playerRoot.Position).Magnitude
+                    if not bestDistance or distance < bestDistance then
+                        best, bestHumanoid, bestRoot, bestDistance = model, humanoid, root, distance
+                    end
+                end
+            end
+        end
+        return best, bestHumanoid, bestRoot
+    end
+
+    local function toolCategory(tool)
+        if not tool then return nil end
+        local tooltip = string.lower(tostring(tool.ToolTip or ""))
+        if tooltip == "melee" then return "Melee" end
+        if tooltip == "sword" then return "Sword" end
+        if tooltip == "gun" then return "Gun" end
+        if tooltip == "blox fruit" or tooltip == "blox fruits" then return "Blox Fruit" end
+        return nil
+    end
+
+    local function equippedTool(category)
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not character or not humanoid then return nil, nil end
+        local equipped = character:FindFirstChildOfClass("Tool")
+        if not category then return equipped, toolCategory(equipped) end
+        if equipped and toolCategory(equipped) == category then return equipped, category end
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        if backpack then
+            for _, tool in ipairs(backpack:GetChildren()) do
+                if tool:IsA("Tool") and toolCategory(tool) == category then
+                    pcall(function() humanoid:EquipTool(tool) end)
+                    return character:FindFirstChildOfClass("Tool"), category
+                end
+            end
+        end
+        return nil, category
+    end
+
+    local function sendSkillKey(letter, hold)
+        if FarmingRuntime.inputUnsupported then return false end
+        if UserInputService:GetFocusedTextBox() then return nil end
+        local key = Enum.KeyCode[letter]
+        if not key then return false end
+
+        -- Executor key input is optional; Tool:Activate remains the fallback.
+        if typeof(keypress) == "function" and typeof(keyrelease) == "function" then
+            local code = string.byte(letter)
+            local ok = pcall(keypress, code)
+            if ok then
+                task.wait(math.max(0.05, hold))
+                pcall(keyrelease, code)
+                return true
+            end
+        end
+        local ok, virtualInput = pcall(function()
+            return UserInputService:CreateVirtualInput()
+        end)
+        if ok and virtualInput then
+            local sent = pcall(function() virtualInput:SendKey(true, key, false) end)
+            if sent then
+                task.wait(math.max(0.05, hold))
+                pcall(function() virtualInput:SendKey(false, key, false) end)
+                return true
+            end
+        end
+        local managerOk, manager = pcall(function()
+            return game:GetService("VirtualInputManager")
+        end)
+        if managerOk and manager then
+            local sent = pcall(function() manager:SendKeyEvent(true, key, false, game) end)
+            if sent then
+                task.wait(math.max(0.05, hold))
+                pcall(function() manager:SendKeyEvent(false, key, false, game) end)
+                return true
+            end
+        end
+        FarmingRuntime.inputUnsupported = true
+        return false
+    end
+
+    local function attack(tool, category)
+        if not tool or not tool.Parent then return end
+        if not FarmSettings.autoClick and tool.Enabled then
+            pcall(function() tool:Activate() end)
+        end
+        if not category or os.clock() - FarmingRuntime.lastSkillAt < 1.25 then return end
+        local skills = SkillSettings.getSelected(category)
+        if #skills == 0 then return end
+        FarmingRuntime.skillIndex = FarmingRuntime.skillIndex % #skills + 1
+        local skill = skills[FarmingRuntime.skillIndex]
+        FarmingRuntime.lastSkillAt = os.clock()
+        local result = sendSkillKey(skill.key, skill.hold)
+        if result == false and FarmingRuntime.inputUnsupported
+            and not FarmingRuntime.inputWarningShown then
+            FarmingRuntime.inputWarningShown = true
+            farmNotify("Selected skills need key input support from this executor; M1 remains active.")
+        end
+    end
+
+    local function worker(mode, nonce)
+        while session.alive and FarmingRuntime.mode == mode and FarmingRuntime.nonce == nonce do
+            local character = LocalPlayer.Character
+            local playerRoot = character and character:FindFirstChild("HumanoidRootPart")
+            local playerHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if not playerRoot or not playerHumanoid or playerHumanoid.Health <= 0 then
+                setFarmStatus("waiting for character")
+                task.wait(1)
+                continue
+            end
+            if FarmRuntime.lowHealthTriggered and FarmSettings.lowHealthTeleport then
+                setFarmStatus("low health protection active")
+                task.wait(0.6)
+                continue
+            end
+
+            local enemy = FarmingRuntime.target
+            local enemyHumanoid, enemyRoot
+            local enemiesFolder = workspace:FindFirstChild("Enemies")
+            if enemy and enemiesFolder and enemy.Parent == enemiesFolder then
+                enemyHumanoid, enemyRoot = liveEnemy(enemy)
+            end
+            if not enemyHumanoid then
+                enemy, enemyHumanoid, enemyRoot = findEnemy(mode, playerRoot)
+                FarmingRuntime.target = enemy
+            end
+            if not enemy then
+                if not FarmingRuntime.missingSince then FarmingRuntime.missingSince = os.clock() end
+                local wanted = mode == "main" and FarmingConfig.method
+                    or (mode == "material" and FarmingConfig.material or "a loaded enemy")
+                setFarmStatus("waiting for " .. wanted)
+                if mode == "main" and FarmingConfig.method == "Farm Katakuri"
+                    and FarmingConfig.hopFindKatakuri and not FarmingRuntime.hopAttempted
+                    and os.clock() - FarmingRuntime.missingSince >= FarmSettings.hopMinutes * 60 then
+                    FarmingRuntime.hopAttempted = true
+                    StatusActions.hop_server()
+                end
+                task.wait(1.2)
+                continue
+            end
+            FarmingRuntime.missingSince = nil
+            local distance = (playerRoot.Position - enemyRoot.Position).Magnitude
+            local height = FarmingConfig.ignoreKatakuriAttack and mode == "main"
+                and FarmingConfig.method == "Farm Katakuri" and 18 or 7
+            local engageDistance = mode == "main"
+                and math.clamp(FarmingConfig.auraDistance / 15, 8, 28) or 20
+            if distance > engageDistance then
+                setFarmStatus("going to " .. enemy.Name)
+                local destination = CFrame.new(enemyRoot.Position + Vector3.new(0, height, 8))
+                QuickRuntime.smoothTeleport(destination)
+                task.wait(0.15)
+                continue
+            end
+
+            local category = nil
+            if mode == "mastery" then
+                local threshold = enemyHumanoid.MaxHealth * FarmingConfig.masteryHealth / 100
+                category = enemyHumanoid.Health <= threshold
+                    and FarmingConfig.masteryCategory or "Melee"
+            end
+            local tool, actualCategory = equippedTool(category)
+            if not tool then
+                setFarmStatus("equip a " .. tostring(category or "weapon") .. " Tool")
+                task.wait(0.65)
+                continue
+            end
+            setFarmStatus("attacking " .. enemy.Name)
+            attack(tool, actualCategory)
+            task.wait(0.30)
+        end
+    end
+
+    local function setMode(mode, enabled)
+        if enabled then
+            if FarmingRuntime.mode and FarmingRuntime.mode ~= mode then
+                farmNotify("Stop " .. FarmingRuntime.mode .. " farm before starting another.")
+                return false
+            end
+            if FarmingRuntime.mode == mode then return true end
+            FarmingRuntime.mode = mode
+            FarmingRuntime.nonce = FarmingRuntime.nonce + 1
+            FarmingRuntime.missingSince = nil
+            FarmingRuntime.hopAttempted = false
+            FarmingRuntime.inputWarningShown = false
+            FarmingRuntime.inputUnsupported = false
+            FarmingRuntime.target = nil
+            setFarmStatus("starting " .. mode)
+            local nonce = FarmingRuntime.nonce
+            task.spawn(function()
+                local ok, err = pcall(worker, mode, nonce)
+                if not ok and FarmingRuntime.nonce == nonce then
+                    FarmingRuntime.mode = nil
+                    setFarmStatus("error: " .. tostring(err):sub(1, 80))
+                end
+            end)
+        elseif FarmingRuntime.mode == mode then
+            FarmingRuntime.mode = nil
+            FarmingRuntime.nonce = FarmingRuntime.nonce + 1
+            FarmingRuntime.target = nil
+            QuickRuntime.stopSmoothTeleport()
+            setFarmStatus("Idle")
+        end
+        return true
+    end
+
+    FarmingActions.farming_method = function(value)
+        if not targetGroups[value] then return false end
+        FarmingConfig.method = value
+        FarmingRuntime.missingSince = nil
+        FarmingRuntime.target = nil
+        return true
+    end
+    FarmingActions.farming_aura_distance = function(value)
+        FarmingConfig.auraDistance = math.clamp(tonumber(value) or 300, 0, 1000)
+        return true
+    end
+    FarmingActions.farming_ignore_katakuri = function(enabled)
+        FarmingConfig.ignoreKatakuriAttack = enabled == true
+        return true
+    end
+    FarmingActions.farming_hop_katakuri = function(enabled)
+        FarmingConfig.hopFindKatakuri = enabled == true
+        return true
+    end
+    FarmingActions.farming_auto_quest = function(enabled)
+        if enabled then
+            farmNotify("Quest routing is not connected for these bosses yet.")
+            return false
+        end
+        FarmingConfig.autoQuest = false
+        return true
+    end
+    FarmingActions.farming_main = function(enabled) return setMode("main", enabled) end
+    FarmingActions.farming_mastery_method = function(value)
+        FarmingConfig.masteryCategory = value
+        return true
+    end
+    FarmingActions.farming_mastery_health = function(value)
+        FarmingConfig.masteryHealth = math.clamp(tonumber(value) or 40, 0, 100)
+        return true
+    end
+    FarmingActions.farming_mastery = function(enabled) return setMode("mastery", enabled) end
+    FarmingActions.farming_material_select = function(value)
+        if not materialGroups[value] then return false end
+        FarmingConfig.material = value
+        FarmingRuntime.missingSince = nil
+        FarmingRuntime.target = nil
+        return true
+    end
+    FarmingActions.farming_material = function(enabled) return setMode("material", enabled) end
+
+    FarmingRuntime.stop = function()
+        FarmingRuntime.mode = nil
+        FarmingRuntime.nonce = FarmingRuntime.nonce + 1
+        FarmingRuntime.target = nil
+        if QuickRuntime.stopSmoothTeleport then QuickRuntime.stopSmoothTeleport() end
+    end
+end
+
 
 local ActionRegistry = setmetatable(LocalActions, {
     __index = function(_, key)
-        return SettingFarmActions[key] or QuickActions[key] or StatusActions[key] or ShopActions[key]
+        return FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
+            or QuickActions[key] or StatusActions[key] or ShopActions[key]
     end
 })
 
@@ -4625,44 +5060,45 @@ local PagesData = {
     } },
     { name = "Hold and Select Skill", sections = {
         { title = "Select Skills", items = {
-            { type = "dropdown", text = "Select Skills Melee", options = { "Z", "X", "C" } },
-            { type = "dropdown", text = "Select Skills Sword", options = { "Z", "X" } },
-            { type = "dropdown", text = "Select Skills Gun", options = { "Z", "X" } },
-            { type = "dropdown", text = "Select Skills Blox Fruit", options = { "Z", "X", "C", "V", "F" } },
+            { type = "skill_multi", text = "Select Skills Melee", options = { "Z", "X", "C" }, action = "skill_select_melee" },
+            { type = "skill_multi", text = "Select Skills Sword", options = { "Z", "X" }, action = "skill_select_sword" },
+            { type = "skill_multi", text = "Select Skills Gun", options = { "Z", "X" }, action = "skill_select_gun" },
+            { type = "skill_multi", text = "Select Skills Blox Fruit", options = { "Z", "X", "C", "V", "F" }, action = "skill_select_fruit" },
         } },
         { title = "Hold Skills", items = {
-            { type = "toggle", text = "Use skill fast dont hold" },
-            { type = "slider", text = "Set Delay Melee Z", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Melee X", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Melee C", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Sword Z", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Sword X", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Gun Z", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Gun X", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Blox Fruit Z", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Blox Fruit X", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Blox Fruit C", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Blox Fruit V", value = 0.5, min = 0, max = 5 },
-            { type = "slider", text = "Set Delay Blox Fruit F", value = 0.5, min = 0, max = 5 },
+            { type = "toggle", text = "Use skill fast dont hold", action = "skill_fast_no_hold" },
+            { type = "slider", text = "Set Delay Melee Z", value = 0.5, min = 0, max = 5, action = "skill_delay_melee_z" },
+            { type = "slider", text = "Set Delay Melee X", value = 0.5, min = 0, max = 5, action = "skill_delay_melee_x" },
+            { type = "slider", text = "Set Delay Melee C", value = 0.5, min = 0, max = 5, action = "skill_delay_melee_c" },
+            { type = "slider", text = "Set Delay Sword Z", value = 0.5, min = 0, max = 5, action = "skill_delay_sword_z" },
+            { type = "slider", text = "Set Delay Sword X", value = 0.5, min = 0, max = 5, action = "skill_delay_sword_x" },
+            { type = "slider", text = "Set Delay Gun Z", value = 0.5, min = 0, max = 5, action = "skill_delay_gun_z" },
+            { type = "slider", text = "Set Delay Gun X", value = 0.5, min = 0, max = 5, action = "skill_delay_gun_x" },
+            { type = "slider", text = "Set Delay Blox Fruit Z", value = 0.5, min = 0, max = 5, action = "skill_delay_fruit_z" },
+            { type = "slider", text = "Set Delay Blox Fruit X", value = 0.5, min = 0, max = 5, action = "skill_delay_fruit_x" },
+            { type = "slider", text = "Set Delay Blox Fruit C", value = 0.5, min = 0, max = 5, action = "skill_delay_fruit_c" },
+            { type = "slider", text = "Set Delay Blox Fruit V", value = 0.5, min = 0, max = 5, action = "skill_delay_fruit_v" },
+            { type = "slider", text = "Set Delay Blox Fruit F", value = 0.5, min = 0, max = 5, action = "skill_delay_fruit_f" },
         } },
     } },
     { name = "Farming", sections = {
         { title = "Farming", items = {
-            { type = "dropdown", text = "Select Method Farm", options = { "Farm Katakuri" } },
-            { type = "slider", text = "Distance Farm Aura", value = 300, min = 0, max = 1000 },
-            { type = "toggle", text = "Ignore Attack Katakuri" },
-            { type = "toggle", text = "Hop Find Katakuri" },
-            { type = "toggle", text = "Auto Quest [Katakuri/Bone/Tyrant]" },
-            { type = "toggle", text = "Start Farm" },
+            { type = "info", text = "Farm: Idle", infoKey = "farm_status" },
+            { type = "dropdown", text = "Select Method Farm", options = { "Farm Katakuri", "Farm Bone", "Farm Tyrant" }, action = "farming_method" },
+            { type = "slider", text = "Distance Farm Aura", value = 300, min = 0, max = 1000, action = "farming_aura_distance" },
+            { type = "toggle", text = "Ignore Attack Katakuri", action = "farming_ignore_katakuri" },
+            { type = "toggle", text = "Hop Find Katakuri", action = "farming_hop_katakuri" },
+            { type = "toggle", text = "Auto Quest [Katakuri/Bone/Tyrant]", action = "farming_auto_quest" },
+            { type = "toggle", text = "Start Farm", action = "farming_main" },
         } },
         { title = "Mastery Farm", items = {
-            { type = "dropdown", text = "Select Method Farm Mastery", options = { "Melee", "Sword", "Gun", "Blox Fruit" } },
-            { type = "slider", text = "Health %", value = 40, min = 0, max = 100 },
-            { type = "toggle", text = "Farm Mastery" },
+            { type = "dropdown", text = "Select Method Farm Mastery", options = { "Melee", "Sword", "Gun", "Blox Fruit" }, action = "farming_mastery_method" },
+            { type = "slider", text = "Health %", value = 40, min = 0, max = 100, action = "farming_mastery_health" },
+            { type = "toggle", text = "Farm Mastery", action = "farming_mastery" },
         } },
         { title = "Farming Material", items = {
-            { type = "dropdown", text = "Select Material", options = { "Vampire Fang", "Fish Tail", "Gunpowder", "Bones", "Mystic Droplet", "Conjured Cocoa", "Dragon Scale", "Leather", "Ectoplasm", "Mini Tusk", "Magma Ore", "Scrap Metal", "Angel Wings", "Radioactive Material", "Demonic Wisp" } },
-            { type = "toggle", text = "Farm Material" },
+            { type = "dropdown", text = "Select Material", options = { "Vampire Fang", "Fish Tail", "Gunpowder", "Bones", "Mystic Droplet", "Conjured Cocoa", "Dragon Scale", "Leather", "Ectoplasm", "Mini Tusk", "Magma Ore", "Scrap Metal", "Angel Wings", "Radioactive Material", "Demonic Wisp" }, action = "farming_material_select" },
+            { type = "toggle", text = "Farm Material", action = "farming_material" },
         } },
     } },
     { name = "Stack Farming", sections = {
@@ -5631,6 +6067,124 @@ local function AddDropdown(parent, text, options, callback)
     return holder
 end
 
+local function AddSkillMultiDropdown(parent, text, options, callback)
+    local closedHeight, optionHeight = 40, 28
+    local holder = New("Frame", {
+        Size = UDim2.new(1, 0, 0, closedHeight),
+        BackgroundTransparency = 1,
+        ClipsDescendants = true
+    }, parent)
+    local row = RowBase(holder, closedHeight)
+    local label = New("TextLabel", {
+        Position = UDim2.fromOffset(11, 0),
+        Size = UDim2.new(1, -58, 1, 0),
+        BackgroundTransparency = 1,
+        Text = text .. ": None",
+        TextColor3 = Theme.Text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd
+    }, row)
+    local arrow = New("TextButton", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -10, 0.5, 0),
+        Size = UDim2.fromOffset(24, 22),
+        BackgroundColor3 = Theme.Row,
+        Text = "▼", TextColor3 = Theme.Accent,
+        Font = Enum.Font.GothamBold, TextSize = 11,
+        AutoButtonColor = false
+    }, row)
+    Corner(arrow, 4)
+    Stroke(arrow, Theme.Accent, 1.4, 0)
+
+    local menuHeight = #options * optionHeight + 6
+    local menu = New("Frame", {
+        Position = UDim2.fromOffset(0, closedHeight + 3),
+        Size = UDim2.new(1, 0, 0, menuHeight),
+        BackgroundColor3 = Theme.Panel,
+        BorderSizePixel = 0,
+        Visible = false
+    }, holder)
+    Corner(menu, 5)
+    Stroke(menu, Theme.AccentDark, 1, 0.35)
+    local list = New("Frame", {
+        Position = UDim2.fromOffset(3, 3),
+        Size = UDim2.new(1, -6, 1, -6),
+        BackgroundTransparency = 1
+    }, menu)
+    New("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder}, list)
+
+    local selected, buttons = {}, {}
+    local opened = false
+    local function updateLabel()
+        local values = {}
+        for _, option in ipairs(options) do
+            if selected[option] then table.insert(values, option) end
+            local button = buttons[option]
+            if button then
+                button.Text = (selected[option] and "  ☑ " or "  ☐ ") .. option
+            end
+        end
+        local value = #values > 0 and table.concat(values, ", ") or "None"
+        label.Text = text .. ": " .. value
+        holder:SetAttribute("Value", value)
+    end
+    local function setOpen(value)
+        opened = value == true
+        menu.Visible = opened
+        arrow.Text = opened and "▲" or "▼"
+        holder.Size = UDim2.new(1, 0, 0,
+            opened and (closedHeight + menuHeight + 5) or closedHeight)
+    end
+    for index, option in ipairs(options) do
+        local button = New("TextButton", {
+            Size = UDim2.new(1, 0, 0, optionHeight - 1),
+            BackgroundColor3 = Theme.Row,
+            BorderSizePixel = 0,
+            Text = "  ☐ " .. option,
+            TextColor3 = Theme.Text,
+            Font = Enum.Font.Gotham,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            AutoButtonColor = false,
+            LayoutOrder = index
+        }, list)
+        Corner(button, 4)
+        buttons[option] = button
+        button.MouseButton1Click:Connect(function()
+            local nextValue = not selected[option]
+            if callback then
+                local ok, result = pcall(callback, option, nextValue)
+                if not ok or result == false then return end
+            end
+            selected[option] = nextValue
+            updateLabel()
+        end)
+    end
+    updateLabel()
+    arrow.MouseButton1Click:Connect(function() setOpen(not opened) end)
+    row.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            if input.Position.X < arrow.AbsolutePosition.X then
+                setOpen(not opened)
+            end
+        end
+    end)
+    UIControls[text] = {
+        Holder = holder,
+        GetValue = function()
+            local result = {}
+            for _, option in ipairs(options) do
+                if selected[option] then table.insert(result, option) end
+            end
+            return result
+        end
+    }
+    return holder
+end
+
 local function AddSlider(parent, text, value, minValue, maxValue, onChanged)
     local row = RowBase(parent, 52)
     local currentValue = tonumber(value) or tonumber(minValue) or 0
@@ -5802,6 +6356,9 @@ local function BuildPage(pageData)
                 obj = AddInput(page, item.text, item.placeholder, item.action and ActionRegistry[item.action] or nil)
             elseif item.type == "dropdown" then
                 obj = AddDropdown(page, item.text, item.options, item.action and ActionRegistry[item.action] or nil)
+            elseif item.type == "skill_multi" then
+                obj = AddSkillMultiDropdown(page, item.text, item.options,
+                    item.action and ActionRegistry[item.action] or nil)
             elseif item.type == "slider" then
                 obj = AddSlider(page, item.text, item.value, item.min, item.max, function(v)
                     item.value = v
@@ -5968,6 +6525,7 @@ local function stopHub()
     QuickRuntime.webhook.monitorRunning = false
     if ShopRuntime.stop then ShopRuntime.stop() end
     if FarmRuntime.stop then FarmRuntime.stop() end
+    if FarmingRuntime.stop then FarmingRuntime.stop() end
 
     if LocalRuntime and LocalRuntime.stop then
         pcall(LocalRuntime.stop)
@@ -6020,6 +6578,12 @@ local function stopHub()
     if sessionEnvironment.__TaveFarmSettings == FarmSettings then
         sessionEnvironment.__TaveFarmSettings = nil
     end
+    if sessionEnvironment.__TaveSkillSettings == SkillSettings then
+        sessionEnvironment.__TaveSkillSettings = nil
+    end
+    if sessionEnvironment.__TaveFarmingConfig == FarmingConfig then
+        sessionEnvironment.__TaveFarmingConfig = nil
+    end
 end
 session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
@@ -6042,4 +6606,4 @@ task.defer(function()
     end
 end)
 
-print("[Tave Hub] Setting Farm 5 loaded - independent controls and farm settings connected.")
+print("[Tave Hub] Farming 7 loaded - one active farm worker with target and status checks.")
