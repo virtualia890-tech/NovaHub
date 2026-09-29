@@ -3514,11 +3514,65 @@ do
         return ok, result
     end
 
+    local seaCacheMap, seaCacheValue
     local function currentSeaLocal()
         if game.PlaceId == 2753915549 then return 1 end
         if game.PlaceId == 4442272183 then return 2 end
         if game.PlaceId == 7449423635 then return 3 end
+
+        -- Copies/private places can keep the Blox Fruits map under another
+        -- PlaceId. Check a few distinctive landmarks only when the ID is unknown.
+        local map = workspace:FindFirstChild("Map")
+        if map and map == seaCacheMap and seaCacheValue then
+            return seaCacheValue
+        end
+        if map then
+            local found = {[1] = false, [2] = false, [3] = false}
+            for _, obj in ipairs(map:GetDescendants()) do
+                local name = string.lower(obj.Name)
+                if string.find(name, "tiki", 1, true)
+                    or string.find(name, "hydra", 1, true)
+                    or string.find(name, "floating turtle", 1, true)
+                    or string.find(name, "floatingturtle", 1, true)
+                    or string.find(name, "haunted castle", 1, true)
+                    or string.find(name, "hauntedcastle", 1, true)
+                    or string.find(name, "castle on the sea", 1, true)
+                    or string.find(name, "castleonthesea", 1, true)
+                    or string.find(name, "port town", 1, true)
+                    or string.find(name, "porttown", 1, true)
+                    or string.find(name, "great tree", 1, true)
+                    or string.find(name, "greattree", 1, true) then
+                    found[3] = true
+                    break
+                elseif string.find(name, "hot and cold", 1, true)
+                    or string.find(name, "kingdom", 1, true)
+                    or string.find(name, "forgotten", 1, true) then
+                    found[2] = true
+                elseif string.find(name, "pirate village", 1, true)
+                    or string.find(name, "jungle", 1, true)
+                    or string.find(name, "underwater", 1, true) then
+                    found[1] = true
+                end
+            end
+            if found[3] then
+                seaCacheMap, seaCacheValue = map, 3
+                return 3
+            end
+            if found[2] then
+                seaCacheMap, seaCacheValue = map, 2
+                return 2
+            end
+            if found[1] then
+                seaCacheMap, seaCacheValue = map, 1
+                return 1
+            end
+        end
         return 0
+    end
+
+    local function seaName(sea)
+        return ({[1] = "First Sea", [2] = "Second Sea", [3] = "Third Sea"})[sea]
+            or ("unknown Sea (PlaceId " .. tostring(game.PlaceId) .. ")")
     end
 
     local function getLocalRoot()
@@ -3540,6 +3594,21 @@ do
         end
 
         return false
+    end
+
+    local function travelTo(targetCFrame, label)
+        local root = getLocalRoot()
+        if not root then
+            lpNotify("Character is not ready for teleport.")
+            return false
+        end
+        local seconds = math.ceil((root.Position - targetCFrame.Position).Magnitude / 170)
+        lpNotify("Going to " .. label .. " (~" .. tostring(seconds) .. "s). Stop Tween cancels travel.")
+        local arrived = smoothGo(targetCFrame)
+        if not arrived and session.alive then
+            lpNotify("Teleport to " .. label .. " stopped or failed. Try again after the character loads.")
+        end
+        return arrived
     end
 
     local function cancelMove()
@@ -3702,16 +3771,8 @@ do
             end
         end
 
-        if typeof(getnilinstances) == "function" then
-            local ok, list = pcall(getnilinstances)
-            if ok and type(list) == "table" then
-                local result = scan(list)
-                if result then
-                    return result
-                end
-            end
-        end
-
+        -- Detached instances have no live world position and can send the
+        -- player to a stale NPC location.
         return nil
     end
 
@@ -4048,22 +4109,38 @@ do
             return false
         end
 
+        local sea = currentSeaLocal()
+        if sea == 0 then
+            lpNotify("Cannot identify this Sea (PlaceId " .. tostring(game.PlaceId) .. ").")
+            return false
+        end
+        if data.stages and not data.stages[sea] then
+            lpNotify(name .. " has no route in " .. seaName(sea) .. ".")
+            return false
+        end
+        if name == "Frozen Watcher" and sea ~= 3 then
+            lpNotify("Frozen Watcher is in Third Sea.")
+            return false
+        end
+
         task.spawn(function()
             local part = findNpcByAliases(data.aliases or {name})
 
             if part then
-                smoothGo(part.CFrame * CFrame.new(0, 0, 4))
+                travelTo(part.CFrame * CFrame.new(0, 0, 4), name)
                 return
             end
 
             if name == "Frozen Watcher" then
                 local frozenCF = frozenWatcherTarget()
                 if frozenCF then
-                    smoothGo(frozenCF)
+                    if not travelTo(frozenCF, "Frozen Dimension") then return end
                     task.wait(1.0)
                     local loaded = findNpcByAliases(data.aliases)
                     if loaded then
-                        smoothGo(loaded.CFrame * CFrame.new(0, 0, 4))
+                        travelTo(loaded.CFrame * CFrame.new(0, 0, 4), name)
+                    else
+                        lpNotify("Frozen Watcher did not load at the destination.")
                     end
                 else
                     lpNotify("Frozen Dimension is not spawned.")
@@ -4071,13 +4148,7 @@ do
                 return
             end
 
-            local sea = currentSeaLocal()
             local stage = data.stages and data.stages[sea]
-
-            if not stage and data.stages and data.stages[3] and sea ~= 3 then
-                lpNotify(name .. " is in Third Sea.")
-                return
-            end
 
             if not stage then
                 lpNotify("No teleport location available for this NPC in the current Sea.")
@@ -4089,22 +4160,23 @@ do
                 task.wait(0.35)
             end
 
-            lpNotify("Going to " .. name .. " region...")
-            if not smoothGo(stage) then
+            if not travelTo(stage, name .. " region") then
                 return
             end
 
             local started = os.clock()
-            while os.clock() - started < 5 do
+            while session.alive and os.clock() - started < 10 do
                 part = findNpcByAliases(data.aliases or {name})
                 if part then
-                    smoothGo(part.CFrame * CFrame.new(0, 0, 4))
+                    travelTo(part.CFrame * CFrame.new(0, 0, 4), name)
                     return
                 end
-                task.wait(0.25)
+                task.wait(0.5)
             end
 
-            lpNotify(name .. " region reached. NPC model is not loaded.")
+            if session.alive then
+                lpNotify(name .. " region reached, but the NPC did not load. Its saved location may be outdated.")
+            end
         end)
 
         return true
@@ -4138,13 +4210,14 @@ do
             return false
         end
 
-        if currentSeaLocal() ~= 3 then
-            lpNotify("These LocalPlayer island shortcuts are Third Sea locations.")
+        local sea = currentSeaLocal()
+        if sea ~= 3 then
+            lpNotify("This island is in Third Sea; detected " .. seaName(sea) .. ".")
             return false
         end
 
         task.spawn(function()
-            smoothGo(target)
+            travelTo(target, LocalRuntime.selectedIsland)
         end)
 
         return true
@@ -5785,4 +5858,4 @@ task.defer(function()
     end
 end)
 
-print("[Tave Hub] LocalPlayer 4.3 loaded - background polling and session cleanup updated.")
+print("[Tave Hub] LocalPlayer 4.4 loaded - Sea detection and LocalPlayer travel updated.")
