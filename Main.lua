@@ -1,5 +1,5 @@
 
--- Tave Hub LocalPlayer 4
+-- Tave Hub Farming 7.1: row activation, weapon equip and visible diagnostics
 -- UI based on the supplied screenshots/videos.
 -- LocalPlayer 4: preserves all approved pages and connects the complete LocalPlayer page.
 -- Shop, Status & Server, LocalPlayer, ESP, PVP, Tab Webhook and Setting are functional.
@@ -4710,13 +4710,14 @@ do
         local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
         if backpack then
             for _, tool in ipairs(backpack:GetChildren()) do
-                if tool:IsA("Tool") and toolCategory(tool) == category then
+                if tool:IsA("Tool") and (not category or toolCategory(tool) == category) then
                     pcall(function() humanoid:EquipTool(tool) end)
-                    return character:FindFirstChildOfClass("Tool"), category
+                    local active = character:FindFirstChildOfClass("Tool")
+                    if active then return active, toolCategory(active) end
                 end
             end
         end
-        return nil, category
+        return category == nil and equipped or nil, category
     end
 
     local function sendSkillKey(letter, hold)
@@ -4873,6 +4874,7 @@ do
                 if not ok and FarmingRuntime.nonce == nonce then
                     FarmingRuntime.mode = nil
                     setFarmStatus("error: " .. tostring(err):sub(1, 80))
+                    farmNotify("Farm error: " .. tostring(err):sub(1, 110))
                 end
             end)
         elseif FarmingRuntime.mode == mode then
@@ -5481,7 +5483,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Farm 7.1)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -5763,7 +5765,15 @@ local function AddToggle(parent, text, callback, defaultValue)
     Corner(fill, 2)
 
     local enabled = defaultValue == true
-    box.MouseButton1Click:Connect(function()
+    -- The whole row is clickable, including the label (important on touch screens).
+    local hitArea = New("TextButton", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 5,
+    }, row)
+    hitArea.MouseButton1Click:Connect(function()
         enabled = not enabled
         fill.Visible = enabled
         row:SetAttribute("Value", enabled)
@@ -5774,7 +5784,19 @@ local function AddToggle(parent, text, callback, defaultValue)
                 enabled = not enabled
                 fill.Visible = enabled
                 row:SetAttribute("Value", enabled)
+                if not ok then
+                    warn("Tave Hub toggle " .. text .. ": " .. tostring(result))
+                    if string.find(text, "Farm", 1, true) then
+                        local label = StatusRuntime.infoLabels.farm_status
+                        if label and label.Parent then
+                            label.Text = "Farm: toggle error: " .. tostring(result):sub(1, 70)
+                        end
+                    end
+                end
             end
+        elseif string.find(text, "Farm", 1, true) then
+            local label = StatusRuntime.infoLabels.farm_status
+            if label and label.Parent then label.Text = "Farm: " .. text .. " unavailable" end
         end
     end)
     row:SetAttribute("Value", enabled)
@@ -6606,4 +6628,4 @@ task.defer(function()
     end
 end)
 
-print("[Tave Hub] Farming 7 loaded - one active farm worker with target and status checks.")
+print("[Tave Hub] Farming 7.1 loaded - tap any part of Start Farm; watch Farm status.")
