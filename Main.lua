@@ -1,8 +1,8 @@
 
--- Tave Hub Status & Server 2.1 FIXED
+-- Tave Hub Quick Pages 3
 -- UI based on the supplied screenshots/videos.
--- Status & Server 2.1: fixes live label binding/monitor startup and adds safer server-hop fallback.
--- Shop + Status & Server are functional. Remaining categories stay UI-only.
+-- Quick Pages 3: preserves Shop + Status/Server and connects ESP, PVP, Tab Webhook and Setting.
+-- Shop, Status & Server, ESP, PVP, Tab Webhook and Setting are functional.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -14,6 +14,8 @@ local RunService = game:GetService("RunService")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local Lighting = game:GetService("Lighting")
+local GuiService = game:GetService("GuiService")
+local CollectionService = game:GetService("CollectionService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -39,7 +41,12 @@ pcall(function()
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_StatusServer_2_1_FIXED")
     if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_QuickPages_3")
+    if old then old:Destroy() end
 end)
+
+local ScreenGui, Main, Floating
+local UIControls = {}
 
 local Theme = {
     Main = Color3.fromRGB(12, 10, 18),
@@ -1891,7 +1898,1325 @@ do
     end
 end
 
-local ActionRegistry = setmetatable(StatusActions, {__index = ShopActions})
+
+-- ============================================================
+-- QUICK PAGES RUNTIME
+-- ESP / PVP / WEBHOOK / SETTING
+-- ============================================================
+local QuickRuntime = {
+    esp = {
+        berry = false,
+        island = false,
+        fruit = false,
+        player = false,
+        objects = {
+            berry = {},
+            island = {},
+            fruit = {},
+            player = {},
+        },
+        connections = {
+            berry = {},
+            island = {},
+            fruit = {},
+            player = {},
+        },
+    },
+
+    pvp = {
+        selectedPlayer = "",
+        aimMethod = "Camera",
+        autoAimbot = false,
+        autoAimbotGun = false,
+        walkSpeed = 16,
+        jumpPower = 50,
+        walkOnWater = false,
+        waterPart = nil,
+        moveNonce = 0,
+        aimConnection = nil,
+        waterConnection = nil,
+    },
+
+    webhook = {
+        url = "",
+        ping = "",
+        pingEnabled = false,
+        notiProfile = false,
+        rarity = "Common",
+        storeFruit = false,
+        prehistoric = false,
+        leviathan = false,
+        destroyIDK = false,
+        mirage = false,
+        seenTools = {},
+        states = {
+            prehistoric = false,
+            leviathan = false,
+            idk = false,
+            mirage = false,
+        },
+        monitorRunning = false,
+    },
+
+    setting = {
+        white = false,
+        black = false,
+        removeNotifications = false,
+        autoRejoin = false,
+        autoLoad = false,
+        guiKey = "LeftControl",
+        whiteFrame = nil,
+        blackFrame = nil,
+        notificationConnections = {},
+        disconnectConnection = nil,
+        keyConnection = nil,
+    },
+}
+
+local QuickActions = {}
+
+do
+    local function qNotify(title, message)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = tostring(title or "Tave Hub"),
+                Text = tostring(message or ""),
+                Duration = 3
+            })
+        end)
+    end
+
+    local function getCharacter()
+        return LocalPlayer.Character
+    end
+
+    local function getRootQuick()
+        local character = getCharacter()
+        return character and (
+            character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("Torso")
+            or character.PrimaryPart
+        ) or nil
+    end
+
+    local function getHumanoidQuick()
+        local character = getCharacter()
+        return character and character:FindFirstChildOfClass("Humanoid") or nil
+    end
+
+    local function getAdorneePart(obj)
+        if not obj then return nil end
+        if obj:IsA("BasePart") then return obj end
+        if obj:IsA("Model") then
+            return obj:FindFirstChild("HumanoidRootPart")
+                or obj:FindFirstChild("Head")
+                or obj.PrimaryPart
+                or obj:FindFirstChildWhichIsA("BasePart", true)
+        end
+        if obj:IsA("Tool") then
+            return obj:FindFirstChild("Handle")
+                or obj:FindFirstChildWhichIsA("BasePart", true)
+        end
+        local model = obj:FindFirstAncestorOfClass("Model")
+        if model then
+            return getAdorneePart(model)
+        end
+        return nil
+    end
+
+    -- --------------------------------------------------------
+    -- Shared smooth teleport: exact movement style approved in Shop 1.5.
+    -- --------------------------------------------------------
+    local function smoothTeleport(targetCFrame)
+        if not targetCFrame then return false end
+
+        local root = getRootQuick()
+        local hum = getHumanoidQuick()
+        if not root or not hum then
+            return false
+        end
+
+        QuickRuntime.pvp.moveNonce = QuickRuntime.pvp.moveNonce + 1
+        local nonce = QuickRuntime.pvp.moveNonce
+
+        hum.Sit = false
+
+        pcall(function()
+            root.Anchored = false
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        local oldCollision = {}
+        local noclip = RunService.Stepped:Connect(function()
+            local character = getCharacter()
+            if not character then return end
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if oldCollision[part] == nil then
+                        oldCollision[part] = part.CanCollide
+                    end
+                    part.CanCollide = false
+                end
+            end
+            local currentRoot = getRootQuick()
+            if currentRoot then
+                pcall(function()
+                    currentRoot.AssemblyLinearVelocity = Vector3.zero
+                    currentRoot.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+        end)
+
+        local function restore()
+            if noclip then
+                noclip:Disconnect()
+                noclip = nil
+            end
+            for part, state in pairs(oldCollision) do
+                if part and part.Parent then
+                    pcall(function()
+                        part.CanCollide = state
+                    end)
+                end
+            end
+        end
+
+        local distance = (root.Position - targetCFrame.Position).Magnitude
+        if distance <= 4 then
+            root.CFrame = targetCFrame
+            restore()
+            return true
+        end
+
+        local duration = math.max(distance / 170, 0.12)
+        local tween = TweenService:Create(
+            root,
+            TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+            {CFrame = targetCFrame}
+        )
+
+        local done = false
+        local state = nil
+        local conn = tween.Completed:Connect(function(s)
+            state = s
+            done = true
+        end)
+
+        tween:Play()
+
+        while not done do
+            if nonce ~= QuickRuntime.pvp.moveNonce then
+                pcall(function() tween:Cancel() end)
+                conn:Disconnect()
+                restore()
+                return false
+            end
+
+            local currentRoot = getRootQuick()
+            if currentRoot ~= root then
+                pcall(function() tween:Cancel() end)
+                conn:Disconnect()
+                restore()
+                return false
+            end
+
+            task.wait(0.03)
+        end
+
+        conn:Disconnect()
+        restore()
+
+        root = getRootQuick()
+        if not root or state ~= Enum.PlaybackState.Completed then
+            return false
+        end
+
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        return (root.Position - targetCFrame.Position).Magnitude <= 20
+    end
+
+    -- --------------------------------------------------------
+    -- ESP
+    -- --------------------------------------------------------
+    local function clearConnections(kind)
+        for _, connection in ipairs(QuickRuntime.esp.connections[kind] or {}) do
+            pcall(function() connection:Disconnect() end)
+        end
+        QuickRuntime.esp.connections[kind] = {}
+    end
+
+    local function clearEsp(kind)
+        clearConnections(kind)
+        for obj, gui in pairs(QuickRuntime.esp.objects[kind] or {}) do
+            if gui then
+                pcall(function() gui:Destroy() end)
+            end
+            QuickRuntime.esp.objects[kind][obj] = nil
+        end
+    end
+
+    local function createEspLabel(kind, obj, textValue)
+        if not ScreenGui or not ScreenGui.Parent or not obj then
+            return
+        end
+        if QuickRuntime.esp.objects[kind][obj] then
+            return
+        end
+
+        local part = getAdorneePart(obj)
+        if not part then
+            return
+        end
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "TaveESP_" .. kind
+        billboard.Adornee = part
+        billboard.AlwaysOnTop = true
+        billboard.Size = UDim2.fromOffset(180, 32)
+        billboard.StudsOffset = Vector3.new(0, 3, 0)
+        billboard.MaxDistance = 100000
+        billboard.Parent = ScreenGui
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundTransparency = 0.25
+        label.BackgroundColor3 = Color3.fromRGB(10, 9, 14)
+        label.BorderSizePixel = 0
+        label.Text = tostring(textValue or obj.Name)
+        label.TextColor3 = Color3.fromRGB(205, 177, 255)
+        label.TextStrokeTransparency = 0.55
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 12
+        label.Parent = billboard
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 5)
+        corner.Parent = label
+
+        QuickRuntime.esp.objects[kind][obj] = billboard
+
+        obj.AncestryChanged:Connect(function(_, parent)
+            if not parent and QuickRuntime.esp.objects[kind][obj] then
+                pcall(function()
+                    QuickRuntime.esp.objects[kind][obj]:Destroy()
+                end)
+                QuickRuntime.esp.objects[kind][obj] = nil
+            end
+        end)
+    end
+
+    local function isBerry(obj)
+        local low = string.lower(obj.Name)
+        return string.find(low, "berry", 1, true) ~= nil
+    end
+
+    local function isFruit(obj)
+        if obj:IsA("Tool") then
+            local tooltip = tostring(obj.ToolTip or "")
+            if tooltip == "Blox Fruit" then
+                return true
+            end
+        end
+
+        local low = string.lower(obj.Name)
+        return string.find(low, "fruit", 1, true) ~= nil
+            and (
+                obj:IsA("Tool")
+                or obj:IsA("Model")
+                or obj:IsA("BasePart")
+            )
+    end
+
+    local function enableBerryEsp()
+        clearEsp("berry")
+        local map = workspace:FindFirstChild("Map")
+        if map then
+            for _, obj in ipairs(map:GetDescendants()) do
+                if isBerry(obj) then
+                    createEspLabel("berry", obj, "🍓 " .. obj.Name)
+                end
+            end
+            table.insert(
+                QuickRuntime.esp.connections.berry,
+                map.DescendantAdded:Connect(function(obj)
+                    if QuickRuntime.esp.berry and isBerry(obj) then
+                        task.defer(createEspLabel, "berry", obj, "🍓 " .. obj.Name)
+                    end
+                end)
+            )
+        end
+    end
+
+    local function enableIslandEsp()
+        clearEsp("island")
+        local map = workspace:FindFirstChild("Map")
+        if map then
+            for _, obj in ipairs(map:GetChildren()) do
+                if obj:IsA("Model") or obj:IsA("Folder") or obj:IsA("BasePart") then
+                    createEspLabel("island", obj, "🏝 " .. obj.Name)
+                end
+            end
+            table.insert(
+                QuickRuntime.esp.connections.island,
+                map.ChildAdded:Connect(function(obj)
+                    if QuickRuntime.esp.island then
+                        task.wait(0.2)
+                        createEspLabel("island", obj, "🏝 " .. obj.Name)
+                    end
+                end)
+            )
+        end
+    end
+
+    local function enableFruitEsp()
+        clearEsp("fruit")
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if isFruit(obj) then
+                createEspLabel("fruit", obj, "🍈 " .. obj.Name)
+            end
+        end
+        table.insert(
+            QuickRuntime.esp.connections.fruit,
+            workspace.DescendantAdded:Connect(function(obj)
+                if QuickRuntime.esp.fruit and isFruit(obj) then
+                    task.wait(0.1)
+                    createEspLabel("fruit", obj, "🍈 " .. obj.Name)
+                end
+            end)
+        )
+    end
+
+    local function addPlayerEsp(player)
+        if player == LocalPlayer or not QuickRuntime.esp.player then
+            return
+        end
+
+        local function apply(character)
+            if not character or not QuickRuntime.esp.player then return end
+
+            createEspLabel("player", character, "👤 " .. player.Name)
+
+            if not character:FindFirstChild("TavePlayerHighlight") then
+                local highlight = Instance.new("Highlight")
+                highlight.Name = "TavePlayerHighlight"
+                highlight.FillTransparency = 0.78
+                highlight.OutlineTransparency = 0.10
+                highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                highlight.Parent = character
+            end
+        end
+
+        if player.Character then
+            apply(player.Character)
+        end
+
+        local conn = player.CharacterAdded:Connect(function(character)
+            task.wait(0.2)
+            apply(character)
+        end)
+        table.insert(QuickRuntime.esp.connections.player, conn)
+    end
+
+    local function enablePlayerEsp()
+        clearEsp("player")
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            addPlayerEsp(player)
+        end
+
+        table.insert(
+            QuickRuntime.esp.connections.player,
+            Players.PlayerAdded:Connect(function(player)
+                if QuickRuntime.esp.player then
+                    addPlayerEsp(player)
+                end
+            end)
+        )
+
+        table.insert(
+            QuickRuntime.esp.connections.player,
+            Players.PlayerRemoving:Connect(function(player)
+                local char = player.Character
+                if char and QuickRuntime.esp.objects.player[char] then
+                    QuickRuntime.esp.objects.player[char]:Destroy()
+                    QuickRuntime.esp.objects.player[char] = nil
+                end
+            end)
+        )
+    end
+
+    QuickActions.esp_berry = function(enabled)
+        QuickRuntime.esp.berry = enabled == true
+        if enabled then enableBerryEsp() else clearEsp("berry") end
+        return true
+    end
+
+    QuickActions.esp_island = function(enabled)
+        QuickRuntime.esp.island = enabled == true
+        if enabled then enableIslandEsp() else clearEsp("island") end
+        return true
+    end
+
+    QuickActions.esp_fruit = function(enabled)
+        QuickRuntime.esp.fruit = enabled == true
+        if enabled then enableFruitEsp() else clearEsp("fruit") end
+        return true
+    end
+
+    QuickActions.esp_player = function(enabled)
+        QuickRuntime.esp.player = enabled == true
+        if enabled then
+            enablePlayerEsp()
+        else
+            clearEsp("player")
+            for _, player in ipairs(Players:GetPlayers()) do
+                local character = player.Character
+                local h = character and character:FindFirstChild("TavePlayerHighlight")
+                if h then h:Destroy() end
+            end
+        end
+        return true
+    end
+
+    -- --------------------------------------------------------
+    -- PVP
+    -- --------------------------------------------------------
+    local function selectedPlayer()
+        local name = tostring(QuickRuntime.pvp.selectedPlayer or "")
+        if name == "" or name == "Select Player" then
+            return nil
+        end
+        return Players:FindFirstChild(name)
+    end
+
+    local function selectedTargetPart()
+        local player = selectedPlayer()
+        local character = player and player.Character
+        return character and (
+            character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("UpperTorso")
+            or character:FindFirstChild("Head")
+        ) or nil
+    end
+
+    local function refreshPlayerDropdown()
+        local names = {"Select Player"}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                table.insert(names, player.Name)
+            end
+        end
+        table.sort(names, function(a, b)
+            if a == "Select Player" then return true end
+            if b == "Select Player" then return false end
+            return string.lower(a) < string.lower(b)
+        end)
+
+        local control = UIControls["Select Player PVP"]
+        if control and control.SetOptions then
+            control.SetOptions(names)
+        end
+    end
+
+    QuickRuntime.refreshPlayerDropdown = refreshPlayerDropdown
+
+    QuickActions.pvp_select_player = function(value)
+        QuickRuntime.pvp.selectedPlayer = tostring(value or "")
+        return true
+    end
+
+    QuickActions.pvp_aim_method = function(value)
+        QuickRuntime.pvp.aimMethod = tostring(value or "Camera")
+        return true
+    end
+
+    QuickActions.pvp_refresh_player = function()
+        refreshPlayerDropdown()
+        qNotify("PVP", "Player list refreshed.")
+        return true
+    end
+
+    QuickActions.pvp_teleport_player = function()
+        local target = selectedTargetPart()
+        if not target then
+            qNotify("PVP", "Select a valid player first.")
+            return false
+        end
+        task.spawn(function()
+            smoothTeleport(target.CFrame * CFrame.new(0, 0, 5))
+        end)
+        return true
+    end
+
+    local function applyAim()
+        local target = selectedTargetPart()
+        local camera = workspace.CurrentCamera
+        if not target or not camera then
+            return
+        end
+
+        local method = tostring(QuickRuntime.pvp.aimMethod or "Camera")
+
+        if method == "Mouse" and typeof(mousemoverel) == "function" then
+            local point, visible = camera:WorldToViewportPoint(target.Position)
+            if visible then
+                local mousePos = UserInputService:GetMouseLocation()
+                local dx = (point.X - mousePos.X) * 0.20
+                local dy = (point.Y - mousePos.Y) * 0.20
+                pcall(mousemoverel, dx, dy)
+            end
+        else
+            local pos = camera.CFrame.Position
+            camera.CFrame = CFrame.lookAt(pos, target.Position)
+        end
+    end
+
+    local function applyGunAim()
+        local target = selectedTargetPart()
+        if not target then return end
+
+        local character = getCharacter()
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+
+        for _, container in ipairs({character, backpack}) do
+            if container then
+                for _, tool in ipairs(container:GetChildren()) do
+                    if tool:IsA("Tool") and tostring(tool.ToolTip or "") == "Gun" then
+                        for _, obj in ipairs(tool:GetDescendants()) do
+                            if obj.Name == "MousePos" and obj:IsA("Vector3Value") then
+                                obj.Value = target.Position
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        applyAim()
+    end
+
+    local function ensureAimLoop()
+        if QuickRuntime.pvp.aimConnection then
+            return
+        end
+
+        QuickRuntime.pvp.aimConnection = RunService.RenderStepped:Connect(function()
+            if QuickRuntime.pvp.autoAimbot then
+                pcall(applyAim)
+            end
+            if QuickRuntime.pvp.autoAimbotGun then
+                pcall(applyGunAim)
+            end
+        end)
+    end
+
+    QuickActions.pvp_auto_aimbot = function(enabled)
+        QuickRuntime.pvp.autoAimbot = enabled == true
+        ensureAimLoop()
+        return true
+    end
+
+    QuickActions.pvp_auto_aimbot_gun = function(enabled)
+        QuickRuntime.pvp.autoAimbotGun = enabled == true
+        ensureAimLoop()
+        return true
+    end
+
+    QuickActions.pvp_walkspeed_value = function(value)
+        QuickRuntime.pvp.walkSpeed = tonumber(value) or 16
+        return true
+    end
+
+    QuickActions.pvp_jumppower_value = function(value)
+        QuickRuntime.pvp.jumpPower = tonumber(value) or 50
+        return true
+    end
+
+    QuickActions.pvp_apply_walkspeed = function()
+        local hum = getHumanoidQuick()
+        if not hum then return false end
+        hum.WalkSpeed = QuickRuntime.pvp.walkSpeed
+        qNotify("PVP", "WalkSpeed: " .. tostring(QuickRuntime.pvp.walkSpeed))
+        return true
+    end
+
+    QuickActions.pvp_apply_jumppower = function()
+        local hum = getHumanoidQuick()
+        if not hum then return false end
+        pcall(function() hum.UseJumpPower = true end)
+        hum.JumpPower = QuickRuntime.pvp.jumpPower
+        qNotify("PVP", "JumpPower: " .. tostring(QuickRuntime.pvp.jumpPower))
+        return true
+    end
+
+    local function ensureWaterPart()
+        if QuickRuntime.pvp.waterPart and QuickRuntime.pvp.waterPart.Parent then
+            return QuickRuntime.pvp.waterPart
+        end
+
+        local part = Instance.new("Part")
+        part.Name = "TaveWalkOnWater"
+        part.Size = Vector3.new(12, 0.5, 12)
+        part.Anchored = true
+        part.CanCollide = true
+        part.CanTouch = false
+        part.CanQuery = false
+        part.Transparency = 1
+        part.Position = Vector3.new(0, -10000, 0)
+        part.Parent = workspace
+        QuickRuntime.pvp.waterPart = part
+        return part
+    end
+
+    QuickActions.pvp_walk_on_water = function(enabled)
+        QuickRuntime.pvp.walkOnWater = enabled == true
+
+        if not enabled then
+            if QuickRuntime.pvp.waterConnection then
+                QuickRuntime.pvp.waterConnection:Disconnect()
+                QuickRuntime.pvp.waterConnection = nil
+            end
+            if QuickRuntime.pvp.waterPart then
+                QuickRuntime.pvp.waterPart.Position = Vector3.new(0, -10000, 0)
+            end
+            return true
+        end
+
+        local part = ensureWaterPart()
+        if QuickRuntime.pvp.waterConnection then
+            QuickRuntime.pvp.waterConnection:Disconnect()
+        end
+
+        QuickRuntime.pvp.waterConnection = RunService.Heartbeat:Connect(function()
+            if not QuickRuntime.pvp.walkOnWater then return end
+
+            local root = getRootQuick()
+            if not root then
+                part.Position = Vector3.new(0, -10000, 0)
+                return
+            end
+
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = {getCharacter(), part}
+            params.IgnoreWater = false
+
+            local result = workspace:Raycast(
+                root.Position + Vector3.new(0, 2, 0),
+                Vector3.new(0, -14, 0),
+                params
+            )
+
+            if result and result.Material == Enum.Material.Water then
+                part.CFrame = CFrame.new(root.Position.X, result.Position.Y + 0.05, root.Position.Z)
+            else
+                part.Position = Vector3.new(0, -10000, 0)
+            end
+        end)
+
+        return true
+    end
+
+    -- --------------------------------------------------------
+    -- WEBHOOK
+    -- --------------------------------------------------------
+    local rarityRank = {
+        Common = 1,
+        Uncommon = 2,
+        Rare = 3,
+        Legendary = 4,
+        Mythical = 5,
+    }
+
+    local fruitRarity = {
+        ["Rocket"] = "Common",
+        ["Spin"] = "Common",
+        ["Blade"] = "Common",
+        ["Spring"] = "Common",
+        ["Bomb"] = "Common",
+        ["Smoke"] = "Common",
+        ["Spike"] = "Common",
+
+        ["Flame"] = "Uncommon",
+        ["Falcon"] = "Uncommon",
+        ["Eagle"] = "Uncommon",
+        ["Ice"] = "Uncommon",
+        ["Sand"] = "Uncommon",
+        ["Dark"] = "Uncommon",
+        ["Diamond"] = "Uncommon",
+
+        ["Light"] = "Rare",
+        ["Rubber"] = "Rare",
+        ["Barrier"] = "Rare",
+        ["Ghost"] = "Rare",
+        ["Magma"] = "Rare",
+
+        ["Quake"] = "Legendary",
+        ["Buddha"] = "Legendary",
+        ["Love"] = "Legendary",
+        ["Spider"] = "Legendary",
+        ["Sound"] = "Legendary",
+        ["Phoenix"] = "Legendary",
+        ["Portal"] = "Legendary",
+        ["Rumble"] = "Legendary",
+        ["Pain"] = "Legendary",
+        ["Blizzard"] = "Legendary",
+
+        ["Gravity"] = "Mythical",
+        ["Mammoth"] = "Mythical",
+        ["T-Rex"] = "Mythical",
+        ["Dough"] = "Mythical",
+        ["Shadow"] = "Mythical",
+        ["Venom"] = "Mythical",
+        ["Control"] = "Mythical",
+        ["Spirit"] = "Mythical",
+        ["Dragon"] = "Mythical",
+        ["Leopard"] = "Mythical",
+        ["Kitsune"] = "Mythical",
+        ["Gas"] = "Mythical",
+        ["Yeti"] = "Mythical",
+    }
+
+    local function webhookRequest(payload)
+        local url = tostring(QuickRuntime.webhook.url or "")
+        if url == "" then
+            qNotify("Webhook", "Set Webhook URL first.")
+            return false
+        end
+
+        local requestFn =
+            (typeof(request) == "function" and request)
+            or (typeof(http_request) == "function" and http_request)
+            or (syn and typeof(syn.request) == "function" and syn.request)
+            or (fluxus and typeof(fluxus.request) == "function" and fluxus.request)
+
+        if not requestFn then
+            qNotify("Webhook", "Executor request function not supported.")
+            return false
+        end
+
+        local body = HttpService:JSONEncode(payload)
+
+        local ok, result = pcall(requestFn, {
+            Url = url,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = body
+        })
+
+        if not ok then
+            qNotify("Webhook", "Request failed.")
+            return false
+        end
+
+        local status = tonumber(result and (result.StatusCode or result.Status or result.status_code))
+        if status and status >= 400 then
+            qNotify("Webhook", "Discord returned HTTP " .. tostring(status))
+            return false
+        end
+
+        return true
+    end
+
+    local function pingText()
+        if not QuickRuntime.webhook.pingEnabled then
+            return ""
+        end
+
+        local ping = tostring(QuickRuntime.webhook.ping or "")
+        ping = ping:gsub("^%s+", ""):gsub("%s+$", "")
+
+        if ping == "" or string.lower(ping) == "everyone" then
+            return "@everyone"
+        end
+
+        if string.sub(ping, 1, 2) == "<@" then
+            return ping
+        end
+
+        if tonumber(ping) then
+            return "<@" .. ping .. ">"
+        end
+
+        return ping
+    end
+
+    local function sendWebhook(title, description)
+        local content = pingText()
+
+        local payload = {
+            username = "Tave Hub",
+            content = content,
+            embeds = {{
+                title = tostring(title or "Tave Hub"),
+                description = tostring(description or ""),
+                color = 9911551,
+                footer = {
+                    text = "Tave Hub"
+                }
+            }}
+        }
+
+        return webhookRequest(payload)
+    end
+
+    QuickActions.webhook_url = function(value)
+        QuickRuntime.webhook.url = tostring(value or "")
+        return true
+    end
+
+    QuickActions.webhook_ping = function(value)
+        QuickRuntime.webhook.ping = tostring(value or "")
+        return true
+    end
+
+    QuickActions.webhook_ping_enabled = function(enabled)
+        QuickRuntime.webhook.pingEnabled = enabled == true
+        return true
+    end
+
+    QuickActions.webhook_profile = function(enabled)
+        QuickRuntime.webhook.notiProfile = enabled == true
+
+        if enabled then
+            task.spawn(function()
+                local data = {
+                    "User: **" .. LocalPlayer.Name .. "**",
+                    "Display: **" .. tostring(LocalPlayer.DisplayName) .. "**",
+                    "UserId: `" .. tostring(LocalPlayer.UserId) .. "`",
+                    "PlaceId: `" .. tostring(game.PlaceId) .. "`",
+                    "JobId: `" .. tostring(game.JobId) .. "`",
+                }
+                sendWebhook("Profile", table.concat(data, "\n"))
+            end)
+        end
+
+        return true
+    end
+
+    QuickActions.webhook_rarity = function(value)
+        QuickRuntime.webhook.rarity = tostring(value or "Common")
+        return true
+    end
+
+    QuickActions.webhook_store_fruit = function(enabled)
+        QuickRuntime.webhook.storeFruit = enabled == true
+        return true
+    end
+
+    QuickActions.webhook_prehistoric = function(enabled)
+        QuickRuntime.webhook.prehistoric = enabled == true
+        return true
+    end
+
+    QuickActions.webhook_leviathan = function(enabled)
+        QuickRuntime.webhook.leviathan = enabled == true
+        return true
+    end
+
+    QuickActions.webhook_destroy_idk = function(enabled)
+        QuickRuntime.webhook.destroyIDK = enabled == true
+        return true
+    end
+
+    QuickActions.webhook_mirage = function(enabled)
+        QuickRuntime.webhook.mirage = enabled == true
+        return true
+    end
+
+    local function fruitNameFromTool(tool)
+        local name = tostring(tool.Name or "")
+        name = name:gsub(" Fruit$", "")
+        name = name:gsub("%-%w+ Fruit$", "")
+        return name
+    end
+
+    local function shouldNotifyFruit(tool)
+        if not tool:IsA("Tool") then return false end
+        if tostring(tool.ToolTip or "") ~= "Blox Fruit"
+            and not string.find(string.lower(tool.Name), "fruit", 1, true)
+        then
+            return false
+        end
+
+        local fruit = fruitNameFromTool(tool)
+        local rarity = fruitRarity[fruit] or "Common"
+        local selected = QuickRuntime.webhook.rarity or "Common"
+
+        return (rarityRank[rarity] or 1) >= (rarityRank[selected] or 1), fruit, rarity
+    end
+
+    local function mapHas(names)
+        local map = workspace:FindFirstChild("Map")
+        if not map then return false end
+
+        for _, obj in ipairs(map:GetDescendants()) do
+            local low = string.lower(obj.Name)
+            for _, wanted in ipairs(names) do
+                if string.find(low, string.lower(wanted), 1, true) then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    local function leviathanExists()
+        local enemies = workspace:FindFirstChild("Enemies")
+        for _, container in ipairs({enemies, ReplicatedStorage}) do
+            if container then
+                for _, child in ipairs(container:GetChildren()) do
+                    if string.find(string.lower(child.Name), "leviathan", 1, true) then
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    local function idkExists()
+        return workspace:FindFirstChild("IDK", true) ~= nil
+            or ReplicatedStorage:FindFirstChild("IDK", true) ~= nil
+    end
+
+    local function startWebhookMonitor()
+        if QuickRuntime.webhook.monitorRunning then return end
+        QuickRuntime.webhook.monitorRunning = true
+
+        task.spawn(function()
+            while QuickRuntime.webhook.monitorRunning and ScreenGui and ScreenGui.Parent do
+                if QuickRuntime.webhook.storeFruit then
+                    for _, container in ipairs({
+                        LocalPlayer:FindFirstChildOfClass("Backpack"),
+                        getCharacter()
+                    }) do
+                        if container then
+                            for _, tool in ipairs(container:GetChildren()) do
+                                if not QuickRuntime.webhook.seenTools[tool] then
+                                    local okFruit, fruit, rarity = shouldNotifyFruit(tool)
+                                    if okFruit then
+                                        QuickRuntime.webhook.seenTools[tool] = true
+                                        sendWebhook(
+                                            "Fruit Stored / Found",
+                                            "**" .. tostring(fruit) .. "**\nRarity: **" .. tostring(rarity) .. "**"
+                                        )
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+
+                local prehistoricNow = mapHas({"PrehistoricIsland", "Prehistoric Island"})
+                if QuickRuntime.webhook.prehistoric
+                    and prehistoricNow
+                    and not QuickRuntime.webhook.states.prehistoric
+                then
+                    sendWebhook("Prehistoric Island", "Prehistoric Island spawned ✅")
+                end
+                QuickRuntime.webhook.states.prehistoric = prehistoricNow
+
+                local leviathanNow = leviathanExists()
+                if QuickRuntime.webhook.leviathan
+                    and leviathanNow
+                    and not QuickRuntime.webhook.states.leviathan
+                then
+                    sendWebhook("Leviathan", "Leviathan found ✅")
+                end
+                QuickRuntime.webhook.states.leviathan = leviathanNow
+
+                local mirageNow = mapHas({"MysticIsland", "MirageIsland", "Mirage Island"})
+                if QuickRuntime.webhook.mirage
+                    and mirageNow
+                    and not QuickRuntime.webhook.states.mirage
+                then
+                    sendWebhook("Mirage Island", "Mirage Island spawned ✅")
+                end
+                QuickRuntime.webhook.states.mirage = mirageNow
+
+                local idkNow = idkExists()
+                if QuickRuntime.webhook.destroyIDK
+                    and not idkNow
+                    and QuickRuntime.webhook.states.idk
+                then
+                    sendWebhook("Destroy IDK", "IDK object was destroyed / removed.")
+                end
+                QuickRuntime.webhook.states.idk = idkNow
+
+                task.wait(2)
+            end
+        end)
+    end
+
+    QuickRuntime.startWebhookMonitor = startWebhookMonitor
+
+    -- --------------------------------------------------------
+    -- SETTING
+    -- --------------------------------------------------------
+    local function ensureOverlay(which)
+        local key = which == "white" and "whiteFrame" or "blackFrame"
+        local existing = QuickRuntime.setting[key]
+        if existing and existing.Parent then
+            return existing
+        end
+
+        local frame = Instance.new("Frame")
+        frame.Name = "Tave_" .. which .. "_screen"
+        frame.Size = UDim2.fromScale(1, 1)
+        frame.Position = UDim2.fromScale(0, 0)
+        frame.BackgroundColor3 = which == "white"
+            and Color3.new(1, 1, 1)
+            or Color3.new(0, 0, 0)
+        frame.BorderSizePixel = 0
+        frame.ZIndex = 0
+        frame.Visible = false
+        frame.Parent = ScreenGui
+        QuickRuntime.setting[key] = frame
+        return frame
+    end
+
+    QuickActions.setting_white = function(enabled)
+        QuickRuntime.setting.white = enabled == true
+        ensureOverlay("white").Visible = QuickRuntime.setting.white
+        return true
+    end
+
+    QuickActions.setting_black = function(enabled)
+        QuickRuntime.setting.black = enabled == true
+        ensureOverlay("black").Visible = QuickRuntime.setting.black
+        return true
+    end
+
+    local function hideNotificationObject(obj)
+        if not QuickRuntime.setting.removeNotifications then return end
+        if ScreenGui and obj:IsDescendantOf(ScreenGui) then return end
+
+        local low = string.lower(obj.Name)
+        if string.find(low, "notification", 1, true)
+            or string.find(low, "notify", 1, true)
+        then
+            if obj:IsA("GuiObject") then
+                pcall(function() obj.Visible = false end)
+            end
+        end
+    end
+
+    QuickActions.setting_remove_notifications = function(enabled)
+        QuickRuntime.setting.removeNotifications = enabled == true
+
+        for _, connection in ipairs(QuickRuntime.setting.notificationConnections) do
+            pcall(function() connection:Disconnect() end)
+        end
+        QuickRuntime.setting.notificationConnections = {}
+
+        if not enabled then
+            return true
+        end
+
+        for _, rootGui in ipairs({
+            CoreGui,
+            LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        }) do
+            if rootGui then
+                for _, obj in ipairs(rootGui:GetDescendants()) do
+                    hideNotificationObject(obj)
+                end
+                table.insert(
+                    QuickRuntime.setting.notificationConnections,
+                    rootGui.DescendantAdded:Connect(function(obj)
+                        task.defer(hideNotificationObject, obj)
+                    end)
+                )
+            end
+        end
+
+        return true
+    end
+
+    QuickActions.setting_auto_rejoin = function(enabled)
+        QuickRuntime.setting.autoRejoin = enabled == true
+
+        if QuickRuntime.setting.disconnectConnection then
+            QuickRuntime.setting.disconnectConnection:Disconnect()
+            QuickRuntime.setting.disconnectConnection = nil
+        end
+
+        if not enabled then
+            return true
+        end
+
+        QuickRuntime.setting.disconnectConnection = GuiService.ErrorMessageChanged:Connect(function()
+            if not QuickRuntime.setting.autoRejoin then return end
+            local message = ""
+            pcall(function()
+                message = GuiService:GetErrorMessage()
+            end)
+            if message and message ~= "" then
+                task.wait(2)
+                pcall(function()
+                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                end)
+            end
+        end)
+
+        return true
+    end
+
+    local function queueFunction()
+        if typeof(queue_on_teleport) == "function" then
+            return queue_on_teleport
+        end
+        if syn and typeof(syn.queue_on_teleport) == "function" then
+            return syn.queue_on_teleport
+        end
+        if fluxus and typeof(fluxus.queue_on_teleport) == "function" then
+            return fluxus.queue_on_teleport
+        end
+        return nil
+    end
+
+    QuickActions.setting_auto_load = function(enabled)
+        QuickRuntime.setting.autoLoad = enabled == true
+        if not enabled then return true end
+
+        local queue = queueFunction()
+        if not queue then
+            qNotify("Setting", "queue_on_teleport is not supported.")
+            return false
+        end
+
+        local loader = [[
+task.wait(3)
+loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/NovaHub/refs/heads/main/Main.lua?v=" .. tostring(os.time())))()
+]]
+        local ok = pcall(queue, loader)
+        if ok then
+            qNotify("Setting", "Auto Load queued for next teleport.")
+            return true
+        end
+        return false
+    end
+
+    QuickActions.setting_boost_fps = function()
+        task.spawn(function()
+            pcall(function()
+                Lighting.GlobalShadows = false
+                Lighting.FogEnd = 1e9
+                Lighting.Brightness = 1
+            end)
+
+            for _, obj in ipairs(game:GetDescendants()) do
+                pcall(function()
+                    if obj:IsA("BasePart") then
+                        obj.Material = Enum.Material.SmoothPlastic
+                        obj.Reflectance = 0
+                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                        obj.Transparency = 1
+                    elseif obj:IsA("ParticleEmitter")
+                        or obj:IsA("Trail")
+                        or obj:IsA("Smoke")
+                        or obj:IsA("Fire")
+                        or obj:IsA("Sparkles")
+                    then
+                        obj.Enabled = false
+                    elseif obj:IsA("PostEffect") then
+                        obj.Enabled = false
+                    end
+                end)
+            end
+
+            qNotify("Setting", "Boost FPS applied.")
+        end)
+        return true
+    end
+
+    QuickActions.setting_copy_config = function()
+        local config = {
+            PVP = {
+                Player = QuickRuntime.pvp.selectedPlayer,
+                AimMethod = QuickRuntime.pvp.aimMethod,
+                WalkSpeed = QuickRuntime.pvp.walkSpeed,
+                JumpPower = QuickRuntime.pvp.jumpPower,
+            },
+            Webhook = {
+                URL = QuickRuntime.webhook.url,
+                Ping = QuickRuntime.webhook.ping,
+                PingEnabled = QuickRuntime.webhook.pingEnabled,
+                Rarity = QuickRuntime.webhook.rarity,
+            },
+            Setting = {
+                AutoRejoin = QuickRuntime.setting.autoRejoin,
+                AutoLoad = QuickRuntime.setting.autoLoad,
+                ToggleGUI = QuickRuntime.setting.guiKey,
+            }
+        }
+
+        local encoded = HttpService:JSONEncode(config)
+        local copyFn =
+            (typeof(setclipboard) == "function" and setclipboard)
+            or (typeof(toclipboard) == "function" and toclipboard)
+
+        if not copyFn then
+            qNotify("Setting", "Clipboard not supported.")
+            return false
+        end
+
+        local ok = pcall(copyFn, encoded)
+        if ok then
+            qNotify("Setting", "Config copied.")
+            return true
+        end
+        return false
+    end
+
+    QuickActions.setting_gui_key = function(value)
+        QuickRuntime.setting.guiKey = tostring(value or "LeftControl")
+        return true
+    end
+
+    local function keyCodeFromName(name)
+        local map = {
+            LeftControl = Enum.KeyCode.LeftControl,
+            RightControl = Enum.KeyCode.RightControl,
+            Insert = Enum.KeyCode.Insert,
+            Home = Enum.KeyCode.Home,
+        }
+        return map[name] or Enum.KeyCode.LeftControl
+    end
+
+    QuickRuntime.startGuiKey = function()
+        if QuickRuntime.setting.keyConnection then return end
+
+        QuickRuntime.setting.keyConnection = UserInputService.InputBegan:Connect(function(input, processed)
+            if processed then return end
+            if UserInputService:GetFocusedTextBox() then return end
+
+            if input.KeyCode == keyCodeFromName(QuickRuntime.setting.guiKey) then
+                if Main then
+                    Main.Visible = not Main.Visible
+                    if Floating then
+                        Floating.Visible = not Main.Visible
+                    end
+                end
+            end
+        end)
+    end
+end
+
+
+local ActionRegistry = setmetatable(QuickActions, {
+    __index = function(_, key)
+        return StatusActions[key] or ShopActions[key]
+    end
+})
 
 local PagesData = {
     { name = "Shop", sections = {
@@ -2315,58 +3640,59 @@ local PagesData = {
     } },
     { name = "ESP", sections = {
         { title = "ESP", items = {
-            { type = "toggle", text = "ESP Berry" },
-            { type = "toggle", text = "ESP Island" },
-            { type = "toggle", text = "ESP Fruit" },
-            { type = "toggle", text = "ESP Player" },
+            { type = "toggle", text = "ESP Berry", action = "esp_berry" },
+            { type = "toggle", text = "ESP Island", action = "esp_island" },
+            { type = "toggle", text = "ESP Fruit", action = "esp_fruit" },
+            { type = "toggle", text = "ESP Player", action = "esp_player" },
         } },
     } },
     { name = "PVP", sections = {
         { title = "PVP", items = {
-            { type = "dropdown", text = "Select Player PVP", options = { "Select Player" } },
-            { type = "dropdown", text = "Select Method Aimbot", options = { "Camera", "Mouse" } },
-            { type = "button", text = "Refresh Player" },
-            { type = "button", text = "Teleport Player" },
-            { type = "toggle", text = "Auto Aimbot" },
-            { type = "toggle", text = "Auto Aimbot Gun" },
+            { type = "dropdown", text = "Select Player PVP", options = { "Select Player" }, action = "pvp_select_player" },
+            { type = "dropdown", text = "Select Method Aimbot", options = { "Camera", "Mouse" }, action = "pvp_aim_method" },
+            { type = "button", text = "Refresh Player", action = "pvp_refresh_player" },
+            { type = "button", text = "Teleport Player", action = "pvp_teleport_player" },
+            { type = "toggle", text = "Auto Aimbot", action = "pvp_auto_aimbot" },
+            { type = "toggle", text = "Auto Aimbot Gun", action = "pvp_auto_aimbot_gun" },
         } },
         { title = "Misc PVP", items = {
-            { type = "slider", text = "WalkSpeed", value = 16, min = 0, max = 250 },
-            { type = "slider", text = "JumpPower", value = 50, min = 0, max = 250 },
-            { type = "button", text = "Change JumpPower" },
-            { type = "button", text = "Change WalkSpeed" },
-            { type = "toggle", text = "Walk On Water" },
+            { type = "slider", text = "WalkSpeed", value = 16, min = 0, max = 250, action = "pvp_walkspeed_value" },
+            { type = "slider", text = "JumpPower", value = 50, min = 0, max = 250, action = "pvp_jumppower_value" },
+            { type = "button", text = "Change JumpPower", action = "pvp_apply_jumppower" },
+            { type = "button", text = "Change WalkSpeed", action = "pvp_apply_walkspeed" },
+            { type = "toggle", text = "Walk On Water", action = "pvp_walk_on_water" },
         } },
     } },
     { name = "Tab Webhook", sections = {
         { title = "Webhook", items = {
-            { type = "input", text = "Input Discord Ping", placeholder = "User ID / Role ID" },
-            { type = "toggle", text = "Ping Everyone/ID Discord" },
-            { type = "toggle", text = "Noti Profile" },
-            { type = "dropdown", text = "Select Rarity Fruit", options = { "Common", "Uncommon", "Rare", "Legendary", "Mythical" } },
-            { type = "toggle", text = "Webhook Store Fruit" },
-            { type = "toggle", text = "Webhook Find Prehistoric Island" },
-            { type = "toggle", text = "Webhook Find Leviathan" },
-            { type = "toggle", text = "Webhook Destroy IDK" },
-            { type = "toggle", text = "Webhook Find Mirage" },
+            { type = "input", text = "Input Webhook URL", placeholder = "https://discord.com/api/webhooks/...", action = "webhook_url" },
+            { type = "input", text = "Input Discord Ping", placeholder = "User ID / Role ID / everyone", action = "webhook_ping" },
+            { type = "toggle", text = "Ping Everyone/ID Discord", action = "webhook_ping_enabled" },
+            { type = "toggle", text = "Noti Profile", action = "webhook_profile" },
+            { type = "dropdown", text = "Select Rarity Fruit", options = { "Common", "Uncommon", "Rare", "Legendary", "Mythical" }, action = "webhook_rarity" },
+            { type = "toggle", text = "Webhook Store Fruit", action = "webhook_store_fruit" },
+            { type = "toggle", text = "Webhook Find Prehistoric Island", action = "webhook_prehistoric" },
+            { type = "toggle", text = "Webhook Find Leviathan", action = "webhook_leviathan" },
+            { type = "toggle", text = "Webhook Destroy IDK", action = "webhook_destroy_idk" },
+            { type = "toggle", text = "Webhook Find Mirage", action = "webhook_mirage" },
         } },
     } },
     { name = "Setting", sections = {
         { title = "Setting", items = {
-            { type = "toggle", text = "White Screen" },
-            { type = "toggle", text = "Black Screen" },
-            { type = "toggle", text = "Remove Notifications" },
-            { type = "toggle", text = "Auto Rejoin Disconnect" },
-            { type = "toggle", text = "Auto Load Script" },
-            { type = "button", text = "Boost FPS" },
-            { type = "button", text = "Copy Config" },
-            { type = "dropdown", text = "Toggle GUI", options = { "LeftControl", "RightControl", "Insert", "Home" } },
+            { type = "toggle", text = "White Screen", action = "setting_white" },
+            { type = "toggle", text = "Black Screen", action = "setting_black" },
+            { type = "toggle", text = "Remove Notifications", action = "setting_remove_notifications" },
+            { type = "toggle", text = "Auto Rejoin Disconnect", action = "setting_auto_rejoin" },
+            { type = "toggle", text = "Auto Load Script", action = "setting_auto_load" },
+            { type = "button", text = "Boost FPS", action = "setting_boost_fps" },
+            { type = "button", text = "Copy Config", action = "setting_copy_config" },
+            { type = "dropdown", text = "Toggle GUI", options = { "LeftControl", "RightControl", "Insert", "Home" }, action = "setting_gui_key" },
         } },
     } },
 }
 
-local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_StatusServer_2_1_FIXED",
+ScreenGui = New("ScreenGui", {
+    Name = "TaveHub_QuickPages_3",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -2385,7 +3711,7 @@ do
     end
 end
 
-local Main = New("Frame", {
+Main = New("Frame", {
     Name = "Main",
     AnchorPoint = Vector2.new(0.5, 0.5),
     Position = UDim2.fromScale(0.5, 0.5),
@@ -2813,7 +4139,7 @@ local function AddInput(parent, text, placeholder, callback)
     return holder
 end
 
-local function AddDropdown(parent, text, options)
+local function AddDropdown(parent, text, options, callback)
     options = options or {"Select..."}
     if #options < 1 then
         options = {"Select..."}
@@ -2822,8 +4148,6 @@ local function AddDropdown(parent, text, options)
     local closedHeight = 39
     local optionHeight = 30
     local maxVisible = 5
-    local visibleCount = math.min(#options, maxVisible)
-    local menuHeight = (visibleCount * optionHeight) + 6
 
     local holder = New("Frame", {
         Size = UDim2.new(1, 0, 0, closedHeight),
@@ -2865,7 +4189,7 @@ local function AddDropdown(parent, text, options)
 
     local menu = New("Frame", {
         Position = UDim2.fromOffset(0, closedHeight + 3),
-        Size = UDim2.new(1, 0, 0, menuHeight),
+        Size = UDim2.new(1, 0, 0, 40),
         BackgroundColor3 = Theme.Panel,
         BorderSizePixel = 0,
         Visible = false
@@ -2878,53 +4202,106 @@ local function AddDropdown(parent, text, options)
         Size = UDim2.new(1, -6, 1, -6),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        CanvasSize = UDim2.new(0, 0, 0, #options * optionHeight),
-        ScrollBarThickness = #options > maxVisible and 3 or 0,
+        CanvasSize = UDim2.new(),
+        ScrollBarThickness = 3,
         ScrollBarImageColor3 = Theme.AccentSoft
     }, menu)
 
-    local layout = New("UIListLayout", {
+    New("UIListLayout", {
         Padding = UDim.new(0, 1),
         SortOrder = Enum.SortOrder.LayoutOrder
     }, scroll)
 
     local opened = false
+    local optionButtons = {}
+
+    local function recalcMenu()
+        local visibleCount = math.max(1, math.min(#options, maxVisible))
+        local menuHeight = (visibleCount * optionHeight) + 6
+        menu.Size = UDim2.new(1, 0, 0, menuHeight)
+        scroll.CanvasSize = UDim2.new(0, 0, 0, #options * optionHeight)
+        scroll.ScrollBarThickness = #options > maxVisible and 3 or 0
+
+        if opened then
+            holder.Size = UDim2.new(1, 0, 0, closedHeight + menuHeight + 5)
+        end
+    end
 
     local function setOpen(state)
         opened = state == true
         menu.Visible = opened
         arrow.Text = opened and "▲" or "▼"
+
+        local visibleCount = math.max(1, math.min(#options, maxVisible))
+        local menuHeight = (visibleCount * optionHeight) + 6
         holder.Size = UDim2.new(
             1, 0, 0,
             opened and (closedHeight + menuHeight + 5) or closedHeight
         )
     end
 
-    for index, option in ipairs(options) do
-        local optionText = tostring(option)
-        local optionButton = New("TextButton", {
-            Size = UDim2.new(1, -4, 0, optionHeight - 1),
-            BackgroundColor3 = Theme.Row,
-            BorderSizePixel = 0,
-            Text = "  " .. optionText,
-            TextColor3 = Theme.Text,
-            Font = Enum.Font.Gotham,
-            TextSize = 12,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            AutoButtonColor = false,
-            LayoutOrder = index
-        }, scroll)
-        Corner(optionButton, 4)
+    local function choose(optionText, fire)
+        current = tostring(optionText or "Select...")
+        label.Text = text .. ": " .. current
+        holder:SetAttribute("Value", current)
+        setOpen(false)
 
-        optionButton.MouseButton1Click:Connect(function()
-            current = optionText
-            label.Text = text .. ": " .. current
-            holder:SetAttribute("Value", current)
-            setOpen(false)
-        end)
+        if fire and callback then
+            pcall(callback, current)
+        end
+    end
+
+    local function rebuild(newOptions)
+        for _, button in ipairs(optionButtons) do
+            pcall(function() button:Destroy() end)
+        end
+        optionButtons = {}
+
+        options = newOptions or {"Select..."}
+        if #options < 1 then
+            options = {"Select..."}
+        end
+
+        for index, option in ipairs(options) do
+            local optionText = tostring(option)
+            local optionButton = New("TextButton", {
+                Size = UDim2.new(1, -4, 0, optionHeight - 1),
+                BackgroundColor3 = Theme.Row,
+                BorderSizePixel = 0,
+                Text = "  " .. optionText,
+                TextColor3 = Theme.Text,
+                Font = Enum.Font.Gotham,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                AutoButtonColor = false,
+                LayoutOrder = index
+            }, scroll)
+            Corner(optionButton, 4)
+
+            optionButton.MouseButton1Click:Connect(function()
+                choose(optionText, true)
+            end)
+
+            table.insert(optionButtons, optionButton)
+        end
+
+        local exists = false
+        for _, option in ipairs(options) do
+            if tostring(option) == current then
+                exists = true
+                break
+            end
+        end
+
+        if not exists then
+            choose(options[1], true)
+        end
+
+        recalcMenu()
     end
 
     holder:SetAttribute("Value", current)
+    rebuild(options)
 
     arrow.MouseButton1Click:Connect(function()
         setOpen(not opened)
@@ -2939,6 +4316,17 @@ local function AddDropdown(parent, text, options)
             end
         end
     end)
+
+    UIControls[text] = {
+        Holder = holder,
+        SetOptions = rebuild,
+        SetValue = function(value)
+            choose(value, true)
+        end,
+        GetValue = function()
+            return current
+        end
+    }
 
     return holder
 end
@@ -3113,9 +4501,14 @@ local function BuildPage(pageData)
             elseif item.type == "input" then
                 obj = AddInput(page, item.text, item.placeholder, item.action and ActionRegistry[item.action] or nil)
             elseif item.type == "dropdown" then
-                obj = AddDropdown(page, item.text, item.options)
+                obj = AddDropdown(page, item.text, item.options, item.action and ActionRegistry[item.action] or nil)
             elseif item.type == "slider" then
-                obj = AddSlider(page, item.text, item.value, item.min, item.max, function(v) item.value = v end)
+                obj = AddSlider(page, item.text, item.value, item.min, item.max, function(v)
+                    item.value = v
+                    if item.action and ActionRegistry[item.action] then
+                        pcall(ActionRegistry[item.action], v)
+                    end
+                end)
             end
             if obj then
                 table.insert(sectionRecord.items, {object=obj, item=item})
@@ -3237,7 +4630,7 @@ do
     end)
 end
 
-local Floating = New("TextButton", {
+Floating = New("TextButton", {
     Position = UDim2.fromOffset(20, 180),
     Size = UDim2.fromOffset(48, 48),
     BackgroundColor3 = Theme.Header,
@@ -3264,6 +4657,32 @@ end)
 CloseBtn.MouseButton1Click:Connect(function()
     StatusRuntime.spamJoin = false
     StatusRuntime.monitorRunning = false
+
+    QuickRuntime.webhook.monitorRunning = false
+
+    if QuickRuntime.pvp.aimConnection then
+        QuickRuntime.pvp.aimConnection:Disconnect()
+    end
+    if QuickRuntime.pvp.waterConnection then
+        QuickRuntime.pvp.waterConnection:Disconnect()
+    end
+    if QuickRuntime.setting.keyConnection then
+        QuickRuntime.setting.keyConnection:Disconnect()
+    end
+    if QuickRuntime.setting.disconnectConnection then
+        QuickRuntime.setting.disconnectConnection:Disconnect()
+    end
+
+    for _, group in pairs(QuickRuntime.esp.connections) do
+        for _, connection in ipairs(group) do
+            pcall(function() connection:Disconnect() end)
+        end
+    end
+
+    if QuickRuntime.pvp.waterPart then
+        QuickRuntime.pvp.waterPart:Destroy()
+    end
+
     ScreenGui:Destroy()
 end)
 
@@ -3276,5 +4695,13 @@ task.spawn(function()
     pcall(StatusRuntime.updateHeavy)
 end)
 StatusRuntime.startMonitor()
+QuickRuntime.startWebhookMonitor()
+QuickRuntime.startGuiKey()
 
-print("[Tave Hub] Status & Server 2.1 FIXED loaded - live status monitor active.")
+task.defer(function()
+    if QuickRuntime.refreshPlayerDropdown then
+        QuickRuntime.refreshPlayerDropdown()
+    end
+end)
+
+print("[Tave Hub] Quick Pages 3 loaded - ESP, PVP, Webhook and Setting functional.")
