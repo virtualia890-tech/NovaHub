@@ -20,6 +20,22 @@ local LocalizationService = game:GetService("LocalizationService")
 
 local LocalPlayer = Players.LocalPlayer
 
+-- One owner per execution. Re-running this version stops its previous workers.
+local sessionEnvironment = (typeof(getgenv) == "function" and getgenv()) or _G
+local previousSession = sessionEnvironment.__TaveHubSession
+if type(previousSession) == "table" then
+    if type(previousSession.cleanup) == "function" then
+        pcall(previousSession.cleanup)
+    end
+    previousSession.alive = false
+end
+local session = {alive = true, connections = {}}
+sessionEnvironment.__TaveHubSession = session
+local function trackExternal(connection)
+    table.insert(session.connections, connection)
+    return connection
+end
+
 pcall(function()
     local guiParent = (typeof(gethui) == "function" and gethui() or CoreGui)
     local old = guiParent:FindFirstChild("NovaHub_UI_Base_2")
@@ -1286,6 +1302,7 @@ do
 
     task.spawn(function()
         task.wait(2.0)
+        if not session.alive then return end
         local pending = getgenv and getgenv().__TavePendingFight or nil
         if pending and FightStyles[pending] then
             if getgenv then
@@ -1296,7 +1313,7 @@ do
     end)
 
     task.spawn(function()
-        while task.wait(0.85) do
+        while session.alive and task.wait(0.85) do
             if ShopRuntime.autoLegendarySword then
                 for slot = 1, 3 do
                     if not ShopRuntime.autoLegendarySword then
@@ -1310,7 +1327,7 @@ do
     end)
 
     task.spawn(function()
-        while task.wait(0.85) do
+        while session.alive and task.wait(0.85) do
             if ShopRuntime.autoTrueTripleKatana then
                 commF("MysteriousMan", "1")
                 task.wait(0.10)
@@ -1318,8 +1335,127 @@ do
             end
         end
     end)
+
+    ShopRuntime.stop = function()
+        ShopRuntime.autoLegendarySword = false
+        ShopRuntime.autoTrueTripleKatana = false
+        for action in pairs(FightEngine.enabled) do
+            FightEngine.enabled[action] = false
+        end
+        FightEngine.activeAction = nil
+        cancelFightMove()
+    end
 end
 
+
+local WorldEventCache = {
+    mirage = false,
+    prehistoric = false,
+    frozen = false,
+    map = nil,
+    addedConnection = nil,
+    removingConnection = nil,
+}
+
+local function worldEventKind(name)
+    local low = string.lower(tostring(name or ""))
+
+    if string.find(low, "mysticisland", 1, true)
+        or string.find(low, "mirageisland", 1, true)
+        or string.find(low, "mirage island", 1, true)
+    then
+        return "mirage"
+    end
+
+    if string.find(low, "prehistoricisland", 1, true)
+        or string.find(low, "prehistoric island", 1, true)
+    then
+        return "prehistoric"
+    end
+
+    if string.find(low, "frozendimension", 1, true)
+        or string.find(low, "frozen dimension", 1, true)
+    then
+        return "frozen"
+    end
+
+    return nil
+end
+
+local function rebuildWorldEventCache()
+    WorldEventCache.mirage = false
+    WorldEventCache.prehistoric = false
+    WorldEventCache.frozen = false
+
+    local map = workspace:FindFirstChild("Map")
+    WorldEventCache.map = map
+    if not map then
+        return
+    end
+
+    for _, obj in ipairs(map:GetDescendants()) do
+        local kind = worldEventKind(obj.Name)
+        if kind then
+            WorldEventCache[kind] = true
+        end
+
+        if WorldEventCache.mirage
+            and WorldEventCache.prehistoric
+            and WorldEventCache.frozen
+        then
+            break
+        end
+    end
+end
+
+local function bindWorldEventCache()
+    if WorldEventCache.addedConnection then
+        WorldEventCache.addedConnection:Disconnect()
+        WorldEventCache.addedConnection = nil
+    end
+    if WorldEventCache.removingConnection then
+        WorldEventCache.removingConnection:Disconnect()
+        WorldEventCache.removingConnection = nil
+    end
+
+    local map = workspace:FindFirstChild("Map")
+    if not map then
+        return
+    end
+
+    WorldEventCache.map = map
+
+    WorldEventCache.addedConnection = map.DescendantAdded:Connect(function(obj)
+        local kind = worldEventKind(obj.Name)
+        if kind then
+            WorldEventCache[kind] = true
+        end
+    end)
+
+    WorldEventCache.removingConnection = map.DescendantRemoving:Connect(function(obj)
+        local kind = worldEventKind(obj.Name)
+        if kind then
+            -- Removal of a world event is rare; rebuild once only when it happens.
+            task.defer(rebuildWorldEventCache)
+        end
+    end)
+end
+
+task.spawn(function()
+    if not session.alive then return end
+    rebuildWorldEventCache()
+    if not session.alive then return end
+    bindWorldEventCache()
+
+    WorldEventCache.workspaceConnection = workspace.ChildAdded:Connect(function(child)
+        if child.Name == "Map" then
+            task.defer(function()
+                rebuildWorldEventCache()
+                bindWorldEventCache()
+            end)
+        end
+    end)
+end)
 
 -- ============================================================
 -- STATUS & SERVER RUNTIME
@@ -1335,6 +1471,8 @@ local StatusRuntime = {
     cachedElite = "--",
     cachedTyrantEyes = 0,
     cachedCakePrince = "--",
+    lastRemoteRefresh = -math.huge,
+    remoteRefreshRunning = false,
 }
 
 local StatusActions = {}
@@ -1618,8 +1756,6 @@ do
         local elapsed = os.clock() - StatusRuntime.startedAt
         local serverTime = workspace.DistributedGameTime or 0
 
-        setInfo("timer", "Timer: " .. formatTime(elapsed))
-        setInfo("server_timer", "Server Timer: " .. formatTime(serverTime))
         setInfo("place_id", "PlaceId: " .. tostring(game.PlaceId))
 
         local hasFist = playerHasItem({"Fist of Darkness"})
@@ -1650,49 +1786,18 @@ do
     end
 
     local function updateWorldStatus()
-        local map = workspace:FindFirstChild("Map")
-        local mirage = false
-        local prehistoric = false
-        local frozen = false
-
-        -- One map traversal updates all three world-event labels.
-        -- The old version could traverse the map several times every second.
-        if map then
-            local descendants = map:GetDescendants()
-            for i = 1, #descendants do
-                local low = string.lower(descendants[i].Name)
-
-                if not mirage and (
-                    string.find(low, "mysticisland", 1, true)
-                    or string.find(low, "mirageisland", 1, true)
-                    or string.find(low, "mirage island", 1, true)
-                ) then
-                    mirage = true
-                end
-
-                if not prehistoric and (
-                    string.find(low, "prehistoricisland", 1, true)
-                    or string.find(low, "prehistoric island", 1, true)
-                ) then
-                    prehistoric = true
-                end
-
-                if not frozen and (
-                    string.find(low, "frozendimension", 1, true)
-                    or string.find(low, "frozen dimension", 1, true)
-                ) then
-                    frozen = true
-                end
-
-                if mirage and prehistoric and frozen then
-                    break
-                end
-            end
-        end
-
-        setInfo("mirage", "Mirage Island: " .. (mirage and "✅" or "❌"))
-        setInfo("prehistoric", "Prehistoric Island: " .. (prehistoric and "✅" or "❌"))
-        setInfo("frozen", "Frozen Dimension: " .. (frozen and "✅" or "❌"))
+        setInfo(
+            "mirage",
+            "Mirage Island: " .. (WorldEventCache.mirage and "✅" or "❌")
+        )
+        setInfo(
+            "prehistoric",
+            "Prehistoric Island: " .. (WorldEventCache.prehistoric and "✅" or "❌")
+        )
+        setInfo(
+            "frozen",
+            "Frozen Dimension: " .. (WorldEventCache.frozen and "✅" or "❌")
+        )
     end
 
     local function updateAncientStatus()
@@ -1939,13 +2044,38 @@ do
     StatusRuntime.updateCake = updateCakeStatus
     StatusRuntime.updateHeavy = updateHeavyStatus
 
+    -- RemoteFunction calls are requested only when Status is opened. Keep one
+    -- request in flight at a time; opening another page cancels the queue.
+    StatusRuntime.refreshRemote = function()
+        if StatusRuntime.remoteRefreshRunning
+            or os.clock() - StatusRuntime.lastRemoteRefresh < 45
+        then
+            return
+        end
+        StatusRuntime.lastRemoteRefresh = os.clock()
+        StatusRuntime.remoteRefreshRunning = true
+        task.spawn(function()
+            for _, fn in ipairs({updateEliteStatus, updateTyrantStatus, updateCakeStatus}) do
+                if not session.alive or not ScreenGui or not ScreenGui.Parent
+                    or not StatusRuntime.isVisible or not StatusRuntime.isVisible()
+                then
+                    break
+                end
+                pcall(fn)
+                task.wait(1.2)
+            end
+            StatusRuntime.remoteRefreshRunning = false
+        end)
+    end
+
     local function runStatusLoop(initialDelay, interval, fn)
         task.spawn(function()
             if initialDelay and initialDelay > 0 then
                 task.wait(initialDelay)
             end
 
-            while StatusRuntime.monitorRunning do
+            while StatusRuntime.monitorRunning and session.alive
+                and ScreenGui and ScreenGui.Parent do
                 pcall(fn)
                 task.wait(interval)
             end
@@ -1960,17 +2090,20 @@ do
         StatusRuntime.monitorRunning = true
 
         -- Lightweight clock/status labels.
-        runStatusLoop(0, 1.0, StatusRuntime.updateFast)
+        runStatusLoop(0, 2.0, StatusRuntime.updateFast)
 
         -- Map/NPC scans no longer run inside the 1-second loop.
-        runStatusLoop(1.35, 3.8, StatusRuntime.updateWorld)
-        runStatusLoop(3.10, 9.7, StatusRuntime.updateAncient)
-
-        -- Network-heavy requests are intentionally staggered.
-        -- They never fire together in a single 4-second burst anymore.
-        runStatusLoop(0.80, 5.3, StatusRuntime.updateElite)
-        runStatusLoop(2.45, 7.1, StatusRuntime.updateTyrant)
-        runStatusLoop(4.15, 6.4, StatusRuntime.updateCake)
+        runStatusLoop(1.35, 10, StatusRuntime.updateWorld)
+        runStatusLoop(3.10, 30, function()
+            if StatusRuntime.isVisible and StatusRuntime.isVisible() then
+                StatusRuntime.updateAncient()
+            end
+        end)
+        runStatusLoop(60, 60, function()
+            if StatusRuntime.isVisible and StatusRuntime.isVisible() then
+                StatusRuntime.refreshRemote()
+            end
+        end)
     end
 end
 
@@ -2680,30 +2813,48 @@ do
             QuickRuntime.pvp.waterConnection:Disconnect()
         end
 
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.IgnoreWater = false
+        local lastSample = -math.huge
+        local waterY = nil
+        local hidden = false
+
         QuickRuntime.pvp.waterConnection = RunService.Heartbeat:Connect(function()
-            if not QuickRuntime.pvp.walkOnWater then return end
+            if not session.alive or not QuickRuntime.pvp.walkOnWater then return end
 
             local root = getRootQuick()
             if not root then
-                part.Position = Vector3.new(0, -10000, 0)
+                waterY = nil
+                if not hidden then
+                    part.Position = Vector3.new(0, -10000, 0)
+                    hidden = true
+                end
                 return
             end
 
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = {getCharacter(), part}
-            params.IgnoreWater = false
+            -- Raycasting and filter allocation every frame is unnecessary.
+            local now = os.clock()
+            if now - lastSample >= 0.15 then
+                lastSample = now
+                params.FilterDescendantsInstances = {getCharacter(), part}
+                local result = workspace:Raycast(
+                    root.Position + Vector3.new(0, 2, 0),
+                    Vector3.new(0, -14, 0),
+                    params
+                )
+                waterY = result and result.Material == Enum.Material.Water
+                    and (result.Position.Y + 0.05) or nil
+            end
 
-            local result = workspace:Raycast(
-                root.Position + Vector3.new(0, 2, 0),
-                Vector3.new(0, -14, 0),
-                params
-            )
-
-            if result and result.Material == Enum.Material.Water then
-                part.CFrame = CFrame.new(root.Position.X, result.Position.Y + 0.05, root.Position.Z)
+            if waterY then
+                part.CFrame = CFrame.new(root.Position.X, waterY, root.Position.Z)
+                hidden = false
             else
-                part.Position = Vector3.new(0, -10000, 0)
+                if not hidden then
+                    part.Position = Vector3.new(0, -10000, 0)
+                    hidden = true
+                end
             end
         end)
 
@@ -2975,12 +3126,27 @@ do
             or ReplicatedStorage:FindFirstChild("IDK", true) ~= nil
     end
 
+    local function webhookMonitorHasWork()
+        return QuickRuntime.webhook.storeFruit
+            or QuickRuntime.webhook.prehistoric
+            or QuickRuntime.webhook.leviathan
+            or QuickRuntime.webhook.destroyIDK
+            or QuickRuntime.webhook.mirage
+    end
+
     local function startWebhookMonitor()
         if QuickRuntime.webhook.monitorRunning then return end
         QuickRuntime.webhook.monitorRunning = true
 
         task.spawn(function()
             while QuickRuntime.webhook.monitorRunning and ScreenGui and ScreenGui.Parent do
+                -- Important: the old build scanned the whole Map every 2 seconds
+                -- even when every webhook toggle was OFF.
+                if not webhookMonitorHasWork() then
+                    task.wait(1.25)
+                    continue
+                end
+
                 if QuickRuntime.webhook.storeFruit then
                     for _, container in ipairs({
                         LocalPlayer:FindFirstChildOfClass("Backpack"),
@@ -3003,43 +3169,40 @@ do
                     end
                 end
 
-                local prehistoricNow = mapHas({"PrehistoricIsland", "Prehistoric Island"})
-                if QuickRuntime.webhook.prehistoric
-                    and prehistoricNow
-                    and not QuickRuntime.webhook.states.prehistoric
-                then
-                    sendWebhook("Prehistoric Island", "Prehistoric Island spawned ✅")
+                if QuickRuntime.webhook.prehistoric then
+                    local prehistoricNow = WorldEventCache.prehistoric == true
+                    if prehistoricNow and not QuickRuntime.webhook.states.prehistoric then
+                        sendWebhook("Prehistoric Island", "Prehistoric Island spawned ✅")
+                    end
+                    QuickRuntime.webhook.states.prehistoric = prehistoricNow
                 end
-                QuickRuntime.webhook.states.prehistoric = prehistoricNow
 
-                local leviathanNow = leviathanExists()
-                if QuickRuntime.webhook.leviathan
-                    and leviathanNow
-                    and not QuickRuntime.webhook.states.leviathan
-                then
-                    sendWebhook("Leviathan", "Leviathan found ✅")
+                if QuickRuntime.webhook.leviathan then
+                    local leviathanNow = leviathanExists()
+                    if leviathanNow and not QuickRuntime.webhook.states.leviathan then
+                        sendWebhook("Leviathan", "Leviathan found ✅")
+                    end
+                    QuickRuntime.webhook.states.leviathan = leviathanNow
                 end
-                QuickRuntime.webhook.states.leviathan = leviathanNow
 
-                local mirageNow = mapHas({"MysticIsland", "MirageIsland", "Mirage Island"})
-                if QuickRuntime.webhook.mirage
-                    and mirageNow
-                    and not QuickRuntime.webhook.states.mirage
-                then
-                    sendWebhook("Mirage Island", "Mirage Island spawned ✅")
+                if QuickRuntime.webhook.mirage then
+                    local mirageNow = WorldEventCache.mirage == true
+                    if mirageNow and not QuickRuntime.webhook.states.mirage then
+                        sendWebhook("Mirage Island", "Mirage Island spawned ✅")
+                    end
+                    QuickRuntime.webhook.states.mirage = mirageNow
                 end
-                QuickRuntime.webhook.states.mirage = mirageNow
 
-                local idkNow = idkExists()
-                if QuickRuntime.webhook.destroyIDK
-                    and not idkNow
-                    and QuickRuntime.webhook.states.idk
-                then
-                    sendWebhook("Destroy IDK", "IDK object was destroyed / removed.")
+                if QuickRuntime.webhook.destroyIDK then
+                    local idkNow = idkExists()
+                    if not idkNow and QuickRuntime.webhook.states.idk then
+                        sendWebhook("Destroy IDK", "IDK object was destroyed / removed.")
+                    end
+                    QuickRuntime.webhook.states.idk = idkNow
                 end
-                QuickRuntime.webhook.states.idk = idkNow
 
-                task.wait(2)
+                -- Active webhook checks are intentionally slow and selective.
+                task.wait(4.5)
             end
         end)
     end
@@ -4614,7 +4777,7 @@ local function UpdateScale()
 end
 UpdateScale()
 if workspace.CurrentCamera then
-    workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
+    trackExternal(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale))
 end
 
 local Header = New("Frame", {
@@ -5324,21 +5487,21 @@ local function AddSlider(parent, text, value, minValue, maxValue, onChanged)
         end
     end)
 
-    UserInputService.InputChanged:Connect(function(input)
+    trackExternal(UserInputService.InputChanged:Connect(function(input)
         if not dragging then return end
         if input.UserInputType == Enum.UserInputType.MouseMovement then
             setFromX(input.Position.X)
         elseif input.UserInputType == Enum.UserInputType.Touch and (activeInput == input or activeInput == nil) then
             setFromX(input.Position.X)
         end
-    end)
+    end))
 
-    UserInputService.InputEnded:Connect(function(input)
+    trackExternal(UserInputService.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
             activeInput = nil
         end
-    end)
+    end))
 
     setValue(currentValue, false)
     return row
@@ -5411,6 +5574,9 @@ end
 local SelectedPage = nil
 local function ShowPage(name)
     SelectedPage = name
+    if name == "Status & Server" then
+        StatusRuntime.refreshRemote()
+    end
     PageTitle.Text = name
     for pageName, page in pairs(PageFrames) do
         page.Visible = pageName == name
@@ -5422,6 +5588,9 @@ local function ShowPage(name)
         rec.button.TextColor3 = selected and Theme.Text or Theme.Text
         rec.bar.Visible = selected
     end
+end
+StatusRuntime.isVisible = function()
+    return SelectedPage == "Status & Server" and Main and Main.Visible
 end
 
 for index, pageData in ipairs(PagesData) do
@@ -5503,7 +5672,7 @@ do
         end
     end)
 
-    UserInputService.InputChanged:Connect(function(input)
+    trackExternal(UserInputService.InputChanged:Connect(function(input)
         if not dragging then return end
         if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
         local delta = input.Position - dragStart
@@ -5511,7 +5680,7 @@ do
             startPos.X.Scale, startPos.X.Offset + delta.X,
             startPos.Y.Scale, startPos.Y.Offset + delta.Y
         )
-    end)
+    end))
 end
 
 Floating = New("TextButton", {
@@ -5538,15 +5707,19 @@ Floating.MouseButton1Click:Connect(function()
     Main.Visible = true
 end)
 
-CloseBtn.MouseButton1Click:Connect(function()
+local function stopHub()
+    if not session.alive then return end
+    session.alive = false
     StatusRuntime.spamJoin = false
     StatusRuntime.monitorRunning = false
-
     QuickRuntime.webhook.monitorRunning = false
+    if ShopRuntime.stop then ShopRuntime.stop() end
 
     if LocalRuntime and LocalRuntime.stop then
         pcall(LocalRuntime.stop)
     end
+
+    QuickRuntime.pvp.walkOnWater = false
 
     if QuickRuntime.pvp.aimConnection then
         QuickRuntime.pvp.aimConnection:Disconnect()
@@ -5560,6 +5733,21 @@ CloseBtn.MouseButton1Click:Connect(function()
     if QuickRuntime.setting.disconnectConnection then
         QuickRuntime.setting.disconnectConnection:Disconnect()
     end
+    for _, connection in ipairs(QuickRuntime.setting.notificationConnections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    if WorldEventCache.addedConnection then
+        WorldEventCache.addedConnection:Disconnect()
+    end
+    if WorldEventCache.removingConnection then
+        WorldEventCache.removingConnection:Disconnect()
+    end
+    if WorldEventCache.workspaceConnection then
+        WorldEventCache.workspaceConnection:Disconnect()
+    end
+    for _, connection in ipairs(session.connections) do
+        pcall(function() connection:Disconnect() end)
+    end
 
     for _, group in pairs(QuickRuntime.esp.connections) do
         for _, connection in ipairs(group) do
@@ -5571,32 +5759,21 @@ CloseBtn.MouseButton1Click:Connect(function()
         QuickRuntime.pvp.waterPart:Destroy()
     end
 
-    ScreenGui:Destroy()
-end)
+    if ScreenGui then ScreenGui:Destroy() end
+    if sessionEnvironment.__TaveHubSession == session then
+        sessionEnvironment.__TaveHubSession = nil
+    end
+end
+session.cleanup = stopHub
+CloseBtn.MouseButton1Click:Connect(stopHub)
+ScreenGui.Destroying:Connect(stopHub)
 
 ShowPage("Shop")
 
--- Labels already exist at this point, so populate them immediately instead of
--- waiting for the first background cycle.
+-- Populate cheap local status once. Remote status refreshes when its page opens.
 pcall(StatusRuntime.updateFast)
 task.spawn(function()
     pcall(StatusRuntime.updateWorld)
-end)
-task.spawn(function()
-    task.wait(0.45)
-    pcall(StatusRuntime.updateAncient)
-end)
-task.spawn(function()
-    task.wait(0.90)
-    pcall(StatusRuntime.updateElite)
-end)
-task.spawn(function()
-    task.wait(1.75)
-    pcall(StatusRuntime.updateTyrant)
-end)
-task.spawn(function()
-    task.wait(2.60)
-    pcall(StatusRuntime.updateCake)
 end)
 StatusRuntime.startMonitor()
 QuickRuntime.startWebhookMonitor()
@@ -5608,4 +5785,4 @@ task.defer(function()
     end
 end)
 
-print("[Tave Hub] LocalPlayer 4 loaded - LocalPlayer page functional; approved smooth teleport reused.")
+print("[Tave Hub] LocalPlayer 4.3 loaded - background polling and session cleanup updated.")
