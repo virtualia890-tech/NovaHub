@@ -31,6 +31,16 @@ if type(previousSession) == "table" then
 end
 local session = {alive = true, connections = {}}
 sessionEnvironment.__TaveHubSession = session
+local MovementConfig = {speed = 170}
+local FarmSettings = {
+    autoClick = false, dragonStormAura = false, autoBuso = false,
+    autoObservation = false, autoV4 = false, autoV3 = false,
+    autoDodgeMobs = false, lowHealthTeleport = false,
+    healthPercent = 40, teleportY = 800, safeTweenWithItems = false,
+    hopMinutes = 10, usePortalTeleport = false, bringMobCount = 2,
+    bringMob = false, resetTeleport = false, tweenSpeed = 170,
+}
+sessionEnvironment.__TaveFarmSettings = FarmSettings
 local function trackExternal(connection)
     table.insert(session.connections, connection)
     return connection
@@ -725,7 +735,7 @@ do
         -- Cancel any older Fighting Shop movement.
         FightEngine.moveNonce = FightEngine.moveNonce + 1
         local nonce = FightEngine.moveNonce
-        local speed = FightEngine.travelSpeed
+        local speed = MovementConfig.speed
 
         humanoid.Sit = false
 
@@ -2298,7 +2308,7 @@ do
             return true
         end
 
-        local duration = math.max(distance / 170, 0.12)
+        local duration = math.max(distance / MovementConfig.speed, 0.12)
         local tween = TweenService:Create(
             root,
             TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
@@ -3602,7 +3612,7 @@ do
             lpNotify("Character is not ready for teleport.")
             return false
         end
-        local seconds = math.ceil((root.Position - targetCFrame.Position).Magnitude / 170)
+        local seconds = math.ceil((root.Position - targetCFrame.Position).Magnitude / MovementConfig.speed)
         lpNotify("Going to " .. label .. " (~" .. tostring(seconds) .. "s). Stop Tween cancels travel.")
         local arrived = smoothGo(targetCFrame)
         if not arrived and session.alive then
@@ -4325,10 +4335,180 @@ do
     end
 end
 
+-- ============================================================
+-- SETTING FARM
+-- Options that need an active farming target are stored here for the Farming
+-- runtime. Independent actions run only while their own toggle is enabled.
+-- ============================================================
+local SettingFarmActions = {}
+local FarmRuntime = {
+    clickRunning = false,
+    busoCharacterConnection = nil,
+    healthCharacterConnection = nil,
+    healthConnection = nil,
+    healthBindNonce = 0,
+    lowHealthTriggered = false,
+}
+
+do
+    local function farmNotify(message)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "Tave Hub - Setting Farm",
+                Text = tostring(message), Duration = 3
+            })
+        end)
+    end
+
+    local function activateBuso()
+        if not session.alive or not FarmSettings.autoBuso then return end
+        local character = LocalPlayer.Character
+        if not character then return end
+        local marker = character:FindFirstChild("HasBuso")
+        if marker and (not marker:IsA("BoolValue") or marker.Value) then return end
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("CommF_")
+        if remote then
+            pcall(function() remote:InvokeServer("Buso") end)
+        end
+    end
+
+    local function bindHealth(character)
+        FarmRuntime.healthBindNonce = FarmRuntime.healthBindNonce + 1
+        local nonce = FarmRuntime.healthBindNonce
+        if FarmRuntime.healthConnection then
+            FarmRuntime.healthConnection:Disconnect()
+            FarmRuntime.healthConnection = nil
+        end
+        FarmRuntime.lowHealthTriggered = false
+        if not character then return end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+            or character:WaitForChild("Humanoid", 5)
+        if not humanoid or not FarmSettings.lowHealthTeleport
+            or nonce ~= FarmRuntime.healthBindNonce then return end
+
+        FarmRuntime.healthConnection = humanoid.HealthChanged:Connect(function(health)
+            if not session.alive or not FarmSettings.lowHealthTeleport then return end
+            local threshold = humanoid.MaxHealth * FarmSettings.healthPercent / 100
+            if health > threshold then
+                FarmRuntime.lowHealthTriggered = false
+                return
+            end
+            if health <= 0 or FarmRuntime.lowHealthTriggered then return end
+            FarmRuntime.lowHealthTriggered = true
+            task.spawn(function()
+                local root = character:FindFirstChild("HumanoidRootPart")
+                if not root or not root.Parent then return end
+                local target = root.CFrame + Vector3.new(0, FarmSettings.teleportY, 0)
+                if QuickRuntime.smoothTeleport then
+                    QuickRuntime.smoothTeleport(target)
+                end
+            end)
+        end)
+    end
+
+    SettingFarmActions.farm_auto_click = function(enabled)
+        FarmSettings.autoClick = enabled == true
+        if not enabled or FarmRuntime.clickRunning then return true end
+        FarmRuntime.clickRunning = true
+        task.spawn(function()
+            while session.alive and FarmSettings.autoClick do
+                local character = LocalPlayer.Character
+                local tool = character and character:FindFirstChildOfClass("Tool")
+                if tool and tool.Enabled then
+                    pcall(function() tool:Activate() end)
+                end
+                task.wait(tool and 0.20 or 0.45)
+            end
+            FarmRuntime.clickRunning = false
+        end)
+        return true
+    end
+
+    SettingFarmActions.farm_auto_buso = function(enabled)
+        FarmSettings.autoBuso = enabled == true
+        if FarmRuntime.busoCharacterConnection then
+            FarmRuntime.busoCharacterConnection:Disconnect()
+            FarmRuntime.busoCharacterConnection = nil
+        end
+        if enabled then
+            FarmRuntime.busoCharacterConnection = LocalPlayer.CharacterAdded:Connect(function()
+                task.delay(1, activateBuso)
+            end)
+            task.spawn(activateBuso)
+        end
+        return true
+    end
+
+    SettingFarmActions.farm_low_health = function(enabled)
+        FarmSettings.lowHealthTeleport = enabled == true
+        if FarmRuntime.healthCharacterConnection then
+            FarmRuntime.healthCharacterConnection:Disconnect()
+            FarmRuntime.healthCharacterConnection = nil
+        end
+        if enabled then
+            FarmRuntime.healthCharacterConnection = LocalPlayer.CharacterAdded:Connect(function(character)
+                task.spawn(bindHealth, character)
+            end)
+            task.spawn(bindHealth, LocalPlayer.Character)
+        else
+            bindHealth(nil)
+        end
+        return true
+    end
+
+    local passiveFlags = {
+        farm_dragon_storm = "dragonStormAura",
+        farm_auto_observation = "autoObservation",
+        farm_auto_v4 = "autoV4", farm_auto_v3 = "autoV3",
+        farm_dodge_mobs = "autoDodgeMobs",
+        farm_safe_items = "safeTweenWithItems",
+        farm_portal = "usePortalTeleport", farm_bring_mob = "bringMob",
+        farm_reset_teleport = "resetTeleport",
+    }
+    for action, key in pairs(passiveFlags) do
+        SettingFarmActions[action] = function(enabled)
+            FarmSettings[key] = enabled == true
+            if enabled then
+                farmNotify("Saved for the Farming runtime; no target is active yet.")
+            end
+            return true
+        end
+    end
+
+    local sliders = {
+        farm_health_percent = {key = "healthPercent", min = 0, max = 100},
+        farm_teleport_y = {key = "teleportY", min = 0, max = 2000},
+        farm_hop_minutes = {key = "hopMinutes", min = 1, max = 60},
+        farm_bring_count = {key = "bringMobCount", min = 1, max = 10},
+        farm_tween_speed = {key = "tweenSpeed", min = 50, max = 400},
+    }
+    for action, spec in pairs(sliders) do
+        SettingFarmActions[action] = function(value)
+            local number = math.clamp(tonumber(value) or spec.min, spec.min, spec.max)
+            FarmSettings[spec.key] = number
+            if spec.key == "tweenSpeed" then
+                MovementConfig.speed = number
+            end
+            return true
+        end
+    end
+
+    FarmRuntime.stop = function()
+        FarmRuntime.healthBindNonce = FarmRuntime.healthBindNonce + 1
+        FarmSettings.autoClick = false
+        FarmSettings.autoBuso = false
+        FarmSettings.lowHealthTeleport = false
+        if FarmRuntime.busoCharacterConnection then FarmRuntime.busoCharacterConnection:Disconnect() end
+        if FarmRuntime.healthCharacterConnection then FarmRuntime.healthCharacterConnection:Disconnect() end
+        if FarmRuntime.healthConnection then FarmRuntime.healthConnection:Disconnect() end
+    end
+end
+
 
 local ActionRegistry = setmetatable(LocalActions, {
     __index = function(_, key)
-        return QuickActions[key] or StatusActions[key] or ShopActions[key]
+        return SettingFarmActions[key] or QuickActions[key] or StatusActions[key] or ShopActions[key]
     end
 })
 
@@ -4424,23 +4604,23 @@ local PagesData = {
     } },
     { name = "Setting Farm", sections = {
         { title = "Farm Setting", items = {
-            { type = "toggle", text = "Auto Click" },
-            { type = "toggle", text = "Kill Aura With DragonStorm" },
-            { type = "toggle", text = "Auto Turn On Buso" },
-            { type = "toggle", text = "Auto Turn On Observation" },
-            { type = "toggle", text = "Auto Turn On V4" },
-            { type = "toggle", text = "Auto Turn On V3" },
-            { type = "toggle", text = "Auto Dodge Skill Mobs" },
-            { type = "toggle", text = "Teleport Y if low health" },
-            { type = "slider", text = "% Health Player", value = 40, min = 0, max = 100 },
-            { type = "slider", text = "Distance Teleport Y", value = 800, min = 0, max = 2000 },
-            { type = "toggle", text = "Tween Safe if have Items" },
-            { type = "slider", text = "Time Hop Server", value = 10, min = 1, max = 60 },
-            { type = "toggle", text = "Use Portal Teleport" },
-            { type = "slider", text = "Bring Mob Count", value = 2, min = 1, max = 10 },
-            { type = "toggle", text = "Bring Mob" },
-            { type = "toggle", text = "Reset Teleport [Beta]" },
-            { type = "slider", text = "Tween Speed", value = 170, min = 50, max = 400 },
+            { type = "toggle", text = "Auto Click", action = "farm_auto_click" },
+            { type = "toggle", text = "Kill Aura With DragonStorm", action = "farm_dragon_storm" },
+            { type = "toggle", text = "Auto Turn On Buso", action = "farm_auto_buso" },
+            { type = "toggle", text = "Auto Turn On Observation", action = "farm_auto_observation" },
+            { type = "toggle", text = "Auto Turn On V4", action = "farm_auto_v4" },
+            { type = "toggle", text = "Auto Turn On V3", action = "farm_auto_v3" },
+            { type = "toggle", text = "Auto Dodge Skill Mobs", action = "farm_dodge_mobs" },
+            { type = "toggle", text = "Teleport Y if low health", action = "farm_low_health" },
+            { type = "slider", text = "% Health Player", value = 40, min = 0, max = 100, action = "farm_health_percent" },
+            { type = "slider", text = "Distance Teleport Y", value = 800, min = 0, max = 2000, action = "farm_teleport_y" },
+            { type = "toggle", text = "Tween Safe if have Items", action = "farm_safe_items" },
+            { type = "slider", text = "Time Hop Server", value = 10, min = 1, max = 60, action = "farm_hop_minutes" },
+            { type = "toggle", text = "Use Portal Teleport", action = "farm_portal" },
+            { type = "slider", text = "Bring Mob Count", value = 2, min = 1, max = 10, action = "farm_bring_count" },
+            { type = "toggle", text = "Bring Mob", action = "farm_bring_mob" },
+            { type = "toggle", text = "Reset Teleport [Beta]", action = "farm_reset_teleport" },
+            { type = "slider", text = "Tween Speed", value = 170, min = 50, max = 400, action = "farm_tween_speed" },
         } },
     } },
     { name = "Hold and Select Skill", sections = {
@@ -5787,6 +5967,7 @@ local function stopHub()
     StatusRuntime.monitorRunning = false
     QuickRuntime.webhook.monitorRunning = false
     if ShopRuntime.stop then ShopRuntime.stop() end
+    if FarmRuntime.stop then FarmRuntime.stop() end
 
     if LocalRuntime and LocalRuntime.stop then
         pcall(LocalRuntime.stop)
@@ -5836,6 +6017,9 @@ local function stopHub()
     if sessionEnvironment.__TaveHubSession == session then
         sessionEnvironment.__TaveHubSession = nil
     end
+    if sessionEnvironment.__TaveFarmSettings == FarmSettings then
+        sessionEnvironment.__TaveFarmSettings = nil
+    end
 end
 session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
@@ -5858,4 +6042,4 @@ task.defer(function()
     end
 end)
 
-print("[Tave Hub] LocalPlayer 4.4 loaded - Sea detection and LocalPlayer travel updated.")
+print("[Tave Hub] Setting Farm 5 loaded - independent controls and farm settings connected.")
