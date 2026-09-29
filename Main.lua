@@ -1361,7 +1361,10 @@ do
     local function setInfo(key, value)
         local label = StatusRuntime.infoLabels[key]
         if label and label.Parent then
-            label.Text = tostring(value)
+            local nextText = tostring(value)
+            if label.Text ~= nextText then
+                label.Text = nextText
+            end
         end
     end
 
@@ -1641,34 +1644,89 @@ do
             )
         end
 
+        -- These checks only inspect direct children / Lighting and are cheap.
         setInfo("leviathan", "Leviathan: " .. getLeviathanStatus())
-        setInfo(
-            "mirage",
-            "Mirage Island: "
-                .. (checkMapObject({"MysticIsland", "MirageIsland", "Mirage Island"}, true) and "✅" or "❌")
-        )
-        setInfo(
-            "prehistoric",
-            "Prehistoric Island: "
-                .. (checkMapObject({"PrehistoricIsland", "Prehistoric Island"}, false) and "✅" or "❌")
-        )
-        setInfo(
-            "frozen",
-            "Frozen Dimension: "
-                .. (checkMapObject({"FrozenDimension", "Frozen Dimension"}, true) and "✅" or "❌")
-        )
         setInfo("moon", "Moon Phase: " .. getMoonPhase())
+    end
+
+    local function updateWorldStatus()
+        local map = workspace:FindFirstChild("Map")
+        local mirage = false
+        local prehistoric = false
+        local frozen = false
+
+        -- One map traversal updates all three world-event labels.
+        -- The old version could traverse the map several times every second.
+        if map then
+            local descendants = map:GetDescendants()
+            for i = 1, #descendants do
+                local low = string.lower(descendants[i].Name)
+
+                if not mirage and (
+                    string.find(low, "mysticisland", 1, true)
+                    or string.find(low, "mirageisland", 1, true)
+                    or string.find(low, "mirage island", 1, true)
+                ) then
+                    mirage = true
+                end
+
+                if not prehistoric and (
+                    string.find(low, "prehistoricisland", 1, true)
+                    or string.find(low, "prehistoric island", 1, true)
+                ) then
+                    prehistoric = true
+                end
+
+                if not frozen and (
+                    string.find(low, "frozendimension", 1, true)
+                    or string.find(low, "frozen dimension", 1, true)
+                ) then
+                    frozen = true
+                end
+
+                if mirage and prehistoric and frozen then
+                    break
+                end
+            end
+        end
+
+        setInfo("mirage", "Mirage Island: " .. (mirage and "✅" or "❌"))
+        setInfo("prehistoric", "Prehistoric Island: " .. (prehistoric and "✅" or "❌"))
+        setInfo("frozen", "Frozen Dimension: " .. (frozen and "✅" or "❌"))
+    end
+
+    local function updateAncientStatus()
         setInfo("ancient_one", "Ancient One: " .. getAncientOneStatus())
     end
 
-    local function updateHeavyStatus()
+    local function updateEliteStatus()
         StatusRuntime.cachedElite = getEliteStatus()
-        StatusRuntime.cachedTyrantEyes = getTyrantEyes()
-        StatusRuntime.cachedCakePrince = getCakePrinceStatus()
-
         setInfo("elite", StatusRuntime.cachedElite)
+    end
+
+    local function updateTyrantStatus()
+        StatusRuntime.cachedTyrantEyes = getTyrantEyes()
         setInfo("tyrant_eyes", "Tyrant Eyes: " .. tostring(StatusRuntime.cachedTyrantEyes) .. " Eyes")
+    end
+
+    local function updateCakeStatus()
+        StatusRuntime.cachedCakePrince = getCakePrinceStatus()
         setInfo("cake_prince", "Cake Prince: " .. tostring(StatusRuntime.cachedCakePrince))
+    end
+
+    local function updateHeavyStatus()
+        -- Kept as a manual refresh entry point, but each request runs independently.
+        task.spawn(function()
+            pcall(updateEliteStatus)
+        end)
+        task.spawn(function()
+            task.wait(0.35)
+            pcall(updateTyrantStatus)
+        end)
+        task.spawn(function()
+            task.wait(0.70)
+            pcall(updateCakeStatus)
+        end)
     end
 
     local function httpGet(url)
@@ -1872,9 +1930,27 @@ do
         return true
     end
 
-    -- Expose explicit refresh functions so the UI can force an immediate first update.
+    -- Explicit refresh functions used by the UI and startup.
     StatusRuntime.updateFast = updateFastStatus
+    StatusRuntime.updateWorld = updateWorldStatus
+    StatusRuntime.updateAncient = updateAncientStatus
+    StatusRuntime.updateElite = updateEliteStatus
+    StatusRuntime.updateTyrant = updateTyrantStatus
+    StatusRuntime.updateCake = updateCakeStatus
     StatusRuntime.updateHeavy = updateHeavyStatus
+
+    local function runStatusLoop(initialDelay, interval, fn)
+        task.spawn(function()
+            if initialDelay and initialDelay > 0 then
+                task.wait(initialDelay)
+            end
+
+            while StatusRuntime.monitorRunning do
+                pcall(fn)
+                task.wait(interval)
+            end
+        end)
+    end
 
     StatusRuntime.startMonitor = function()
         if StatusRuntime.monitorRunning then
@@ -1883,23 +1959,18 @@ do
 
         StatusRuntime.monitorRunning = true
 
-        -- Fast status: isolated updates every second. A failure in one cycle does
-        -- not stop the following cycles or the heavy monitor.
-        task.spawn(function()
-            while StatusRuntime.monitorRunning do
-                pcall(StatusRuntime.updateFast)
-                task.wait(1)
-            end
-        end)
+        -- Lightweight clock/status labels.
+        runStatusLoop(0, 1.0, StatusRuntime.updateFast)
 
-        -- Remote/heavier checks are separated so Cake/Elite/inventory calls cannot
-        -- freeze Timer, Server Timer, Moon, Islands, etc.
-        task.spawn(function()
-            while StatusRuntime.monitorRunning do
-                pcall(StatusRuntime.updateHeavy)
-                task.wait(4)
-            end
-        end)
+        -- Map/NPC scans no longer run inside the 1-second loop.
+        runStatusLoop(1.35, 3.8, StatusRuntime.updateWorld)
+        runStatusLoop(3.10, 9.7, StatusRuntime.updateAncient)
+
+        -- Network-heavy requests are intentionally staggered.
+        -- They never fire together in a single 4-second burst anymore.
+        runStatusLoop(0.80, 5.3, StatusRuntime.updateElite)
+        runStatusLoop(2.45, 7.1, StatusRuntime.updateTyrant)
+        runStatusLoop(4.15, 6.4, StatusRuntime.updateCake)
     end
 end
 
@@ -3393,37 +3464,6 @@ do
         return true
     end
 
-    LocalActions.lp_fix_ui = function()
-        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-        if not playerGui then
-            return false
-        end
-
-        local fixed = 0
-
-        for _, obj in ipairs(playerGui:GetDescendants()) do
-            pcall(function()
-                if obj:IsA("ScreenGui") then
-                    obj.Enabled = true
-                    fixed = fixed + 1
-                elseif obj:IsA("GuiButton") then
-                    obj.Active = true
-                    obj.Selectable = true
-                    obj.AutoButtonColor = true
-                    fixed = fixed + 1
-                end
-            end)
-        end
-
-        local main = playerGui:FindFirstChild("Main")
-        if main and main:IsA("ScreenGui") then
-            main.Enabled = true
-        end
-
-        lpNotify("Game UI buttons refreshed: " .. tostring(fixed))
-        return true
-    end
-
     LocalActions.lp_show_item = function()
         commFLocal("getInventoryWeapons")
         task.wait(0.15)
@@ -4120,7 +4160,6 @@ local PagesData = {
         { title = "Utility", items = {
             { type = "toggle", text = "Auto Translate", action = "lp_auto_translate" },
             { type = "button", text = "Stop Tween", action = "lp_stop_tween" },
-            { type = "button", text = "Fix UI Button Game", action = "lp_fix_ui" },
             { type = "button", text = "Show Item", action = "lp_show_item" },
             { type = "button", text = "Open Devil Fruit Shop", action = "lp_open_fruit_shop" },
             { type = "button", text = "Open Devil Fruit Shop Mirage", action = "lp_open_fruit_shop_mirage" },
@@ -5541,7 +5580,23 @@ ShowPage("Shop")
 -- waiting for the first background cycle.
 pcall(StatusRuntime.updateFast)
 task.spawn(function()
-    pcall(StatusRuntime.updateHeavy)
+    pcall(StatusRuntime.updateWorld)
+end)
+task.spawn(function()
+    task.wait(0.45)
+    pcall(StatusRuntime.updateAncient)
+end)
+task.spawn(function()
+    task.wait(0.90)
+    pcall(StatusRuntime.updateElite)
+end)
+task.spawn(function()
+    task.wait(1.75)
+    pcall(StatusRuntime.updateTyrant)
+end)
+task.spawn(function()
+    task.wait(2.60)
+    pcall(StatusRuntime.updateCake)
 end)
 StatusRuntime.startMonitor()
 QuickRuntime.startWebhookMonitor()
