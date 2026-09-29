@@ -1,8 +1,8 @@
 
--- Tave Hub Quick Pages 3
+-- Tave Hub LocalPlayer 4
 -- UI based on the supplied screenshots/videos.
--- Quick Pages 3: preserves Shop + Status/Server and connects ESP, PVP, Tab Webhook and Setting.
--- Shop, Status & Server, ESP, PVP, Tab Webhook and Setting are functional.
+-- LocalPlayer 4: preserves all approved pages and connects the complete LocalPlayer page.
+-- Shop, Status & Server, LocalPlayer, ESP, PVP, Tab Webhook and Setting are functional.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -16,6 +16,7 @@ local HttpService = game:GetService("HttpService")
 local Lighting = game:GetService("Lighting")
 local GuiService = game:GetService("GuiService")
 local CollectionService = game:GetService("CollectionService")
+local LocalizationService = game:GetService("LocalizationService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -42,6 +43,10 @@ pcall(function()
     old = guiParent:FindFirstChild("TaveHub_StatusServer_2_1_FIXED")
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_QuickPages_3")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_QuickPages_3_1_WATER_DEFAULT")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_LocalPlayer_4")
     if old then old:Destroy() end
 end)
 
@@ -1930,7 +1935,7 @@ local QuickRuntime = {
         autoAimbotGun = false,
         walkSpeed = 16,
         jumpPower = 50,
-        walkOnWater = false,
+        walkOnWater = true,
         waterPart = nil,
         moveNonce = 0,
         aimConnection = nil,
@@ -2138,6 +2143,18 @@ do
         end)
 
         return (root.Position - targetCFrame.Position).Magnitude <= 20
+    end
+
+    QuickRuntime.smoothTeleport = smoothTeleport
+    QuickRuntime.stopSmoothTeleport = function()
+        QuickRuntime.pvp.moveNonce = QuickRuntime.pvp.moveNonce + 1
+        local root = getRootQuick()
+        if root then
+            pcall(function()
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
     end
 
     -- --------------------------------------------------------
@@ -3212,9 +3229,830 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/virtualia890-tech/Nov
 end
 
 
-local ActionRegistry = setmetatable(QuickActions, {
+
+-- ============================================================
+-- LOCALPLAYER RUNTIME
+-- Reuses the same continuous smooth teleport approved in Shop/PVP.
+-- ============================================================
+local LocalRuntime = {
+    autoTranslate = false,
+    translator = nil,
+    translateConnection = nil,
+    originalText = {},
+
+    selectedStat = "Demon Fruit",
+    autoStats = false,
+    selectedTeam = "Pirate",
+
+    noclip = false,
+    noclipConnection = nil,
+    collisionState = {},
+
+    selectedNpc = "Experienced Captain",
+    selectedIsland = "Hydra Island",
+}
+
+local LocalActions = {}
+
+do
+    local function lpNotify(message)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "Tave Hub - LocalPlayer",
+                Text = tostring(message or ""),
+                Duration = 3
+            })
+        end)
+    end
+
+    local function commFLocal(...)
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("CommF_")
+        if not remote then
+            return false, "CommF_ not found"
+        end
+
+        local args = table.pack(...)
+        local ok, result = pcall(function()
+            return remote:InvokeServer(table.unpack(args, 1, args.n))
+        end)
+
+        return ok, result
+    end
+
+    local function currentSeaLocal()
+        if game.PlaceId == 2753915549 then return 1 end
+        if game.PlaceId == 4442272183 then return 2 end
+        if game.PlaceId == 7449423635 then return 3 end
+        return 0
+    end
+
+    local function getLocalRoot()
+        local character = LocalPlayer.Character
+        return character and (
+            character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("Torso")
+            or character.PrimaryPart
+        ) or nil
+    end
+
+    local function smoothGo(targetCFrame)
+        if not targetCFrame then
+            return false
+        end
+
+        if QuickRuntime and QuickRuntime.smoothTeleport then
+            return QuickRuntime.smoothTeleport(targetCFrame)
+        end
+
+        return false
+    end
+
+    local function cancelMove()
+        if QuickRuntime and QuickRuntime.stopSmoothTeleport then
+            QuickRuntime.stopSmoothTeleport()
+        end
+    end
+
+    -- --------------------------------------------------------
+    -- Utility
+    -- --------------------------------------------------------
+    local function translateObject(obj)
+        if not LocalRuntime.autoTranslate or not LocalRuntime.translator then
+            return
+        end
+        if ScreenGui and obj:IsDescendantOf(ScreenGui) then
+            return
+        end
+        if not (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) then
+            return
+        end
+
+        if LocalRuntime.originalText[obj] == nil then
+            LocalRuntime.originalText[obj] = obj.Text
+        end
+
+        pcall(function()
+            local translated = LocalRuntime.translator:Translate(obj, obj.Text)
+            if translated and translated ~= "" then
+                obj.Text = translated
+            end
+        end)
+    end
+
+    LocalActions.lp_auto_translate = function(enabled)
+        LocalRuntime.autoTranslate = enabled == true
+
+        if LocalRuntime.translateConnection then
+            LocalRuntime.translateConnection:Disconnect()
+            LocalRuntime.translateConnection = nil
+        end
+
+        if not enabled then
+            for obj, original in pairs(LocalRuntime.originalText) do
+                if obj and obj.Parent then
+                    pcall(function()
+                        obj.Text = original
+                    end)
+                end
+            end
+            LocalRuntime.originalText = {}
+            return true
+        end
+
+        local ok, translator = pcall(function()
+            return LocalizationService:GetTranslatorForPlayerAsync(LocalPlayer)
+        end)
+
+        if not ok or not translator then
+            lpNotify("Translator is not available in this server.")
+            return false
+        end
+
+        LocalRuntime.translator = translator
+
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if playerGui then
+            for _, obj in ipairs(playerGui:GetDescendants()) do
+                translateObject(obj)
+            end
+
+            LocalRuntime.translateConnection = playerGui.DescendantAdded:Connect(function(obj)
+                if LocalRuntime.autoTranslate then
+                    task.defer(translateObject, obj)
+                end
+            end)
+        end
+
+        return true
+    end
+
+    LocalActions.lp_stop_tween = function()
+        cancelMove()
+        lpNotify("Smooth teleport stopped.")
+        return true
+    end
+
+    LocalActions.lp_fix_ui = function()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not playerGui then
+            return false
+        end
+
+        local fixed = 0
+
+        for _, obj in ipairs(playerGui:GetDescendants()) do
+            pcall(function()
+                if obj:IsA("ScreenGui") then
+                    obj.Enabled = true
+                    fixed = fixed + 1
+                elseif obj:IsA("GuiButton") then
+                    obj.Active = true
+                    obj.Selectable = true
+                    obj.AutoButtonColor = true
+                    fixed = fixed + 1
+                end
+            end)
+        end
+
+        local main = playerGui:FindFirstChild("Main")
+        if main and main:IsA("ScreenGui") then
+            main.Enabled = true
+        end
+
+        lpNotify("Game UI buttons refreshed: " .. tostring(fixed))
+        return true
+    end
+
+    LocalActions.lp_show_item = function()
+        commFLocal("getInventoryWeapons")
+        task.wait(0.15)
+
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local main = playerGui and playerGui:FindFirstChild("Main")
+        local inventory = main and main:FindFirstChild("Inventory")
+
+        if inventory and inventory:IsA("GuiObject") then
+            inventory.Visible = true
+            return true
+        end
+
+        lpNotify("Inventory UI not found.")
+        return false
+    end
+
+    local function openFruitShop()
+        commFLocal("GetFruits")
+        task.wait(0.12)
+
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local main = playerGui and playerGui:FindFirstChild("Main")
+        local shop = main and main:FindFirstChild("FruitShop")
+
+        if shop and shop:IsA("GuiObject") then
+            shop.Visible = true
+            return true
+        end
+
+        lpNotify("Fruit Shop UI not found.")
+        return false
+    end
+
+    LocalActions.lp_open_fruit_shop = function()
+        return openFruitShop()
+    end
+
+    local function findNpcByAliases(aliases)
+        local roots = {}
+        local npcFolder = workspace:FindFirstChild("NPCs")
+        if npcFolder then
+            table.insert(roots, npcFolder)
+        end
+
+        local function scan(list)
+            for _, obj in ipairs(list) do
+                local low = string.lower(obj.Name)
+                for _, alias in ipairs(aliases) do
+                    local want = string.lower(alias)
+                    if low == want or string.find(low, want, 1, true) then
+                        if obj:IsA("Model") then
+                            local part = obj:FindFirstChild("HumanoidRootPart")
+                                or obj:FindFirstChild("Head")
+                                or obj.PrimaryPart
+                                or obj:FindFirstChildWhichIsA("BasePart", true)
+                            if part then
+                                return part
+                            end
+                        elseif obj:IsA("BasePart") then
+                            return obj
+                        end
+                    end
+                end
+            end
+            return nil
+        end
+
+        for _, root in ipairs(roots) do
+            local result = scan(root:GetDescendants())
+            if result then
+                return result
+            end
+        end
+
+        if typeof(getnilinstances) == "function" then
+            local ok, list = pcall(getnilinstances)
+            if ok and type(list) == "table" then
+                local result = scan(list)
+                if result then
+                    return result
+                end
+            end
+        end
+
+        return nil
+    end
+
+    LocalActions.lp_open_fruit_shop_mirage = function()
+        local dealer = findNpcByAliases({"Advanced Fruit Dealer"})
+
+        if not dealer then
+            lpNotify("Advanced Fruit Dealer is not loaded. Mirage may not be spawned.")
+            return false
+        end
+
+        task.spawn(function()
+            smoothGo(dealer.CFrame * CFrame.new(0, 0, 5))
+            task.wait(0.35)
+            openFruitShop()
+        end)
+
+        return true
+    end
+
+    LocalActions.lp_open_title = function()
+        commFLocal("getTitles")
+        task.wait(0.10)
+
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local main = playerGui and playerGui:FindFirstChild("Main")
+        local titles = main and main:FindFirstChild("Titles")
+
+        if titles and titles:IsA("GuiObject") then
+            titles.Visible = true
+            return true
+        end
+
+        lpNotify("Title UI not found.")
+        return false
+    end
+
+    LocalActions.lp_open_color = function()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local main = playerGui and playerGui:FindFirstChild("Main")
+        local colors = main and main:FindFirstChild("Colors")
+
+        if colors and colors:IsA("GuiObject") then
+            colors.Visible = true
+            return true
+        end
+
+        lpNotify("Color UI not found.")
+        return false
+    end
+
+    -- --------------------------------------------------------
+    -- Stats / Team
+    -- --------------------------------------------------------
+    LocalActions.lp_select_stat = function(value)
+        LocalRuntime.selectedStat = tostring(value or "Demon Fruit")
+        return true
+    end
+
+    LocalActions.lp_auto_stats = function(enabled)
+        LocalRuntime.autoStats = enabled == true
+
+        if not enabled then
+            return true
+        end
+
+        task.spawn(function()
+            while LocalRuntime.autoStats do
+                local data = LocalPlayer:FindFirstChild("Data")
+                local points = data and data:FindFirstChild("Points")
+                local available = points and tonumber(points.Value) or 0
+
+                if available > 0 then
+                    local amount = math.clamp(math.floor(available), 1, 50)
+                    commFLocal("AddPoint", LocalRuntime.selectedStat, amount)
+                    task.wait(0.20)
+                else
+                    task.wait(0.65)
+                end
+            end
+        end)
+
+        return true
+    end
+
+    LocalActions.lp_select_team = function(value)
+        LocalRuntime.selectedTeam = tostring(value or "Pirate")
+        return true
+    end
+
+    LocalActions.lp_change_team = function()
+        local team = LocalRuntime.selectedTeam == "Marine" and "Marines" or "Pirates"
+        local ok, result = commFLocal("SetTeam", team)
+
+        if ok then
+            lpNotify("Team request: " .. team)
+            return true
+        end
+
+        lpNotify("Team change failed: " .. tostring(result))
+        return false
+    end
+
+    -- --------------------------------------------------------
+    -- Noclip
+    -- --------------------------------------------------------
+    local function stopNoclip()
+        if LocalRuntime.noclipConnection then
+            LocalRuntime.noclipConnection:Disconnect()
+            LocalRuntime.noclipConnection = nil
+        end
+
+        for part, oldState in pairs(LocalRuntime.collisionState) do
+            if part and part.Parent then
+                pcall(function()
+                    part.CanCollide = oldState
+                end)
+            end
+        end
+
+        LocalRuntime.collisionState = {}
+    end
+
+    LocalActions.lp_noclip = function(enabled)
+        LocalRuntime.noclip = enabled == true
+        stopNoclip()
+
+        if not enabled then
+            return true
+        end
+
+        LocalRuntime.noclipConnection = RunService.Stepped:Connect(function()
+            if not LocalRuntime.noclip then
+                return
+            end
+
+            local character = LocalPlayer.Character
+            if not character then
+                return
+            end
+
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if LocalRuntime.collisionState[part] == nil then
+                        LocalRuntime.collisionState[part] = part.CanCollide
+                    end
+                    part.CanCollide = false
+                end
+            end
+        end)
+
+        return true
+    end
+
+    -- --------------------------------------------------------
+    -- NPC teleport
+    -- --------------------------------------------------------
+    local NpcData = {
+        ["Experienced Captain"] = {
+            aliases = {"Experienced Captain"},
+            stages = {
+                [1] = CFrame.new(-690.33081054688, 15.09425163269, 1582.2380371094),
+                [2] = CFrame.new(-380.47927856445, 77.220390319824, 255.82550048828),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
+        },
+        ["Blacksmith"] = {
+            aliases = {"Blacksmith"},
+            stages = {
+                [1] = CFrame.new(-690.33081054688, 15.09425163269, 1582.2380371094),
+                [2] = CFrame.new(-380.47927856445, 77.220390319824, 255.82550048828),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
+        },
+        ["Fisherman"] = {
+            aliases = {"Fisherman"},
+            stages = {
+                [3] = CFrame.new(-16218.6826, 9.08636189, 445.618408),
+            },
+        },
+        ["Pirate Port Quest Giver"] = {
+            aliases = {"Pirate Port Quest Giver", "Pirate Port Quest"},
+            stages = {
+                [3] = CFrame.new(-290.7376708984375, 6.729952812194824, 5343.5537109375),
+            },
+        },
+        ["Blox Fruit Dealer"] = {
+            aliases = {"Blox Fruit Dealer", "Blox Fruits Dealer"},
+            stages = {
+                [1] = CFrame.new(-690.33081054688, 15.09425163269, 1582.2380371094),
+                [2] = CFrame.new(-380.47927856445, 77.220390319824, 255.82550048828),
+                [3] = CFrame.new(-5074.45556640625, 314.5155334472656, -2991.054443359375),
+            },
+        },
+        ["Fossil Expert"] = {
+            aliases = {"Fossil Expert"},
+            stages = {
+                [3] = CFrame.new(-16218.6826, 9.08636189, 445.618408),
+            },
+        },
+        ["Lucien"] = {
+            aliases = {"Lucien"},
+            stages = {
+                [3] = CFrame.new(-290.7376708984375, 6.729952812194824, 5343.5537109375),
+            },
+        },
+        ["Submarine Worker"] = {
+            aliases = {"Submarine Worker"},
+            stages = {
+                [3] = CFrame.new(-16218.6826, 9.08636189, 445.618408),
+            },
+        },
+        ["Sharkman Master"] = {
+            aliases = {"Sharkman Master", "Sharkman Teacher", "Daigrock"},
+            stages = {
+                [3] = CFrame.new(-16218.6826, 9.08636189, 445.618408),
+            },
+        },
+        ["Doghouse"] = {
+            aliases = {"Doghouse", "Dog House"},
+            stages = {
+                [3] = CFrame.new(-12462, 375, -7552),
+            },
+        },
+        ["Mysterious Force"] = {
+            aliases = {"Mysterious Force"},
+            stages = {
+                [3] = CFrame.new(28286.35546875, 14895.3017578125, 102.62469482421875),
+            },
+        },
+        ["Ancient One"] = {
+            aliases = {"Ancient One"},
+            stages = {
+                [3] = CFrame.new(28981.552734375, 14888.4267578125, -120.245849609375),
+            },
+        },
+        ["Sealed King"] = {
+            aliases = {"Sealed King"},
+            stages = {
+                [3] = CFrame.new(3030.39453125, 2280.6171875, -7320.18359375),
+            },
+        },
+        ["Gravestone"] = {
+            aliases = {"Gravestone"},
+            stages = {
+                [3] = CFrame.new(-8652.99707, 143.450119, 6170.50879),
+            },
+        },
+        ["Skeleton Machine"] = {
+            aliases = {"Skeleton Machine"},
+            stages = {
+                [3] = CFrame.new(-9515.3720703125, 164.00624084473, 5786.0610351562),
+            },
+        },
+        ["Frozen Watcher"] = {
+            aliases = {"Frozen Watcher"},
+        },
+        ["Dojo Trainer"] = {
+            aliases = {"Dojo Trainer"},
+            stages = {
+                [3] = CFrame.new(5841.298828125, 1208.32177734375, 884.3173217773438),
+            },
+            entrance = Vector3.new(5661.5322265625, 1013.0907592773438, -334.9649963378906),
+        },
+        ["Dragon Tamer"] = {
+            aliases = {"Dragon Tamer"},
+            stages = {
+                [3] = CFrame.new(5841.298828125, 1208.32177734375, 884.3173217773438),
+            },
+            entrance = Vector3.new(5661.5322265625, 1013.0907592773438, -334.9649963378906),
+        },
+        ["Sweet Crafter"] = {
+            aliases = {"Sweet Crafter"},
+            stages = {
+                [3] = CFrame.new(-1884.7747802734375, 19.327526092529297, -11666.8974609375),
+            },
+        },
+        ["Cake Scientist"] = {
+            aliases = {"Cake Scientist"},
+            stages = {
+                [3] = CFrame.new(-1884.7747802734375, 19.327526092529297, -11666.8974609375),
+            },
+        },
+        ["Elite Hunter"] = {
+            aliases = {"Elite Hunter"},
+            stages = {
+                [3] = CFrame.new(-5420, 314, -2828),
+            },
+        },
+        ["Player Hunter"] = {
+            aliases = {"Player Hunter"},
+            stages = {
+                [3] = CFrame.new(-5559, 314, -2840),
+            },
+        },
+    }
+
+    LocalActions.lp_select_npc = function(value)
+        LocalRuntime.selectedNpc = tostring(value or "")
+        return true
+    end
+
+    local function frozenWatcherTarget()
+        local map = workspace:FindFirstChild("Map")
+        if not map then
+            return nil
+        end
+
+        for _, obj in ipairs(map:GetDescendants()) do
+            if string.find(string.lower(obj.Name), "frozendimension", 1, true)
+                or string.find(string.lower(obj.Name), "frozen dimension", 1, true)
+            then
+                if obj:IsA("BasePart") then
+                    return obj.CFrame
+                end
+                if obj:IsA("Model") then
+                    local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+                    if part then
+                        return part.CFrame
+                    end
+                end
+            end
+        end
+
+        return nil
+    end
+
+    LocalActions.lp_teleport_npc = function()
+        local name = LocalRuntime.selectedNpc
+        local data = NpcData[name]
+
+        if not data then
+            lpNotify("NPC data not found.")
+            return false
+        end
+
+        task.spawn(function()
+            local part = findNpcByAliases(data.aliases or {name})
+
+            if part then
+                smoothGo(part.CFrame * CFrame.new(0, 0, 4))
+                return
+            end
+
+            if name == "Frozen Watcher" then
+                local frozenCF = frozenWatcherTarget()
+                if frozenCF then
+                    smoothGo(frozenCF)
+                    task.wait(1.0)
+                    local loaded = findNpcByAliases(data.aliases)
+                    if loaded then
+                        smoothGo(loaded.CFrame * CFrame.new(0, 0, 4))
+                    end
+                else
+                    lpNotify("Frozen Dimension is not spawned.")
+                end
+                return
+            end
+
+            local sea = currentSeaLocal()
+            local stage = data.stages and data.stages[sea]
+
+            if not stage and data.stages and data.stages[3] and sea ~= 3 then
+                lpNotify(name .. " is in Third Sea.")
+                return
+            end
+
+            if not stage then
+                lpNotify("No teleport location available for this NPC in the current Sea.")
+                return
+            end
+
+            if data.entrance then
+                commFLocal("requestEntrance", data.entrance)
+                task.wait(0.35)
+            end
+
+            lpNotify("Going to " .. name .. " region...")
+            if not smoothGo(stage) then
+                return
+            end
+
+            local started = os.clock()
+            while os.clock() - started < 5 do
+                part = findNpcByAliases(data.aliases or {name})
+                if part then
+                    smoothGo(part.CFrame * CFrame.new(0, 0, 4))
+                    return
+                end
+                task.wait(0.25)
+            end
+
+            lpNotify(name .. " region reached. NPC model is not loaded.")
+        end)
+
+        return true
+    end
+
+    -- --------------------------------------------------------
+    -- Island teleport
+    -- --------------------------------------------------------
+    local IslandData = {
+        ["Hydra Island"] = CFrame.new(5255.1049, 1004.1949, 344.7700),
+        ["Peanut Island"] = CFrame.new(-2062.7475585938, 50.473892211914, -10232.568359375),
+        ["Ice Cream Island"] = CFrame.new(-902.56817626953, 79.93204498291, -10988.84765625),
+        ["House Hydra Island"] = CFrame.new(5657.88623046875, 1013.0790405273438, -335.4996337890625),
+        ["Tiki"] = CFrame.new(-16218.6826, 9.08636189, 445.618408),
+        ["Haunted Castle"] = CFrame.new(-9515.3720703125, 164.00624084473, 5786.0610351562),
+        ["Port Town"] = CFrame.new(-290.7376708984375, 6.729952812194824, 5343.5537109375),
+        ["Great Tree"] = CFrame.new(2681.2736816406, 1682.8092041016, -7190.9853515625),
+        ["Floating Turtle"] = CFrame.new(-13274.528320313, 531.82073974609, -7579.22265625),
+        ["Room Enma/Yama & Secret Temple"] = CFrame.new(5319, 23, -93),
+    }
+
+    LocalActions.lp_select_island = function(value)
+        LocalRuntime.selectedIsland = tostring(value or "Hydra Island")
+        return true
+    end
+
+    LocalActions.lp_teleport_island = function()
+        local target = IslandData[LocalRuntime.selectedIsland]
+        if not target then
+            lpNotify("Island coordinate not found.")
+            return false
+        end
+
+        if currentSeaLocal() ~= 3 then
+            lpNotify("These LocalPlayer island shortcuts are Third Sea locations.")
+            return false
+        end
+
+        task.spawn(function()
+            smoothGo(target)
+        end)
+
+        return true
+    end
+
+    LocalActions.lp_teleport_mirage = function()
+        task.spawn(function()
+            local worldOrigin = workspace:FindFirstChild("_WorldOrigin")
+            local locations = worldOrigin and worldOrigin:FindFirstChild("Locations")
+            local mirage = locations and locations:FindFirstChild("Mirage Island")
+
+            if mirage then
+                local cf = nil
+                if mirage:IsA("BasePart") then
+                    cf = mirage.CFrame
+                elseif mirage:IsA("Model") then
+                    local part = mirage.PrimaryPart or mirage:FindFirstChildWhichIsA("BasePart", true)
+                    cf = part and part.CFrame
+                end
+
+                if cf then
+                    smoothGo(cf * CFrame.new(0, 333, 0))
+                    return
+                end
+            end
+
+            local map = workspace:FindFirstChild("Map")
+            local mapMirage = map and (
+                map:FindFirstChild("MysticIsland")
+                or map:FindFirstChild("MirageIsland")
+                or map:FindFirstChild("Mirage Island")
+            )
+
+            if mapMirage then
+                local part = mapMirage:IsA("Model")
+                    and (mapMirage.PrimaryPart or mapMirage:FindFirstChildWhichIsA("BasePart", true))
+                    or (mapMirage:IsA("BasePart") and mapMirage or nil)
+
+                if part then
+                    smoothGo(part.CFrame * CFrame.new(0, 150, 0))
+                    return
+                end
+            end
+
+            lpNotify("Mirage Island is not spawned.")
+        end)
+
+        return true
+    end
+
+    LocalActions.lp_teleport_prehistoric = function()
+        task.spawn(function()
+            local map = workspace:FindFirstChild("Map")
+            local island = map and (
+                map:FindFirstChild("PrehistoricIsland")
+                or map:FindFirstChild("Prehistoric Island")
+            )
+
+            if not island then
+                lpNotify("Prehistoric Island is not spawned.")
+                return
+            end
+
+            local target = nil
+
+            local core = island:FindFirstChild("Core")
+            local relic = core and core:FindFirstChild("PrehistoricRelic")
+            local skull = relic and relic:FindFirstChild("Skull")
+
+            if skull then
+                if skull:IsA("BasePart") then
+                    target = skull.CFrame
+                elseif skull:IsA("Model") then
+                    local part = skull.PrimaryPart or skull:FindFirstChildWhichIsA("BasePart", true)
+                    target = part and part.CFrame
+                end
+            end
+
+            if not target then
+                local part = island:IsA("Model")
+                    and (island.PrimaryPart or island:FindFirstChildWhichIsA("BasePart", true))
+                    or (island:IsA("BasePart") and island or nil)
+                target = part and part.CFrame
+            end
+
+            if target then
+                smoothGo(target * CFrame.new(0, 5, 0))
+            else
+                lpNotify("Could not find a Prehistoric Island anchor.")
+            end
+        end)
+
+        return true
+    end
+
+    LocalRuntime.stop = function()
+        LocalRuntime.autoStats = false
+        LocalRuntime.noclip = false
+        stopNoclip()
+
+        if LocalRuntime.translateConnection then
+            LocalRuntime.translateConnection:Disconnect()
+            LocalRuntime.translateConnection = nil
+        end
+    end
+end
+
+
+local ActionRegistry = setmetatable(LocalActions, {
     __index = function(_, key)
-        return StatusActions[key] or ShopActions[key]
+        return QuickActions[key] or StatusActions[key] or ShopActions[key]
     end
 })
 
@@ -3280,33 +4118,33 @@ local PagesData = {
     } },
     { name = "LocalPlayer", sections = {
         { title = "Utility", items = {
-            { type = "toggle", text = "Auto Translate" },
-            { type = "button", text = "Stop Tween" },
-            { type = "button", text = "Fix UI Button Game" },
-            { type = "button", text = "Show Item" },
-            { type = "button", text = "Open Devil Fruit Shop" },
-            { type = "button", text = "Open Devil Fruit Shop Mirage" },
-            { type = "button", text = "Open Title" },
-            { type = "button", text = "Open Color" },
+            { type = "toggle", text = "Auto Translate", action = "lp_auto_translate" },
+            { type = "button", text = "Stop Tween", action = "lp_stop_tween" },
+            { type = "button", text = "Fix UI Button Game", action = "lp_fix_ui" },
+            { type = "button", text = "Show Item", action = "lp_show_item" },
+            { type = "button", text = "Open Devil Fruit Shop", action = "lp_open_fruit_shop" },
+            { type = "button", text = "Open Devil Fruit Shop Mirage", action = "lp_open_fruit_shop_mirage" },
+            { type = "button", text = "Open Title", action = "lp_open_title" },
+            { type = "button", text = "Open Color", action = "lp_open_color" },
         } },
         { title = "Stats / Team", items = {
-            { type = "dropdown", text = "Select Stats", options = { "Demon Fruit", "Defense", "Melee", "Sword", "Gun" } },
-            { type = "toggle", text = "Auto Stats" },
-            { type = "dropdown", text = "Select Team", options = { "Pirate", "Marine" } },
-            { type = "button", text = "Change Team" },
+            { type = "dropdown", text = "Select Stats", options = { "Demon Fruit", "Defense", "Melee", "Sword", "Gun" }, action = "lp_select_stat" },
+            { type = "toggle", text = "Auto Stats", action = "lp_auto_stats" },
+            { type = "dropdown", text = "Select Team", options = { "Pirate", "Marine" }, action = "lp_select_team" },
+            { type = "button", text = "Change Team", action = "lp_change_team" },
         } },
         { title = "Movement", items = {
-            { type = "toggle", text = "Noclip" },
+            { type = "toggle", text = "Noclip", action = "lp_noclip" },
         } },
         { title = "NPC Teleport", items = {
-            { type = "dropdown", text = "Select NPC", options = { "Experienced Captain", "Blacksmith", "Fisherman", "Pirate Port Quest Giver", "Blox Fruit Dealer", "Fossil Expert", "Lucien", "Submarine Worker", "Sharkman Master", "Doghouse", "Mysterious Force", "Ancient One", "Sealed King", "Gravestone", "Skeleton Machine", "Frozen Watcher", "Dojo Trainer", "Dragon Tamer", "Sweet Crafter", "Cake Scientist", "Elite Hunter", "Player Hunter" } },
-            { type = "button", text = "Teleport To NPC" },
+            { type = "dropdown", text = "Select NPC", options = { "Experienced Captain", "Blacksmith", "Fisherman", "Pirate Port Quest Giver", "Blox Fruit Dealer", "Fossil Expert", "Lucien", "Submarine Worker", "Sharkman Master", "Doghouse", "Mysterious Force", "Ancient One", "Sealed King", "Gravestone", "Skeleton Machine", "Frozen Watcher", "Dojo Trainer", "Dragon Tamer", "Sweet Crafter", "Cake Scientist", "Elite Hunter", "Player Hunter" }, action = "lp_select_npc" },
+            { type = "button", text = "Teleport To NPC", action = "lp_teleport_npc" },
         } },
         { title = "Island Teleport", items = {
-            { type = "dropdown", text = "Select Island", options = { "Hydra Island", "Peanut Island", "Ice Cream Island", "House Hydra Island", "Tiki", "Haunted Castle", "Port Town", "Great Tree", "Floating Turtle", "Room Enma/Yama & Secret Temple" } },
-            { type = "button", text = "Teleport To Island" },
-            { type = "button", text = "Teleport Mirage" },
-            { type = "button", text = "Teleport Prehistoric Island" },
+            { type = "dropdown", text = "Select Island", options = { "Hydra Island", "Peanut Island", "Ice Cream Island", "House Hydra Island", "Tiki", "Haunted Castle", "Port Town", "Great Tree", "Floating Turtle", "Room Enma/Yama & Secret Temple" }, action = "lp_select_island" },
+            { type = "button", text = "Teleport To Island", action = "lp_teleport_island" },
+            { type = "button", text = "Teleport Mirage", action = "lp_teleport_mirage" },
+            { type = "button", text = "Teleport Prehistoric Island", action = "lp_teleport_prehistoric" },
         } },
     } },
     { name = "Setting Farm", sections = {
@@ -3660,7 +4498,7 @@ local PagesData = {
             { type = "slider", text = "JumpPower", value = 50, min = 0, max = 250, action = "pvp_jumppower_value" },
             { type = "button", text = "Change JumpPower", action = "pvp_apply_jumppower" },
             { type = "button", text = "Change WalkSpeed", action = "pvp_apply_walkspeed" },
-            { type = "toggle", text = "Walk On Water", action = "pvp_walk_on_water" },
+            { type = "toggle", text = "Walk On Water", action = "pvp_walk_on_water", default = true },
         } },
     } },
     { name = "Tab Webhook", sections = {
@@ -3692,7 +4530,7 @@ local PagesData = {
 }
 
 ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_QuickPages_3",
+    Name = "TaveHub_LocalPlayer_4",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -3998,7 +4836,7 @@ local function AddButton(parent, text, callback)
     return row
 end
 
-local function AddToggle(parent, text, callback)
+local function AddToggle(parent, text, callback, defaultValue)
     local row = RowBase(parent, 35)
     New("TextLabel", {
         Position = UDim2.fromOffset(11, 0),
@@ -4033,7 +4871,7 @@ local function AddToggle(parent, text, callback)
     }, box)
     Corner(fill, 2)
 
-    local enabled = false
+    local enabled = defaultValue == true
     box.MouseButton1Click:Connect(function()
         enabled = not enabled
         fill.Visible = enabled
@@ -4049,6 +4887,13 @@ local function AddToggle(parent, text, callback)
         end
     end)
     row:SetAttribute("Value", enabled)
+
+    if enabled and callback then
+        task.defer(function()
+            pcall(callback, true)
+        end)
+    end
+
     return row
 end
 
@@ -4495,7 +5340,7 @@ local function BuildPage(pageData)
             if item.type == "button" then
                 obj = AddButton(page, item.text, item.action and ActionRegistry[item.action] or nil)
             elseif item.type == "toggle" then
-                obj = AddToggle(page, item.text, item.action and ActionRegistry[item.action] or nil)
+                obj = AddToggle(page, item.text, item.action and ActionRegistry[item.action] or nil, item.default)
             elseif item.type == "info" then
                 obj = AddInfo(page, item.text, item.infoKey)
             elseif item.type == "input" then
@@ -4660,6 +5505,10 @@ CloseBtn.MouseButton1Click:Connect(function()
 
     QuickRuntime.webhook.monitorRunning = false
 
+    if LocalRuntime and LocalRuntime.stop then
+        pcall(LocalRuntime.stop)
+    end
+
     if QuickRuntime.pvp.aimConnection then
         QuickRuntime.pvp.aimConnection:Disconnect()
     end
@@ -4704,4 +5553,4 @@ task.defer(function()
     end
 end)
 
-print("[Tave Hub] Quick Pages 3 loaded - ESP, PVP, Webhook and Setting functional.")
+print("[Tave Hub] LocalPlayer 4 loaded - LocalPlayer page functional; approved smooth teleport reused.")
