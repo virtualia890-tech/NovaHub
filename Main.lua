@@ -1,7 +1,7 @@
 
--- Tave Hub Status & Server 2
+-- Tave Hub Status & Server 2.1 FIXED
 -- UI based on the supplied screenshots/videos.
--- Status & Server 2: keeps Shop 1.5 intact and connects the complete Status & Server page.
+-- Status & Server 2.1: fixes live label binding/monitor startup and adds safer server-hop fallback.
 -- Shop + Status & Server are functional. Remaining categories stay UI-only.
 
 local Players = game:GetService("Players")
@@ -36,6 +36,8 @@ pcall(function()
     old = guiParent:FindFirstChild("TaveHub_Shop_1_5_SMOOTH_TRAVEL")
     if old then old:Destroy() end
     old = guiParent:FindFirstChild("TaveHub_StatusServer_2")
+    if old then old:Destroy() end
+    old = guiParent:FindFirstChild("TaveHub_StatusServer_2_1_FIXED")
     if old then old:Destroy() end
 end)
 
@@ -1812,7 +1814,10 @@ do
         task.spawn(function()
             local servers = fetchServers(false)
             if #servers == 0 then
-                statusNotify("No different public server found.")
+                statusNotify("Server list unavailable. Trying normal server hop...")
+                pcall(function()
+                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                end)
                 return
             end
 
@@ -1831,7 +1836,10 @@ do
         task.spawn(function()
             local servers = fetchServers(true)
             if #servers == 0 then
-                statusNotify("No low-player public server found.")
+                statusNotify("Low-player list unavailable. Trying normal server hop...")
+                pcall(function()
+                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                end)
                 return
             end
 
@@ -1852,6 +1860,10 @@ do
         return true
     end
 
+    -- Expose explicit refresh functions so the UI can force an immediate first update.
+    StatusRuntime.updateFast = updateFastStatus
+    StatusRuntime.updateHeavy = updateHeavyStatus
+
     StatusRuntime.startMonitor = function()
         if StatusRuntime.monitorRunning then
             return
@@ -1859,17 +1871,21 @@ do
 
         StatusRuntime.monitorRunning = true
 
+        -- Fast status: isolated updates every second. A failure in one cycle does
+        -- not stop the following cycles or the heavy monitor.
         task.spawn(function()
-            task.wait(0.5)
-            while StatusRuntime.monitorRunning and ScreenGui and ScreenGui.Parent do
-                pcall(updateFastStatus)
-
-                if os.clock() - StatusRuntime.lastHeavyUpdate >= 4 then
-                    StatusRuntime.lastHeavyUpdate = os.clock()
-                    pcall(updateHeavyStatus)
-                end
-
+            while StatusRuntime.monitorRunning do
+                pcall(StatusRuntime.updateFast)
                 task.wait(1)
+            end
+        end)
+
+        -- Remote/heavier checks are separated so Cake/Elite/inventory calls cannot
+        -- freeze Timer, Server Timer, Moon, Islands, etc.
+        task.spawn(function()
+            while StatusRuntime.monitorRunning do
+                pcall(StatusRuntime.updateHeavy)
+                task.wait(4)
             end
         end)
     end
@@ -2350,7 +2366,7 @@ local PagesData = {
 }
 
 local ScreenGui = New("ScreenGui", {
-    Name = "TaveHub_StatusServer_2",
+    Name = "TaveHub_StatusServer_2_1_FIXED",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = false
@@ -2724,6 +2740,31 @@ local function AddInfo(parent, text, infoKey)
     }, row)
     if infoKey and StatusRuntime and StatusRuntime.infoLabels then
         StatusRuntime.infoLabels[infoKey] = label
+
+        -- Timer heartbeat is independent of all remote/API status checks.
+        if infoKey == "timer" then
+            task.spawn(function()
+                while label and label.Parent and ScreenGui and ScreenGui.Parent do
+                    local elapsed = math.max(0, math.floor(os.clock() - StatusRuntime.startedAt))
+                    local h = math.floor(elapsed / 3600)
+                    local m = math.floor((elapsed % 3600) / 60)
+                    local s = elapsed % 60
+                    label.Text = string.format("Timer: %dh %02dm %02ds", h, m, s)
+                    task.wait(1)
+                end
+            end)
+        elseif infoKey == "server_timer" then
+            task.spawn(function()
+                while label and label.Parent and ScreenGui and ScreenGui.Parent do
+                    local elapsed = math.max(0, math.floor(workspace.DistributedGameTime or 0))
+                    local h = math.floor(elapsed / 3600)
+                    local m = math.floor((elapsed % 3600) / 60)
+                    local s = elapsed % 60
+                    label.Text = string.format("Server Timer: %dh %02dm %02ds", h, m, s)
+                    task.wait(1)
+                end
+            end)
+        end
     end
     return row
 end
@@ -3227,6 +3268,13 @@ CloseBtn.MouseButton1Click:Connect(function()
 end)
 
 ShowPage("Shop")
+
+-- Labels already exist at this point, so populate them immediately instead of
+-- waiting for the first background cycle.
+pcall(StatusRuntime.updateFast)
+task.spawn(function()
+    pcall(StatusRuntime.updateHeavy)
+end)
 StatusRuntime.startMonitor()
 
-print("[Tave Hub] Status & Server 2 loaded - Shop 1.5 preserved; page #2 functional.")
+print("[Tave Hub] Status & Server 2.1 FIXED loaded - live status monitor active.")
