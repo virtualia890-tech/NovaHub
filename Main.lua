@@ -1,5 +1,6 @@
 
--- Tave Hub Farming 7.1: row activation, weapon equip and visible diagnostics
+-- Tave Hub Relatorio 7.3: Sea destinations and visible travel diagnostics.
+-- Volcano Event / Fully Event are not implemented in this version.
 -- UI based on the supplied screenshots/videos.
 -- LocalPlayer 4: preserves all approved pages and connects the complete LocalPlayer page.
 -- Shop, Status & Server, LocalPlayer, ESP, PVP, Tab Webhook and Setting are functional.
@@ -64,6 +65,139 @@ local FarmingConfig = {
     material = "Vampire Fang",
 }
 sessionEnvironment.__TaveFarmingConfig = FarmingConfig
+
+-- Session-only diagnostics. No remote transmission, credentials or input values.
+local ReportRuntime = {
+    entries = {}, functions = {}, maximum = 1000, dropped = 0,
+    sequence = 0, startedAt = os.clock(), visible = false, scheduled = false,
+    label = nil, feedback = nil, lastExport = nil,
+}
+local ReportActions = {}
+local function reportSnapshot()
+    local lines = {
+        "Tave Hub 7.3 - Relatorio da sessao",
+        "PlaceId: " .. tostring(game.PlaceId),
+        "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
+        "ACEITE = comando aceite; nao comprova efeito no jogo.",
+        "CONFIRMADO = condicao observada pelo script (ex.: chegada ao destino).",
+        "OBSERVADO = estado informado; nao comprova resultado final.",
+        "NAO TESTADA / NAO IMPLEMENTADA / RECUSADO / ERRO = veja detalhes.",
+        "Valores de campos de entrada, URLs de webhook e credenciais nao sao registados.",
+        "Historico limitado a " .. tostring(ReportRuntime.maximum) .. " registos; descartados: " .. tostring(ReportRuntime.dropped),
+        "", "FUNCOES",
+    }
+    local names = {}
+    for name in pairs(ReportRuntime.functions) do table.insert(names, name) end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        local f = ReportRuntime.functions[name]
+        table.insert(lines, "[" .. f.status .. "] " .. name .. (f.detail ~= "" and (" | " .. f.detail) or ""))
+    end
+    table.insert(lines, "")
+    table.insert(lines, "HISTORICO")
+    for _, e in ipairs(ReportRuntime.entries) do
+        table.insert(lines, string.format("#%d +%.1fs [%s] %s | %s", e.id, e.elapsed, e.status, e.name, e.detail))
+    end
+    return table.concat(lines, "\n")
+end
+ReportRuntime.snapshot = reportSnapshot
+local function reportRefresh()
+    if ReportRuntime.label and ReportRuntime.label.Parent then
+        ReportRuntime.label.Text = reportSnapshot()
+    end
+end
+ReportRuntime.refresh = reportRefresh
+local function reportFeedback(message)
+    if ReportRuntime.feedback and ReportRuntime.feedback.Parent then
+        ReportRuntime.feedback.Text = tostring(message)
+    end
+end
+local function reportRecord(name, status, detail)
+    name, detail = tostring(name), tostring(detail or ""):sub(1, 1200)
+    detail = detail:gsub("https?://%S+", "[URL omitida]")
+    ReportRuntime.sequence = ReportRuntime.sequence + 1
+    local e = {id = ReportRuntime.sequence, elapsed = os.clock() - ReportRuntime.startedAt,
+        name = name, status = status, detail = detail}
+    table.insert(ReportRuntime.entries, e)
+    if #ReportRuntime.entries > ReportRuntime.maximum then
+        table.remove(ReportRuntime.entries, 1)
+        ReportRuntime.dropped = ReportRuntime.dropped + 1
+    end
+    ReportRuntime.functions[name] = {status = status, detail = detail}
+    if ReportRuntime.visible and not ReportRuntime.scheduled then
+        ReportRuntime.scheduled = true
+        task.delay(0.35, function()
+            ReportRuntime.scheduled = false
+            if session.alive and ReportRuntime.visible then reportRefresh() end
+        end)
+    end
+    return e.id
+end
+ReportRuntime.record = reportRecord
+local function reportInvoke(name, kind, callback, ...)
+    if type(callback) ~= "function" then
+        reportRecord(name, "NAO IMPLEMENTADA", "Controle sem acao ligada nesta versao.")
+        return false
+    end
+    local args = table.pack(...)
+    local detail = "Acao solicitada"
+    if kind == "toggle" then detail = args[1] == true and "Ligar" or "Desligar" end
+    if kind == "input" then detail = "Campo atualizado; valor omitido" end
+    reportRecord(name, "SOLICITADO", detail)
+    local result = table.pack(pcall(callback, table.unpack(args, 1, args.n)))
+    if not result[1] then
+        reportRecord(name, "ERRO", tostring(result[2]))
+        return false
+    end
+    if result[2] == false then
+        reportRecord(name, "RECUSADO", "A acao devolveu false; consulte os estados e avisos proximos.")
+        return false
+    end
+    reportRecord(name, "ACEITE", "Callback executado. Resultado no jogo ainda nao confirmado.")
+    return table.unpack(result, 2, result.n)
+end
+ReportRuntime.invoke = reportInvoke
+ReportActions.report_copy = function()
+    local clip = (typeof(setclipboard) == "function" and setclipboard)
+        or (typeof(toclipboard) == "function" and toclipboard)
+    if not clip then
+        reportFeedback("Clipboard indisponivel. Use Exportar TXT se o executor suportar writefile.")
+        return false
+    end
+    local ok, err = pcall(clip, reportSnapshot())
+    reportFeedback(ok and "Relatorio copiado. Pode colar aqui ou num arquivo TXT."
+        or ("Falha ao copiar: " .. tostring(err):sub(1, 160)))
+    return ok
+end
+ReportActions.report_export = function()
+    if typeof(writefile) ~= "function" then
+        reportFeedback("writefile indisponivel. Use Copiar Relatorio e guarde o texto como TXT.")
+        return false
+    end
+    local name = "TaveHub_Relatorio_" .. tostring(os.time()) .. "_" .. tostring(ReportRuntime.sequence) .. ".txt"
+    local ok, err = pcall(writefile, name, reportSnapshot())
+    if ok then ReportRuntime.lastExport = name end
+    reportFeedback(ok and ("TXT gravado na pasta do executor: " .. name)
+        or ("Falha ao exportar: " .. tostring(err):sub(1, 160)))
+    return ok
+end
+ReportActions.report_refresh = function() reportRefresh(); return true end
+ReportActions.report_clear = function()
+    ReportRuntime.entries, ReportRuntime.dropped = {}, 0
+    for _, f in pairs(ReportRuntime.functions) do
+        if f.status ~= "NAO IMPLEMENTADA" then f.status, f.detail = "NAO TESTADA", "" end
+    end
+    reportRefresh()
+    reportFeedback("Historico reiniciado nesta sessao.")
+    return true
+end
+ReportActions.report_marker = function()
+    reportRecord("Teste manual", "OBSERVADO", "Inicio de um novo teste marcado pelo utilizador.")
+    reportRefresh()
+    return true
+end
+-- END SESSION REPORT MODULE
+
 local function trackExternal(connection)
     table.insert(session.connections, connection)
     return connection
@@ -3527,13 +3661,14 @@ local LocalRuntime = {
     collisionState = {},
 
     selectedNpc = "Experienced Captain",
-    selectedIsland = "Hydra Island",
+    selectedIsland = "",
 }
 
 local LocalActions = {}
 
 do
     local function lpNotify(message)
+        reportRecord("LocalPlayer / Aviso", "OBSERVADO", message)
         pcall(function()
             StarterGui:SetCore("SendNotification", {
                 Title = "Tave Hub - LocalPlayer",
@@ -3541,6 +3676,13 @@ do
                 Duration = 3
             })
         end)
+    end
+
+    local function lpTravelStatus(message)
+        local value = "Teleport: " .. tostring(message)
+        local label = StatusRuntime.infoLabels.teleport_status
+        if label and label.Parent then label.Text = value end
+        print("[Tave Hub / LocalPlayer] " .. value)
     end
 
     local function commFLocal(...)
@@ -3614,6 +3756,8 @@ do
         return 0
     end
 
+    LocalActions.lp_current_sea = currentSeaLocal
+
     local function seaName(sea)
         return ({[1] = "First Sea", [2] = "Second Sea", [3] = "Third Sea"})[sea]
             or ("unknown Sea (PlaceId " .. tostring(game.PlaceId) .. ")")
@@ -3643,14 +3787,37 @@ do
     local function travelTo(targetCFrame, label)
         local root = getLocalRoot()
         if not root then
+            lpTravelStatus("Character not ready")
             lpNotify("Character is not ready for teleport.")
             return false
         end
         local seconds = math.ceil((root.Position - targetCFrame.Position).Magnitude / MovementConfig.speed)
+        lpTravelStatus("Going to " .. label .. " (~" .. tostring(seconds) .. "s)")
+        print("[Tave Hub / LocalPlayer] PlaceId=" .. tostring(game.PlaceId)
+            .. " start=" .. tostring(root.Position) .. " target=" .. tostring(targetCFrame.Position))
         lpNotify("Going to " .. label .. " (~" .. tostring(seconds) .. "s). Stop Tween cancels travel.")
-        local arrived = smoothGo(targetCFrame)
+        local reportName = "Teleport / " .. label
+        reportRecord(reportName, "SOLICITADO", "PlaceId=" .. tostring(game.PlaceId)
+            .. " | origem=" .. tostring(root.Position) .. " | destino=" .. tostring(targetCFrame.Position))
+        local ok, arrived = pcall(smoothGo, targetCFrame)
+        if not ok then
+            reportRecord(reportName, "ERRO", tostring(arrived))
+            lpTravelStatus("Error: " .. label)
+            return false
+        end
+        local finalRoot = getLocalRoot()
+        local remaining = finalRoot and (finalRoot.Position - targetCFrame.Position).Magnitude or nil
+        arrived = arrived == true and remaining ~= nil and remaining <= 20
+        if arrived and remaining and remaining <= 20 then
+            reportRecord(reportName, "CONFIRMADO", "Chegada observada; distancia final=" .. string.format("%.1f", remaining))
+        else
+            reportRecord(reportName, "INTERROMPIDO_OU_FALHOU", "Chegada nao confirmada; distancia final=" .. tostring(remaining))
+        end
         if not arrived and session.alive then
+            lpTravelStatus("Failed or stopped: " .. label)
             lpNotify("Teleport to " .. label .. " stopped or failed. Try again after the character loads.")
+        elseif arrived then
+            lpTravelStatus("Arrived: " .. label)
         end
         return arrived
     end
@@ -4149,7 +4316,16 @@ do
         local data = NpcData[name]
 
         if not data then
-            lpNotify("NPC data not found.")
+            -- NPCs that are currently streamed in can be used without a saved
+            -- coordinate. Never invent a far-away route for an unknown NPC.
+            local loaded = findNpcByAliases({name})
+            if loaded then
+                task.spawn(function()
+                    travelTo(loaded.CFrame * CFrame.new(0, 0, 4), name)
+                end)
+                return true
+            end
+            lpNotify(name .. " is not loaded; no verified route is available.")
             return false
         end
 
@@ -4158,7 +4334,9 @@ do
             lpNotify("Cannot identify this Sea (PlaceId " .. tostring(game.PlaceId) .. ").")
             return false
         end
-        if data.stages and not data.stages[sea] then
+        if data.stages and not data.stages[sea]
+            and not findNpcByAliases(data.aliases or {name}) then
+            lpTravelStatus("No NPC route in " .. seaName(sea) .. ": " .. name)
             lpNotify(name .. " has no route in " .. seaName(sea) .. ".")
             return false
         end
@@ -4229,39 +4407,131 @@ do
     -- --------------------------------------------------------
     -- Island teleport
     -- --------------------------------------------------------
+    -- Each saved CFrame belongs to one place. These are approximate staging
+    -- positions; the real-world arrival needs validation inside the game.
     local IslandData = {
-        ["Hydra Island"] = CFrame.new(5255.1049, 1004.1949, 344.7700),
-        ["Peanut Island"] = CFrame.new(-2062.7475585938, 50.473892211914, -10232.568359375),
-        ["Ice Cream Island"] = CFrame.new(-902.56817626953, 79.93204498291, -10988.84765625),
-        ["House Hydra Island"] = CFrame.new(5657.88623046875, 1013.0790405273438, -335.4996337890625),
-        ["Tiki"] = CFrame.new(-16218.6826, 9.08636189, 445.618408),
-        ["Haunted Castle"] = CFrame.new(-9515.3720703125, 164.00624084473, 5786.0610351562),
-        ["Port Town"] = CFrame.new(-290.7376708984375, 6.729952812194824, 5343.5537109375),
-        ["Great Tree"] = CFrame.new(2681.2736816406, 1682.8092041016, -7190.9853515625),
-        ["Floating Turtle"] = CFrame.new(-13274.528320313, 531.82073974609, -7579.22265625),
-        ["Room Enma/Yama & Secret Temple"] = CFrame.new(5319, 23, -93),
+        [1] = {
+            ["Pirate Starter"] = CFrame.new(1071, 16, 1427),
+            ["Marine Starter"] = CFrame.new(-2573, 7, 2047),
+            ["Middle Town"] = CFrame.new(-656, 8, 1437),
+            ["Jungle"] = CFrame.new(-1250, 12, 341),
+            ["Pirate Village"] = CFrame.new(-1122, 5, 3856),
+            ["Desert"] = CFrame.new(1094, 7, 4193),
+            ["Frozen Village"] = CFrame.new(1198, 27, -1212),
+            ["Marine Fortress"] = CFrame.new(-4505, 21, 4261),
+            ["Colosseum"] = CFrame.new(-1428, 8, -3014),
+            ["Sky Island 1"] = CFrame.new(-4970, 718, -2622),
+            ["Sky Island 2"] = CFrame.new(-4813, 904, -1913),
+            ["Sky Island 3"] = CFrame.new(-7952, 5546, -321),
+            ["Prison"] = CFrame.new(4854, 6, 740),
+            ["Magma Village"] = CFrame.new(-5232, 9, 8468),
+            ["Underwater City"] = CFrame.new(61164, 12, 1820),
+            ["Fountain City"] = CFrame.new(5133, 5, 4038),
+        },
+        [2] = {
+            ["Dock"] = CFrame.new(83, 19, 2835),
+            ["Kingdom of Rose"] = CFrame.new(-395, 119, 1246),
+            ["Cafe"] = CFrame.new(-385, 73, 297),
+            ["Mansion"] = CFrame.new(-390, 332, 673),
+            ["Factory"] = CFrame.new(430, 210, -433),
+            ["Green Zone"] = CFrame.new(-2372, 73, -3167),
+            ["Colosseum"] = CFrame.new(-1837, 45, 1360),
+            ["Graveyard"] = CFrame.new(-5411, 49, -721),
+            ["Snow Mountain"] = CFrame.new(512, 402, -5380),
+            ["Hot Island"] = CFrame.new(-5478, 16, -5247),
+            ["Cold Island"] = CFrame.new(-6027, 15, -5072),
+            ["Cursed Ship"] = CFrame.new(902, 125, 33072),
+            ["Ice Castle"] = CFrame.new(5400, 29, -6237),
+            ["Forgotten Island"] = CFrame.new(-3043, 239, -10192),
+            ["Usoap Island"] = CFrame.new(4749, 9, 2850),
+        },
+        [3] = {
+            ["Hydra Island"] = CFrame.new(5255.1049, 1004.1949, 344.7700),
+            ["Peanut Island"] = CFrame.new(-2062.7476, 50.4739, -10232.5684),
+            ["Ice Cream Island"] = CFrame.new(-902.5682, 79.932, -10988.8477),
+            ["House Hydra Island"] = CFrame.new(5657.8862, 1013.079, -335.4996),
+            ["Tiki"] = CFrame.new(-16218.6826, 9.0864, 445.6184),
+            ["Haunted Castle"] = CFrame.new(-9515.3721, 164.0062, 5786.061),
+            ["Port Town"] = CFrame.new(-290.7377, 6.73, 5343.5537),
+            ["Great Tree"] = CFrame.new(2681.2737, 1682.8092, -7190.9854),
+            ["Floating Turtle"] = CFrame.new(-13274.5283, 531.8207, -7579.2227),
+            ["Mansion"] = CFrame.new(-12553.8125, 332.404, -7621.9175),
+            ["Castle on the Sea"] = CFrame.new(-5477.6284, 313.7947, -2808.4585),
+            ["Cake Island"] = CFrame.new(-1897, 15, -11576),
+            ["Room Enma/Yama & Secret Temple"] = CFrame.new(5319, 23, -93),
+        },
     }
 
+    local IslandOrder = {
+        [1] = {"Pirate Starter", "Marine Starter", "Middle Town", "Jungle", "Pirate Village", "Desert", "Frozen Village", "Marine Fortress", "Colosseum", "Sky Island 1", "Sky Island 2", "Sky Island 3", "Prison", "Magma Village", "Underwater City", "Fountain City"},
+        [2] = {"Dock", "Kingdom of Rose", "Cafe", "Mansion", "Factory", "Green Zone", "Colosseum", "Graveyard", "Snow Mountain", "Hot Island", "Cold Island", "Cursed Ship", "Ice Castle", "Forgotten Island", "Usoap Island"},
+        [3] = {"Hydra Island", "Peanut Island", "Ice Cream Island", "House Hydra Island", "Tiki", "Haunted Castle", "Port Town", "Great Tree", "Floating Turtle", "Mansion", "Castle on the Sea", "Cake Island", "Room Enma/Yama & Secret Temple"},
+    }
+
+    LocalActions.lp_refresh_destinations = function()
+        local sea = currentSeaLocal()
+        if sea == 0 then
+            lpTravelStatus("Sea unknown / PlaceId " .. tostring(game.PlaceId))
+            lpNotify("Cannot identify Sea; destination list is unavailable.")
+            return false
+        end
+        local islands = UIControls["Select Island"]
+        if islands then islands.SetOptions(IslandOrder[sea]) end
+        local names, seen = {}, {}
+        for name, data in pairs(NpcData) do
+            if (data.stages and data.stages[sea]) or (sea == 3 and name == "Frozen Watcher") then
+                table.insert(names, name)
+                seen[name] = true
+            end
+        end
+        local folder = workspace:FindFirstChild("NPCs")
+        if folder then
+            for _, obj in ipairs(folder:GetDescendants()) do
+                if obj:IsA("Model") and not obj.Parent:IsA("Model") and not seen[obj.Name]
+                    and obj:FindFirstChildWhichIsA("BasePart", true) then
+                    seen[obj.Name] = true
+                    table.insert(names, obj.Name)
+                end
+            end
+        end
+        table.sort(names)
+        local npcs = UIControls["Select NPC"]
+        if npcs then npcs.SetOptions(names) end
+        lpNotify("Destinations refreshed for " .. seaName(sea) .. ".")
+        return true
+    end
+
     LocalActions.lp_select_island = function(value)
-        LocalRuntime.selectedIsland = tostring(value or "Hydra Island")
+        LocalRuntime.selectedIsland = tostring(value or "")
         return true
     end
 
     LocalActions.lp_teleport_island = function()
-        local target = IslandData[LocalRuntime.selectedIsland]
-        if not target then
-            lpNotify("Island coordinate not found.")
-            return false
-        end
-
         local sea = currentSeaLocal()
-        if sea ~= 3 then
-            lpNotify("This island is in Third Sea; detected " .. seaName(sea) .. ".")
+        local routes = IslandData[sea]
+        local destination = LocalRuntime.selectedIsland
+        local target = routes and routes[destination]
+        if not target then
+            lpTravelStatus("No route: " .. tostring(destination))
+            lpNotify("No route for " .. tostring(destination) .. " in " .. seaName(sea) .. ".")
             return false
         end
 
         task.spawn(function()
-            travelTo(target, LocalRuntime.selectedIsland)
+            if (sea == 1 and destination == "Underwater City")
+                or (sea == 2 and destination == "Cursed Ship") then
+                -- These regions are separated from the ordinary island map.
+                -- Request the game's entrance and verify the resulting position.
+                local ok = commFLocal("requestEntrance", target.Position)
+                task.wait(0.7)
+                local root = getLocalRoot()
+                if not ok or not root or (root.Position - target.Position).Magnitude > 1500 then
+                    lpTravelStatus("Entrance unavailable: " .. destination)
+                    lpNotify("The entrance did not move the character; route needs in-game validation.")
+                    return
+                end
+            end
+            travelTo(target, destination)
         end)
 
         return true
@@ -4639,6 +4909,7 @@ do
     local function setFarmStatus(message)
         local value = "Farm: " .. tostring(message)
         if FarmingRuntime.status == value then return end
+        reportRecord("Farming / Estado", "OBSERVADO", value)
         FarmingRuntime.status = value
         local label = StatusRuntime.infoLabels.farm_status
         if label and label.Parent then label.Text = value end
@@ -4944,12 +5215,22 @@ end
 
 local ActionRegistry = setmetatable(LocalActions, {
     __index = function(_, key)
-        return FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
+        return ReportActions[key] or FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
             or QuickActions[key] or StatusActions[key] or ShopActions[key]
     end
 })
 
 local PagesData = {
+    { name = "Relatorio", sections = {
+        { title = "Relatorio da sessao", items = {
+            { type = "report_view", text = "Resultados e historico" },
+            { type = "button", text = "Copiar Relatorio", action = "report_copy" },
+            { type = "button", text = "Exportar TXT", action = "report_export" },
+            { type = "button", text = "Atualizar Relatorio", action = "report_refresh" },
+            { type = "button", text = "Marcar Novo Teste", action = "report_marker" },
+            { type = "button", text = "Limpar Relatorio", action = "report_clear" },
+        } },
+    } },
     { name = "Shop", sections = {
         { title = "Misc Shop", items = {
             { type = "button", text = "Redeem Code", action = "redeem_codes" },
@@ -5029,6 +5310,8 @@ local PagesData = {
             { type = "toggle", text = "Noclip", action = "lp_noclip" },
         } },
         { title = "NPC Teleport", items = {
+            { type = "info", text = "Teleport: Ready", infoKey = "teleport_status" },
+            { type = "button", text = "Refresh Destinations", action = "lp_refresh_destinations" },
             { type = "dropdown", text = "Select NPC", options = { "Experienced Captain", "Blacksmith", "Fisherman", "Pirate Port Quest Giver", "Blox Fruit Dealer", "Fossil Expert", "Lucien", "Submarine Worker", "Sharkman Master", "Doghouse", "Mysterious Force", "Ancient One", "Sealed King", "Gravestone", "Skeleton Machine", "Frozen Watcher", "Dojo Trainer", "Dragon Tamer", "Sweet Crafter", "Cake Scientist", "Elite Hunter", "Player Hunter" }, action = "lp_select_npc" },
             { type = "button", text = "Teleport To NPC", action = "lp_teleport_npc" },
         } },
@@ -5483,7 +5766,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Farm 7.1)',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Relatorio 7.3)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -6342,6 +6625,33 @@ local function ItemMatches(item, query)
     return string.find(hay, query, 1, true) ~= nil
 end
 
+
+local function AddReportView(parent)
+    local holder = New("Frame", {Size = UDim2.new(1, 0, 0, 300), BackgroundTransparency = 1}, parent)
+    local feedback = New("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1,
+        Text = "Copie o relatorio ou exporte TXT para a pasta do executor.",
+        TextColor3 = Theme.Text, Font = Enum.Font.Gotham, TextSize = 12,
+        TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+    }, holder)
+    local scroll = New("ScrollingFrame", {
+        Position = UDim2.fromOffset(0, 48), Size = UDim2.new(1, 0, 0, 252),
+        BackgroundColor3 = Theme.Row, BorderSizePixel = 0,
+        CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ScrollBarThickness = 4,
+    }, holder)
+    local label = New("TextLabel", {
+        Position = UDim2.fromOffset(8, 6), Size = UDim2.new(1, -22, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+        Text = "", RichText = false, TextWrapped = true, TextColor3 = Theme.Text,
+        Font = Enum.Font.Code, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    }, scroll)
+    ReportRuntime.label, ReportRuntime.feedback = label, feedback
+    reportRefresh()
+    return holder
+end
+
 local function BuildPage(pageData)
     local page = New("ScrollingFrame", {
         Name = pageData.name,
@@ -6368,25 +6678,36 @@ local function BuildPage(pageData)
 
         for _, item in ipairs(section.items) do
             local obj
-            if item.type == "button" then
-                obj = AddButton(page, item.text, item.action and ActionRegistry[item.action] or nil)
+            local actionName = pageData.name .. " / " .. item.text
+            local rawCallback = item.action and ActionRegistry[item.action] or nil
+            local callback = rawCallback
+            if pageData.name ~= "Relatorio" and item.type ~= "info" and item.type ~= "report_view" then
+                ReportRuntime.functions[actionName] = {
+                    status = rawCallback and "NAO TESTADA" or "NAO IMPLEMENTADA", detail = ""
+                }
+                callback = function(...)
+                    return reportInvoke(actionName, item.type, rawCallback, ...)
+                end
+            end
+            if item.type == "report_view" then
+                obj = AddReportView(page)
+            elseif item.type == "button" then
+                obj = AddButton(page, item.text, callback)
             elseif item.type == "toggle" then
-                obj = AddToggle(page, item.text, item.action and ActionRegistry[item.action] or nil, item.default)
+                obj = AddToggle(page, item.text, callback, item.default)
             elseif item.type == "info" then
                 obj = AddInfo(page, item.text, item.infoKey)
             elseif item.type == "input" then
-                obj = AddInput(page, item.text, item.placeholder, item.action and ActionRegistry[item.action] or nil)
+                obj = AddInput(page, item.text, item.placeholder, callback)
             elseif item.type == "dropdown" then
-                obj = AddDropdown(page, item.text, item.options, item.action and ActionRegistry[item.action] or nil)
+                obj = AddDropdown(page, item.text, item.options, callback)
             elseif item.type == "skill_multi" then
                 obj = AddSkillMultiDropdown(page, item.text, item.options,
-                    item.action and ActionRegistry[item.action] or nil)
+                    callback)
             elseif item.type == "slider" then
                 obj = AddSlider(page, item.text, item.value, item.min, item.max, function(v)
                     item.value = v
-                    if item.action and ActionRegistry[item.action] then
-                        pcall(ActionRegistry[item.action], v)
-                    end
+                    if callback then pcall(callback, v) end
                 end)
             end
             if obj then
@@ -6406,8 +6727,12 @@ end
 local SelectedPage = nil
 local function ShowPage(name)
     SelectedPage = name
+    ReportRuntime.visible = name == "Relatorio"
+    if ReportRuntime.visible then reportRefresh() end
     if name == "Status & Server" then
         StatusRuntime.refreshRemote()
+    elseif name == "LocalPlayer" then
+        LocalActions.lp_refresh_destinations()
     end
     PageTitle.Text = name
     for pageName, page in pairs(PageFrames) do
@@ -6541,6 +6866,7 @@ end)
 
 local function stopHub()
     if not session.alive then return end
+    reportRecord("Hub / Sessao", "OBSERVADO", "Hub encerrado; exporte antes de fechar para guardar o historico.")
     session.alive = false
     StatusRuntime.spamJoin = false
     StatusRuntime.monitorRunning = false
@@ -6611,6 +6937,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
+reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.3 iniciado; funcionamento no Roblox ainda precisa de validacao.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
@@ -6628,4 +6955,4 @@ task.defer(function()
     end
 end)
 
-print("[Tave Hub] Farming 7.1 loaded - tap any part of Start Farm; watch Farm status.")
+print("[Tave Hub] Relatorio 7.3 loaded - copy/export diagnostics from Relatorio.")
