@@ -75,7 +75,7 @@ local ReportRuntime = {
 local ReportActions = {}
 local function reportSnapshot()
     local lines = {
-        "Tave Hub 7.6 - Relatorio da sessao",
+        "Tave Hub 7.7 - Relatorio da sessao",
         "PlaceId: " .. tostring(game.PlaceId),
         "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
         "ACEITE = comando aceite; nao comprova efeito no jogo.",
@@ -4274,6 +4274,71 @@ do
         },
     }
 
+    -- Stable NPC names are always listed. The island is a staging point;
+    -- the loaded NPC model is used for the final approach.
+    local NpcRegions = {
+        [1] = {
+            ["Blox Fruit Gacha"] = "Jungle",
+            ["Dark Step Teacher"] = "Pirate Village",
+            ["Ability Teacher"] = "Frozen Village",
+            ["Military Detective"] = "Prison",
+            ["Water Kung Fu Teacher"] = "Underwater City",
+            ["Instinct Teacher"] = "Sky Island 2",
+            ["Experienced Captain"] = "Middle Town",
+            ["Blacksmith"] = "Middle Town",
+            ["Blox Fruit Dealer"] = "Middle Town",
+        },
+        [2] = {
+            ["Manager"] = "Cafe", ["Bartilo"] = "Cafe", ["Trevor"] = "Cafe",
+            ["Nerd"] = "Cafe", ["Blox Fruit Gacha"] = "Cafe",
+            ["Experienced Captain"] = "Cafe", ["Blacksmith"] = "Cafe",
+            ["Blox Fruit Dealer"] = "Cafe",
+            ["Alchemist"] = "Green Zone", ["Mr. Captain"] = "Green Zone",
+            ["Mysterious Scientist"] = "Cold Island",
+            ["King Red Head"] = "Colosseum",
+            ["Cyborg"] = "Factory",
+            ["El Perro"] = "Cursed Ship",
+            ["Ghoul"] = "Cursed Ship",
+        },
+        [3] = {
+            ["Dojo Trainer"] = "House Hydra Island",
+            ["Dragon Tamer"] = "House Hydra Island",
+            ["Dragon Hunter"] = "House Hydra Island",
+            ["Elite Hunter"] = "Castle on the Sea",
+            ["Player Hunter"] = "Castle on the Sea",
+            ["Sweet Crafter"] = "Cake Island",
+            ["Cake Scientist"] = "Cake Island",
+        },
+    }
+    for sea, entries in pairs(NpcRegions) do
+        for name, island in pairs(entries) do
+            local record = NpcData[name]
+            if not record then
+                record = {aliases = {name}}
+                NpcData[name] = record
+            end
+            record.regions = record.regions or {}
+            record.regions[sea] = island
+        end
+    end
+    local npcRegionRoute
+    local function requestIslandEntrance(destination, entrance)
+        for attempt = 1, 2 do
+            local ok, result = commFLocal("requestEntrance", entrance)
+            task.wait(0.6)
+            local root = getLocalRoot()
+            local arrived = root ~= nil and (root.Position - entrance).Magnitude <= 650
+            reportRecord("Teleport / Entrada " .. destination,
+                arrived and "CONFIRMADO" or "OBSERVADO",
+                "tentativa=" .. tostring(attempt) .. " | chamada=" .. tostring(ok)
+                    .. " | resposta=" .. tostring(result) .. " | perto=" .. tostring(arrived))
+            if arrived then return true end
+        end
+        lpTravelStatus("Entrance failed: " .. destination)
+        lpNotify("Entrance did not move the character to " .. destination .. ".")
+        return false
+    end
+
     LocalActions.lp_select_npc = function(value)
         LocalRuntime.selectedNpc = tostring(value or "")
         return true
@@ -4334,7 +4399,8 @@ do
             lpNotify("Select the current Sea or wait for the NPC to load (PlaceId " .. tostring(game.PlaceId) .. ").")
             return false
         end
-        if (not isCanonicalPlace() or not data.stages or not data.stages[sea])
+        if not (data.stages and data.stages[sea])
+            and not (data.regions and data.regions[sea])
             and not findNpcByAliases(data.aliases or {name}) then
             lpTravelStatus("No NPC route in " .. seaName(sea) .. ": " .. name)
             lpNotify(name .. " has no route in " .. seaName(sea) .. ".")
@@ -4370,18 +4436,25 @@ do
                 return
             end
 
-            local stage = isCanonicalPlace() and data.stages and data.stages[sea] or nil
+            local stage = (isCanonicalPlace() and data.stages and data.stages[sea])
+                or (npcRegionRoute and npcRegionRoute(sea, name))
 
             if not stage then
                 lpTravelStatus("NPC not loaded / no live route: " .. name)
-                reportRecord("Teleport / " .. name, "RECUSADO", "NPC nao carregado; coordenada estatica ignorada neste PlaceId")
-                lpNotify("NPC not loaded; no live route in this PlaceId.")
+                reportRecord("Teleport / " .. name, "RECUSADO", "NPC nao carregado e ilha de referencia indisponivel")
+                lpNotify("NPC not loaded and its island route is unavailable.")
                 return
             end
 
             if data.entrance then
                 commFLocal("requestEntrance", data.entrance)
                 task.wait(0.35)
+            end
+
+            if sea == 2 and data.regions and data.regions[sea] == "Cursed Ship" then
+                if not requestIslandEntrance("Cursed Ship", Vector3.new(923.2125, 126.976, 32852.832)) then
+                    return
+                end
             end
 
             if not travelTo(stage, name .. " region") then
@@ -4481,7 +4554,8 @@ do
         local names, seen = {}, {}
         if sea ~= 0 then
             for name, data in pairs(NpcData) do
-                if (data.stages and data.stages[sea]) or (sea == 3 and name == "Frozen Watcher") then
+                if (data.stages and data.stages[sea]) or (data.regions and data.regions[sea])
+                    or (sea == 3 and name == "Frozen Watcher") then
                     table.insert(names, name)
                     seen[name] = true
                 end
@@ -4576,6 +4650,17 @@ do
         return nil
     end
 
+    npcRegionRoute = function(sea, name)
+        local record = NpcData[name]
+        local region = record and record.regions and record.regions[sea]
+        if not region then return nil end
+        if isCanonicalPlace() and IslandData[sea] then return IslandData[sea][region] end
+        if sea == 2 and region == "Cursed Ship" then
+            return liveIslandDestination(sea, region) or IslandData[2][region]
+        end
+        return liveIslandDestination(sea, region)
+    end
+
     LocalActions.lp_select_island = function(value)
         LocalRuntime.selectedIsland = tostring(value or "")
         return true
@@ -4587,6 +4672,9 @@ do
         local destination = LocalRuntime.selectedIsland
         local target = isCanonicalPlace() and routes and routes[destination]
             or liveIslandDestination(sea, destination)
+        if not target and sea == 2 and destination == "Cursed Ship" then
+            target = CFrame.new(902, 125, 33072)
+        end
         if not target then
             lpTravelStatus("No live island route: " .. tostring(destination))
             reportRecord("Teleport / " .. tostring(destination), "RECUSADO",
@@ -4600,17 +4688,18 @@ do
                 .. " | origem=" .. (isCanonicalPlace() and "coordenada salva" or "mapa carregado"))
 
         task.spawn(function()
-            if isCanonicalPlace() and ((sea == 1 and destination == "Underwater City")
-                or (sea == 2 and destination == "Cursed Ship")) then
-                -- These regions are separated from the ordinary island map.
-                -- Request the game's entrance and verify the resulting position.
-                local ok = commFLocal("requestEntrance", target.Position)
-                task.wait(0.7)
-                local root = getLocalRoot()
-                if not ok or not root or (root.Position - target.Position).Magnitude > 1500 then
-                    lpTravelStatus("Entrance unavailable: " .. destination)
-                    lpNotify("The entrance did not move the character; route needs in-game validation.")
+            if (sea == 1 and destination == "Underwater City")
+                or (sea == 2 and destination == "Cursed Ship") then
+                local entrance = sea == 2
+                    and Vector3.new(923.2125, 126.976, 32852.832)
+                    or Vector3.new(61163.8516, 11.6797, 1819.7842)
+                if not requestIslandEntrance(destination, entrance) then
                     return
+                end
+                -- The portal lands near the ship; approach its selected location.
+                if not isCanonicalPlace() and sea == 2 then
+                    target = liveIslandDestination(sea, destination)
+                        or CFrame.new(902, 125, 33072)
                 end
             end
             travelTo(target, destination)
@@ -6151,7 +6240,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Teleporte 7.6)',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Teleporte 7.7)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -7330,7 +7419,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
-reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.6 iniciado; rotas de ilha/NPC por mapa e Sea; validacao no Roblox pendente.")
+reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.7 iniciado; entrada Cursed Ship e NPCs listados por ilha; validacao no Roblox pendente.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
