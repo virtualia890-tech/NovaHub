@@ -1,4 +1,6 @@
 
+
+
 -- Tave Hub Relatorio 7.3: Sea destinations and visible travel diagnostics.
 -- Volcano Event worker: guarded local defense/collection; sea search and quest chain need live validation.
 -- UI based on the supplied screenshots/videos.
@@ -75,7 +77,7 @@ local ReportRuntime = {
 local ReportActions = {}
 local function reportSnapshot()
     local lines = {
-        "Tave Hub 7.7 - Relatorio da sessao",
+        "Tave Hub 7.8 - Relatorio da sessao",
         "PlaceId: " .. tostring(game.PlaceId),
         "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
         "ACEITE = comando aceite; nao comprova efeito no jogo.",
@@ -4322,7 +4324,7 @@ do
         end
     end
     local npcRegionRoute
-    local function requestIslandEntrance(destination, entrance)
+    local function requestIslandEntrance(destination, entrance, quiet)
         for attempt = 1, 2 do
             local ok, result = commFLocal("requestEntrance", entrance)
             task.wait(0.6)
@@ -4335,7 +4337,58 @@ do
             if arrived then return true end
         end
         lpTravelStatus("Entrance failed: " .. destination)
-        lpNotify("Entrance did not move the character to " .. destination .. ".")
+        if not quiet then
+            lpNotify("Entrance did not move the character to " .. destination .. ".")
+        end
+        return false
+    end
+
+    local cursedShipInterior = Vector3.new(923.2125, 126.976, 32852.832)
+    local cursedShipDoor = CFrame.new(-6501.354, 83.499, -124.544)
+    local cursedShipDoorInside = Vector3.new(-6509, 83.499, -133)
+    local function insideCursedShip()
+        local root = getLocalRoot()
+        return root ~= nil and (root.Position - cursedShipInterior).Magnitude <= 650
+    end
+
+    local function enterCursedShip()
+        if insideCursedShip() then return true end
+        if requestIslandEntrance("Cursed Ship", cursedShipInterior, true) then
+            return true
+        end
+
+        -- The remote entrance may be refused at long range. Move to the
+        -- observed exterior door and walk through its trigger instead.
+        local reachedDoor = travelTo(cursedShipDoor, "Cursed Ship door")
+        if insideCursedShip() then return true end
+        if not reachedDoor then
+            lpNotify("Could not reach the Cursed Ship door.")
+            return false
+        end
+
+        local root = getLocalRoot()
+        local character = root and root.Parent
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid:MoveTo(cursedShipDoorInside)
+            local started = os.clock()
+            while session.alive and os.clock() - started < 3 do
+                if insideCursedShip() then
+                    reportRecord("Teleport / Porta Cursed Ship", "CONFIRMADO", "Passagem pela porta observada")
+                    return true
+                end
+                task.wait(0.15)
+            end
+        end
+
+        -- Some servers accept the entrance request only after approaching it.
+        if requestIslandEntrance("Cursed Ship", cursedShipInterior, true) then
+            return true
+        end
+        reportRecord("Teleport / Porta Cursed Ship", "INTERROMPIDO_OU_FALHOU",
+            "Porta alcancada; passagem nao confirmada | PlaceId=" .. tostring(game.PlaceId))
+        lpTravelStatus("Cursed Ship door reached, entry not confirmed")
+        lpNotify("Reached the Cursed Ship door, but entry was not confirmed. Check the Relatorio page.")
         return false
     end
 
@@ -4452,7 +4505,7 @@ do
             end
 
             if sea == 2 and data.regions and data.regions[sea] == "Cursed Ship" then
-                if not requestIslandEntrance("Cursed Ship", Vector3.new(923.2125, 126.976, 32852.832)) then
+                if not enterCursedShip() then
                     return
                 end
             end
@@ -4513,7 +4566,7 @@ do
             ["Dark Arena"] = CFrame.new(3494, 13, -3259),
             ["Flamingo Room"] = CFrame.new(2285, 15, 905),
             ["Colosseum"] = CFrame.new(-1837, 45, 1360),
-            ["Graveyard"] = CFrame.new(-5411, 49, -721),
+            ["Graveyard"] = CFrame.new(-6027.102, 6.715, -1326.406),
             ["Snow Mountain"] = CFrame.new(512, 402, -5380),
             ["Hot Island"] = CFrame.new(-5478, 16, -5247),
             ["Cold Island"] = CFrame.new(-6027, 15, -5072),
@@ -4688,18 +4741,18 @@ do
                 .. " | origem=" .. (isCanonicalPlace() and "coordenada salva" or "mapa carregado"))
 
         task.spawn(function()
-            if (sea == 1 and destination == "Underwater City")
-                or (sea == 2 and destination == "Cursed Ship") then
-                local entrance = sea == 2
-                    and Vector3.new(923.2125, 126.976, 32852.832)
-                    or Vector3.new(61163.8516, 11.6797, 1819.7842)
-                if not requestIslandEntrance(destination, entrance) then
+            if sea == 2 and destination == "Cursed Ship" then
+                if not enterCursedShip() then
                     return
                 end
-                -- The portal lands near the ship; approach its selected location.
-                if not isCanonicalPlace() and sea == 2 then
+                if not isCanonicalPlace() then
                     target = liveIslandDestination(sea, destination)
                         or CFrame.new(902, 125, 33072)
+                end
+            elseif sea == 1 and destination == "Underwater City" then
+                if not requestIslandEntrance(destination,
+                    Vector3.new(61163.8516, 11.6797, 1819.7842)) then
+                    return
                 end
             end
             travelTo(target, destination)
@@ -6240,7 +6293,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Teleporte 7.7)',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Teleporte 7.8)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -7419,7 +7472,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
-reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.7 iniciado; entrada Cursed Ship e NPCs listados por ilha; validacao no Roblox pendente.")
+reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.8 iniciado; Cursed Ship pela porta e Graveyard corrigido; validacao no Roblox pendente.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
