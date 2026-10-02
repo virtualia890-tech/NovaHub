@@ -1,6 +1,4 @@
 
-
-
 -- Tave Hub Relatorio 7.3: Sea destinations and visible travel diagnostics.
 -- Volcano Event worker: guarded local defense/collection; sea search and quest chain need live validation.
 -- UI based on the supplied screenshots/videos.
@@ -77,7 +75,7 @@ local ReportRuntime = {
 local ReportActions = {}
 local function reportSnapshot()
     local lines = {
-        "Tave Hub 7.8 - Relatorio da sessao",
+        "Tave Hub 7.9 - Relatorio da sessao",
         "PlaceId: " .. tostring(game.PlaceId),
         "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
         "ACEITE = comando aceite; nao comprova efeito no jogo.",
@@ -4819,32 +4817,21 @@ do
                 return
             end
 
-            local target = nil
-
             local core = island:FindFirstChild("Core")
             local relic = core and core:FindFirstChild("PrehistoricRelic")
             local skull = relic and relic:FindFirstChild("Skull")
-
-            if skull then
-                if skull:IsA("BasePart") then
-                    target = skull.CFrame
-                elseif skull:IsA("Model") then
-                    local part = skull.PrimaryPart or skull:FindFirstChildWhichIsA("BasePart", true)
-                    target = part and part.CFrame
-                end
+            local anchor = skull and (skull:IsA("BasePart") and skull
+                or (skull:IsA("Model") and (skull.PrimaryPart
+                    or skull:FindFirstChildWhichIsA("BasePart", true))))
+            if not anchor then
+                local spawn = island:FindFirstChild("SpawnPoint", true)
+                anchor = spawn and spawn:IsA("BasePart") and spawn or nil
             end
-
-            if not target then
-                local part = island:IsA("Model")
-                    and (island.PrimaryPart or island:FindFirstChildWhichIsA("BasePart", true))
-                    or (island:IsA("BasePart") and island or nil)
-                target = part and part.CFrame
-            end
-
-            if target then
-                smoothGo(target * CFrame.new(0, 5, 0))
+            if anchor then
+                travelTo(CFrame.new(anchor.Position + Vector3.new(0, 5, 0)), "Prehistoric Island")
             else
-                lpNotify("Could not find a Prehistoric Island anchor.")
+                lpTravelStatus("Prehistoric Island found, safe anchor missing")
+                lpNotify("Island loaded, but the relic/spawn anchor is not available. Use Volcano Diagnose.")
             end
         end)
 
@@ -5438,7 +5425,7 @@ end
 
 
 -- Volcano diagnostics and a guarded magnet craft request.
--- Event automation remains unbound until the live structure can be verified.
+-- Event actions use live objects; the server's outcome is reported separately.
 local VolcanoActions = {}
 local volcanoLastStatus
 local function volcanoStatus(message)
@@ -5452,14 +5439,17 @@ end
 VolcanoActions.volcano_diagnose = function()
     local sea = LocalActions.lp_current_sea()
     local map = workspace:FindFirstChild("Map")
-    local island = map and map:FindFirstChild("PrehistoricIsland")
+    local island = map and (map:FindFirstChild("PrehistoricIsland")
+        or map:FindFirstChild("Prehistoric Island"))
     local boats = workspace:FindFirstChild("Boats")
     local enemies = workspace:FindFirstChild("Enemies")
     reportRecord("Volcano / Diagnostico", "OBSERVADO", "Sea=" .. tostring(sea)
         .. " | PlaceId=" .. tostring(game.PlaceId)
         .. " | Map=" .. tostring(map ~= nil)
         .. " | PrehistoricIsland=" .. tostring(island ~= nil)
-        .. " | Boats=" .. tostring(boats ~= nil))
+        .. " | Boats=" .. tostring(boats ~= nil)
+        .. " | Root=" .. tostring(LocalPlayer.Character
+            and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") ~= nil))
     if sea ~= 3 then
         volcanoStatus("Third Sea required / current=" .. tostring(sea))
         return false
@@ -5469,9 +5459,17 @@ VolcanoActions.volcano_diagnose = function()
         return true
     end
     local count, lines = 0, {}
+    local core = island:FindFirstChild("Core")
+    local relic = core and core:FindFirstChild("PrehistoricRelic")
+    local rocks = core and core:FindFirstChild("VolcanoRocks")
+    reportRecord("Volcano / Estrutura", "OBSERVADO",
+        "Core=" .. tostring(core ~= nil) .. " | Relic=" .. tostring(relic ~= nil)
+            .. " | Skull=" .. tostring(relic and relic:FindFirstChild("Skull") ~= nil)
+            .. " | Rocks=" .. tostring(rocks ~= nil))
     for _, obj in ipairs(island:GetDescendants()) do
         if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector")
-            or obj:IsA("TouchTransmitter") or obj:IsA("Model") then
+            or obj:IsA("TouchTransmitter") or obj:IsA("Model")
+            or obj.Name == "DinoBone" or obj.Name == "DragonEgg" then
             count = count + 1
             if #lines < 65 then
                 table.insert(lines, obj.ClassName .. ":" .. obj.Name .. "@" .. tostring(obj.Parent and obj.Parent.Name or "?"))
@@ -5524,11 +5522,12 @@ end
 local VolcanoRuntime = {
     flags = {}, running = false, nonce = 0, island = nil, lastCraft = -math.huge,
     prompted = false, promptedAt = 0, visited = {}, arrivedIsland = false,
-    golemWeapon = "Melee", lavaWeapon = "Melee", method = "Normal",
+    lastPickupScan = 0, lastEgg = 0, pickup = nil,
+    golemWeapon = "Melee", lavaWeapon = "Gun", method = "Normal",
 }
 local function volcanoEnabled()
-    for _, enabled in pairs(VolcanoRuntime.flags) do if enabled then return true end end
-    return false
+    local flags = VolcanoRuntime.flags
+    return flags.craft or flags.find or flags.event or flags.bone or flags.egg or flags.fully or false
 end
 local function volcanoPart(obj)
     if obj:IsA("BasePart") then return obj end
@@ -5566,13 +5565,42 @@ local function volcanoMove(part, label)
 end
 local function volcanoIsland()
     local map = workspace:FindFirstChild("Map")
-    return map and map:FindFirstChild("PrehistoricIsland")
+    return map and (map:FindFirstChild("PrehistoricIsland")
+        or map:FindFirstChild("Prehistoric Island"))
+end
+local function volcanoRelicPart(island)
+    local core = island and island:FindFirstChild("Core")
+    local relic = core and core:FindFirstChild("PrehistoricRelic")
+    local skull = relic and relic:FindFirstChild("Skull")
+    return skull and volcanoPart(skull) or nil
+end
+local function volcanoPickup(island)
+    local now = os.clock()
+    if now - VolcanoRuntime.lastPickupScan < 2.5 then
+        local saved = VolcanoRuntime.pickup
+        if saved and saved.Parent then return saved end
+        return nil
+    end
+    VolcanoRuntime.lastPickupScan = now
+    VolcanoRuntime.pickup = nil
+    for _, obj in ipairs(island:GetDescendants()) do
+        local low = string.lower(obj.Name):gsub("[%s_%-]", "")
+        local bone = (VolcanoRuntime.flags.bone or (VolcanoRuntime.flags.fully
+            and not VolcanoRuntime.flags.ignoreBone)) and (low == "dinobone" or low == "dinosaurbone")
+        local egg = (VolcanoRuntime.flags.egg or VolcanoRuntime.flags.fully) and low == "dragonegg"
+        if (bone or egg) and (not VolcanoRuntime.visited[obj]
+            or now - VolcanoRuntime.visited[obj] > 15) and volcanoPart(obj) then
+            VolcanoRuntime.pickup = obj
+            break
+        end
+    end
+    return VolcanoRuntime.pickup
 end
 local function volcanoStep()
     if LocalActions.lp_current_sea() ~= 3 then volcanoStatus("Third Sea required"); return end
     local full = VolcanoRuntime.flags.fully
     if (full and not VolcanoRuntime.flags.ignoreCraft or VolcanoRuntime.flags.craft)
-        and os.clock() - VolcanoRuntime.lastCraft > 60 then
+        and VolcanoRuntime.lastCraft == -math.huge then
         local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
         local magnet = backpack and backpack:FindFirstChild("Volcanic Magnet")
         VolcanoRuntime.lastCraft = os.clock()
@@ -5581,31 +5609,55 @@ local function volcanoStep()
     local island = volcanoIsland()
     if not island then
         VolcanoRuntime.island, VolcanoRuntime.prompted, VolcanoRuntime.visited = nil, false, {}
+        VolcanoRuntime.pickup, VolcanoRuntime.arrivedIsland = nil, false
         volcanoStatus("waiting for Prehistoric Island; boat search needs in-game route")
         return
     end
     if VolcanoRuntime.island ~= island then
         VolcanoRuntime.island, VolcanoRuntime.prompted, VolcanoRuntime.visited = island, false, {}
-        VolcanoRuntime.arrivedIsland = false
+        VolcanoRuntime.arrivedIsland, VolcanoRuntime.pickup = false, nil
+        VolcanoRuntime.lastPickupScan, VolcanoRuntime.lastEgg = 0, 0
         reportRecord("Volcano / Ilha", "CONFIRMADO", "PrehistoricIsland carregada em workspace.Map")
     end
     if (full or VolcanoRuntime.flags.find) and not VolcanoRuntime.arrivedIsland then
-        local part = volcanoPart(island)
-        if part then
-            if not volcanoMove(part, "Prehistoric Island") then return end
-            VolcanoRuntime.arrivedIsland = true
+        local part = volcanoRelicPart(island)
+        local spawn = island:FindFirstChild("SpawnPoint", true)
+        if not part and spawn and spawn:IsA("BasePart") then part = spawn end
+        if not part then
+            volcanoStatus("island found; relic/spawn anchor not loaded")
+            return
         end
+        if not volcanoMove(part, "Prehistoric Island") then return end
+        VolcanoRuntime.arrivedIsland = true
+        reportRecord("Volcano / Chegada", "CONFIRMADO", "Ancora da ilha alcancada")
     end
+    local pickup = (full or VolcanoRuntime.flags.bone or VolcanoRuntime.flags.egg)
+        and volcanoPickup(island) or nil
     if full or VolcanoRuntime.flags.event then
         local enemies = workspace:FindFirstChild("Enemies")
         local target, category, label
         local core = island:FindFirstChild("Core")
         local rocks = core and core:FindFirstChild("VolcanoRocks")
-        if rocks then
+        local relicPart = volcanoRelicPart(island)
+        if enemies then
+            for _, obj in ipairs(enemies:GetChildren()) do
+                if string.find(string.lower(obj.Name), "lava golem", 1, true) then
+                    local hum = obj:FindFirstChildOfClass("Humanoid")
+                    local part = volcanoPart(obj)
+                    if hum and hum.Health > 0 and part and relicPart
+                        and (part.Position - relicPart.Position).Magnitude < 220 then
+                        target, category, label = part, VolcanoRuntime.golemWeapon, "Lava Golem"
+                        break
+                    end
+                end
+            end
+        end
+        if not target and rocks then
             for _, obj in ipairs(rocks:GetDescendants()) do
                 if string.lower(obj.Name) == "volcanorock" and obj:IsA("BasePart") then
                     local c = obj.Color
-                    if c.R > 0.5 and c.R > c.G * 1.7 then
+                    if math.abs(c.R - 185/255) < 0.08
+                        and math.abs(c.G - 53/255) < 0.08 then
                         target, category, label = obj, VolcanoRuntime.lavaWeapon, "lava rock"
                         break
                     end
@@ -5628,60 +5680,106 @@ local function volcanoStep()
             if not volcanoMove(target, label) then return end
             local tool = volcanoTool(category)
             if tool and tool.Enabled then
-                tool:Activate()
+                local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    pcall(function()
+                        root.CFrame = CFrame.lookAt(root.Position, target.Position)
+                    end)
+                end
+                pcall(function() tool:Activate() end)
                 volcanoStatus("attacking " .. label .. " with " .. category)
             else
                 volcanoStatus("equip a " .. category .. " weapon for " .. label)
             end
             return
         end
-        if not VolcanoRuntime.prompted or os.clock() - VolcanoRuntime.promptedAt > 30 then
-            for _, obj in ipairs(island:GetDescendants()) do
-                if obj:IsA("ProximityPrompt") and string.find(
-                    string.lower(obj.Parent and obj.Parent.Name or obj.Name), "relic", 1, true) then
-                    local part = obj.Parent:IsA("BasePart") and obj.Parent or volcanoPart(obj.Parent)
-                    if part and not volcanoMove(part, "Ancient Relic") then return end
-                    local ok = pcall(function()
-                        obj:InputHoldBegin()
-                        task.wait(math.max(obj.HoldDuration, 0.1))
-                        obj:InputHoldEnd()
-                    end)
-                    VolcanoRuntime.prompted = true
-                    VolcanoRuntime.promptedAt = os.clock()
-                    reportRecord("Volcano / Relic", ok and "OBSERVADO" or "ERRO",
-                        ok and "Tentativa de interacao; inicio do evento ainda nao confirmado" or "Falha na interacao")
-                    volcanoStatus(ok and "relic interaction requested" or "relic interaction failed")
-                    return
+        if not pickup and (not VolcanoRuntime.prompted or os.clock() - VolcanoRuntime.promptedAt > 25) then
+            local relic = core and core:FindFirstChild("PrehistoricRelic")
+            local skull = relic and relic:FindFirstChild("Skull")
+            local skullPart = skull and volcanoPart(skull)
+            if skullPart then
+                local prompt, interactionPart = nil, skullPart
+                for _, obj in ipairs(relic:GetDescendants()) do
+                    if obj:IsA("ProximityPrompt") then
+                        prompt = obj
+                        if obj.Parent and obj.Parent:IsA("BasePart") then
+                            interactionPart = obj.Parent
+                        end
+                        break
+                    elseif obj:IsA("TouchTransmitter") and obj.Parent
+                        and obj.Parent:IsA("BasePart") then
+                        interactionPart = obj.Parent
+                    elseif obj:IsA("BasePart")
+                        and string.find(string.lower(obj.Name), "fossil", 1, true) then
+                        interactionPart = obj
+                    end
                 end
+                if not volcanoMove(interactionPart, "Prehistoric Relic") then return end
+                local ok, method = false, "none"
+                if prompt then
+                    method = "prompt"
+                    ok = pcall(function()
+                        if typeof(fireproximityprompt) == "function" then
+                            fireproximityprompt(prompt)
+                        else
+                            prompt:InputHoldBegin()
+                            task.wait(math.max(prompt.HoldDuration, 0.1))
+                            prompt:InputHoldEnd()
+                        end
+                    end)
+                elseif typeof(firetouchinterest) == "function" then
+                    method = "touch"
+                    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    ok = root ~= nil and pcall(function()
+                        firetouchinterest(root, interactionPart, 0)
+                        firetouchinterest(root, interactionPart, 1)
+                    end)
+                else
+                    method = "walk"
+                    local character = LocalPlayer.Character
+                    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                    if humanoid then
+                        humanoid:MoveTo(interactionPart.Position)
+                        ok = true
+                    end
+                end
+                VolcanoRuntime.prompted, VolcanoRuntime.promptedAt = true, os.clock()
+                reportRecord("Volcano / Relic", ok and "OBSERVADO" or "ERRO",
+                    "metodo=" .. method .. " | inicio do evento depende de confirmacao no jogo")
+                volcanoStatus(ok and "relic interaction attempted" or "relic interaction unavailable")
+                return
             end
+            volcanoStatus("relic skull not loaded; use Volcano Diagnose")
+            return
         end
     end
-    if full or VolcanoRuntime.flags.bone or VolcanoRuntime.flags.egg then
-        for _, obj in ipairs(island:GetDescendants()) do
-            local low = string.lower(obj.Name)
-            local bone = (full and not VolcanoRuntime.flags.ignoreBone or VolcanoRuntime.flags.bone)
-                and (string.find(low, "dinosaur bone", 1, true) or low == "dinosaurbone")
-            local egg = (full or VolcanoRuntime.flags.egg)
-                and (string.find(low, "dragon egg", 1, true) or low == "dragonegg")
-            if (bone or egg) and (not VolcanoRuntime.visited[obj]
-                or os.clock() - VolcanoRuntime.visited[obj] > 10) then
-                local part = volcanoPart(obj)
-                if part then
-                    if not volcanoMove(part, obj.Name) then return end
-                    VolcanoRuntime.visited[obj] = os.clock()
-                    if typeof(firetouchinterest) == "function" then
-                        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                        if root then
-                            pcall(firetouchinterest, root, part, 0)
-                            pcall(firetouchinterest, root, part, 1)
-                        end
-                    end
-                    reportRecord("Volcano / Coleta", "OBSERVADO", "Contato tentado com " .. obj.Name
-                        .. "; inventario ainda nao confirmado")
-                    volcanoStatus("collection attempted: " .. obj.Name)
-                    return
+    if pickup then
+        local part = volcanoPart(pickup)
+        if part then
+            if not volcanoMove(part, pickup.Name) then return end
+            if not QuickRuntime.smoothTeleport(CFrame.new(part.Position + Vector3.new(0, 2, 0))) then
+                return
+            end
+            VolcanoRuntime.visited[pickup], VolcanoRuntime.pickup = os.clock(), nil
+            local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if root and typeof(firetouchinterest) == "function" then
+                pcall(firetouchinterest, root, part, 0)
+                pcall(firetouchinterest, root, part, 1)
+            end
+            local low = string.lower(pickup.Name):gsub("[%s_%-]", "")
+            if low == "dragonegg" and os.clock() - VolcanoRuntime.lastEgg > 15 then
+                local modules = ReplicatedStorage:FindFirstChild("Modules")
+                local net = modules and modules:FindFirstChild("Net")
+                local remote = net and net:FindFirstChild("RE/CollectedDragonEgg")
+                if remote and remote:IsA("RemoteEvent") then
+                    VolcanoRuntime.lastEgg = os.clock()
+                    pcall(function() remote:FireServer() end)
                 end
             end
+            reportRecord("Volcano / Coleta", "OBSERVADO", "Contato tentado com " .. pickup.Name
+                .. "; inventario ainda nao confirmado")
+            volcanoStatus("collection attempted: " .. pickup.Name)
+            return
         end
     end
     volcanoStatus("island loaded; waiting for event objects")
@@ -5696,7 +5794,7 @@ local function volcanoSetFlag(flag, enabled)
         return false
     end
     VolcanoRuntime.flags[flag] = enabled == true
-    if enabled and not VolcanoRuntime.running then
+    if volcanoEnabled() and not VolcanoRuntime.running then
         VolcanoRuntime.running = true
         VolcanoRuntime.nonce = VolcanoRuntime.nonce + 1
         local nonce = VolcanoRuntime.nonce
@@ -5710,10 +5808,11 @@ local function volcanoSetFlag(flag, enabled)
                 end
                 task.wait(VolcanoRuntime.method == "Fast" and 0.55 or 1.2)
             end
-            VolcanoRuntime.running = false
+            if VolcanoRuntime.nonce == nonce then VolcanoRuntime.running = false end
         end)
     elseif not volcanoEnabled() then
         VolcanoRuntime.nonce = VolcanoRuntime.nonce + 1
+        VolcanoRuntime.running = false
         QuickRuntime.stopSmoothTeleport()
         volcanoStatus("idle")
     end
@@ -6161,12 +6260,13 @@ local PagesData = {
     { name = "Volcano Event", sections = {
         { title = "Volcano", items = {
             { type = "info", text = "Volcano: scan the island before automation", infoKey = "volcano_status" },
+            { type = "info", text = "Recommended: Gun (Skull Guitar) for lava, Melee for golems, Normal. Auto Find waits for spawn." },
             { type = "dropdown", text = "Sea for Volcano (manual if auto fails)", options = { "Auto", "First Sea", "Second Sea", "Third Sea" }, action = "lp_sea_override" },
             { type = "button", text = "Diagnosticar Ilha Vulcão", action = "volcano_diagnose" },
             { type = "button", text = "Craft Volcanic Magnet (1 tentativa)", action = "volcano_craft" },
             { type = "toggle", text = "Auto Crafting Volcanic Magnet", action = "volcano_auto_craft" },
             { type = "dropdown", text = "Select Weapon Kill Golem", options = { "Melee", "Sword", "Gun", "Blox Fruit" }, action = "volcano_golem_weapon" },
-            { type = "dropdown", text = "Select Weapons Fix Lava", options = { "Melee", "Sword", "Gun", "Blox Fruit" }, action = "volcano_lava_weapon" },
+            { type = "dropdown", text = "Select Weapons Fix Lava", options = { "Gun", "Melee", "Sword", "Blox Fruit" }, action = "volcano_lava_weapon" },
             { type = "dropdown", text = "Select Method Kill Golem", options = { "Normal", "Fast" }, action = "volcano_golem_method" },
             { type = "toggle", text = "Auto Find Prehistoric Island (espera spawn)", action = "volcano_auto_find" },
             { type = "toggle", text = "Auto Event Prehistoric Island", action = "volcano_auto_event" },
@@ -6174,7 +6274,7 @@ local PagesData = {
             { type = "toggle", text = "Auto Collect Egg", action = "volcano_auto_egg" },
         } },
         { title = "Fully Volcano", items = {
-            { type = "toggle", text = "Ignore Craft Volcanic Magnet" },
+            { type = "toggle", text = "Ignore Craft Volcanic Magnet", action = "volcano_ignore_craft" },
             { type = "toggle", text = "Ignore Collect Bone", action = "volcano_ignore_bone" },
             { type = "toggle", text = "Fully Event Prehistoric Island (parcial)", action = "volcano_fully" },
         } },
@@ -6293,7 +6393,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Teleporte 7.8)',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Volcano 7.9)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -7472,7 +7572,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
-reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.8 iniciado; Cursed Ship pela porta e Graveyard corrigido; validacao no Roblox pendente.")
+reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.9 iniciado; fluxo Volcano revisado; validacao no Roblox pendente.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
@@ -7491,5 +7591,3 @@ task.defer(function()
 end)
 
 print("[Tave Hub] Relatorio 7.3 loaded - copy/export diagnostics from Relatorio.")
-
-
