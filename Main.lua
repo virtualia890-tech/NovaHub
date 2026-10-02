@@ -1,4 +1,54 @@
 
+Carregando mensagens mais antigas…
+Depois, né
+O hub completo agora inclui a aba Relatório, com:
+
+Ações acionadas, erros, estados do Farm e chegada dos teleportes.
+Copiar Relatório e Exportar TXT, conforme o suporte do executor.
+Distinção entre comando aceite, resultado confirmado e não implementado.
+O histórico guarda até 1.000 registos por sessão. Exporte antes de fechar ou executar novamente.
+
+Testes locais passaram; ainda não foi executado no Roblox.
+
+
+TaveHub_Relatorio_7_3.txt
+Documento
+o teleport n muda os locais e os npns no sea 2 e acho que no 1 deve ser a mesma coisa, nada dos eventos da ilha vulcao ta funcionando tbm...
+Você encontrou dois problemas diferentes: na 7.3, os destinos do teleporte dependiam de uma atualização do menu, e os controles do Vulcão ainda não tinham ações ligadas.
+
+Preparei o 
+TaveHub_TeleportVolcano_7_4.txt
+. As listas de ilhas e NPCs agora são criadas conforme o Sea detectado. A linha “Teleport:” e a aba Relatório mostram o Sea, o PlaceId e os destinos carregados. No Vulcão, liguei o diagnóstico, o pedido de craft do magnet e tentativas de defesa e coleta quando a ilha estiver carregada.
+
+O Fully Event ainda é parcial: a busca de barco no mar, o farm dos materiais e as missões do Dojo não estão automatizados. Não vou marcar essas etapas como concluídas sem observá-las no jogo. A sintaxe e os testes locais dos controles passaram; o resultado dentro do Roblox ainda precisa do teu teste.
+
+Roda a 7.4 no Sea 2 e vê o texto de “Teleport:” ao abrir LocalPlayer. Quando a Ilha Vulcão aparecer no Sea 3, clica em “Diagnosticar Ilha Vulcão” e depois em “Copiar Relatório”. Envia-me esse texto: ele vai mostrar os objetos reais da tua sessão e permitir corrigir a etapa em que o evento parar.
+
+
+TaveHub_TeleportVolcano_7_4.txt
+Documento
+
+Texto colado(2).txt
+Documento
+as opçoers de teleport no sea 2 e sea 1 n atualiza para mim teleportar em outros locais no sea 2 e sea 1 e nada da ilha prehitorica funciona
+Li o relatório. Ele mostrou a falha principal do Vulcão: na 7.4, as ações existiam no código, mas não estavam ligadas aos controles da interface. Corrigi isso na 7.5. O relatório também mostrou um PlaceId que o detector automático não reconheceu, então acrescentei seleção manual do Sea com atualização imediata das listas de ilhas e NPCs.
+
+Para testar, abra LocalPlayer → Sea (manual if auto fails) e escolha Second Sea ou First Sea. A linha “Teleport:” deve mostrar o Sea escolhido e as listas devem mudar. Na aba Volcano Event, escolha Third Sea no seletor equivalente antes de clicar em Diagnosticar Ilha Vulcão.
+
+A sintaxe e as ligações dos controles passaram nos testes locais. O relatório enviado não contém uma tentativa de Teleport To Island/NPC, então ainda preciso do resultado desse clique para verificar o movimento no jogo. O Fully Event continua parcial: navegação marítima e missões do Dojo ainda não estão automatizadas.
+
+
+TaveHub_TeleportVolcano_7_5.txt
+Documento
+arruma primeiro a questão dos teleports entre as ilhas e npcs nos seas, é um erro basico que podemos arrumar rápidamente, usa as sorcers e tudo o que temos para podermos arrumar isso.
+Foquem-nos nos teleportes. Na 7.6, o hub atualiza as listas pelo Sea detectado, encontra NPCs carregados em subpastas e, quando o PlaceId é diferente dos conhecidos, procura a ilha no mapa antes de mover o personagem. Também acrescentei destinos que faltavam no Sea 2 e 3.
+
+A sintaxe e os testes locais de Sea 1, Sea 2, seleção manual e busca de destinos passaram. Ainda falta confirmar o movimento no Roblox. Testa primeiro uma ilha e um NPC no Sea 2; se algum falhar, envia o novo Relatório após clicar em Teleport To Island ou Teleport To NPC.
+
+
+TaveHub_Teleports_7_6.txt
+Documento
+
 -- Tave Hub Relatorio 7.3: Sea destinations and visible travel diagnostics.
 -- Volcano Event worker: guarded local defense/collection; sea search and quest chain need live validation.
 -- UI based on the supplied screenshots/videos.
@@ -75,7 +125,7 @@ local ReportRuntime = {
 local ReportActions = {}
 local function reportSnapshot()
     local lines = {
-        "Tave Hub 7.4 - Relatorio da sessao",
+        "Tave Hub 7.6 - Relatorio da sessao",
         "PlaceId: " .. tostring(game.PlaceId),
         "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
         "ACEITE = comando aceite; nao comprova efeito no jogo.",
@@ -3700,63 +3750,74 @@ do
         return ok, result
     end
 
-    local seaCacheMap, seaCacheValue
+    local manualSea, syncingSea
+    local function isCanonicalPlace()
+        return game.PlaceId == 2753915549 or game.PlaceId == 4442272183
+            or game.PlaceId == 7449423635
+    end
+    local function normalizeMapName(value)
+        return string.lower(tostring(value or "")):gsub("[^%w]", "")
+    end
+    local seaMarkers = {
+        [1] = {"windmill", "middletown", "jungle", "desert", "piratevillage", "marinefortress", "magmavillage", "fountaincity", "fishmanisland"},
+        [2] = {"kingdomofrose", "cafe", "factory", "greenzone", "cursedship", "icecastle", "forgottenisland"},
+        [3] = {"hydraisland", "floatingturtle", "hauntedcastle", "greattree", "porttown", "tikioutpost", "castleonthesea", "cakeisland"},
+    }
     local function currentSeaLocal()
         if game.PlaceId == 2753915549 then return 1 end
         if game.PlaceId == 4442272183 then return 2 end
         if game.PlaceId == 7449423635 then return 3 end
-
-        -- Copies/private places can keep the Blox Fruits map under another
-        -- PlaceId. Check a few distinctive landmarks only when the ID is unknown.
+        if manualSea then return manualSea end
         local map = workspace:FindFirstChild("Map")
-        if map and map == seaCacheMap and seaCacheValue then
-            return seaCacheValue
-        end
-        if map then
-            local found = {[1] = false, [2] = false, [3] = false}
-            for _, obj in ipairs(map:GetDescendants()) do
-                local name = string.lower(obj.Name)
-                if string.find(name, "tiki", 1, true)
-                    or string.find(name, "hydra", 1, true)
-                    or string.find(name, "floating turtle", 1, true)
-                    or string.find(name, "floatingturtle", 1, true)
-                    or string.find(name, "haunted castle", 1, true)
-                    or string.find(name, "hauntedcastle", 1, true)
-                    or string.find(name, "castle on the sea", 1, true)
-                    or string.find(name, "castleonthesea", 1, true)
-                    or string.find(name, "port town", 1, true)
-                    or string.find(name, "porttown", 1, true)
-                    or string.find(name, "great tree", 1, true)
-                    or string.find(name, "greattree", 1, true) then
-                    found[3] = true
-                    break
-                elseif string.find(name, "hot and cold", 1, true)
-                    or string.find(name, "kingdom", 1, true)
-                    or string.find(name, "forgotten", 1, true) then
-                    found[2] = true
-                elseif string.find(name, "pirate village", 1, true)
-                    or string.find(name, "jungle", 1, true)
-                    or string.find(name, "underwater", 1, true) then
-                    found[1] = true
+        if not map then return 0 end
+        local score = {0, 0, 0}
+        -- Inspect a small, stable portion of the map. A single generic
+        -- landmark must not choose a Sea when the PlaceId is unfamiliar.
+        local function scoreName(name)
+            local normalized = normalizeMapName(name)
+            for sea, markers in ipairs(seaMarkers) do
+                for _, marker in ipairs(markers) do
+                    if normalized == marker then score[sea] = score[sea] + 1; break end
                 end
             end
-            if found[3] then
-                seaCacheMap, seaCacheValue = map, 3
-                return 3
-            end
-            if found[2] then
-                seaCacheMap, seaCacheValue = map, 2
-                return 2
-            end
-            if found[1] then
-                seaCacheMap, seaCacheValue = map, 1
-                return 1
+        end
+        for _, child in ipairs(map:GetChildren()) do
+            scoreName(child.Name)
+            if child:IsA("Folder") then
+                for _, nested in ipairs(child:GetChildren()) do scoreName(nested.Name) end
             end
         end
-        return 0
+        local best, bestScore, tied = 0, 0, false
+        for sea = 1, 3 do
+            if score[sea] > bestScore then
+                best, bestScore, tied = sea, score[sea], false
+            elseif score[sea] > 0 and score[sea] == bestScore then
+                tied = true
+            end
+        end
+        return not tied and bestScore > 0 and best or 0
     end
 
     LocalActions.lp_current_sea = currentSeaLocal
+    LocalActions.lp_sea_override = function(value)
+        if syncingSea then return true end
+        syncingSea = true
+        if isCanonicalPlace() then value = "Auto" end
+        manualSea = ({["First Sea"] = 1, ["Second Sea"] = 2, ["Third Sea"] = 3})[value]
+        for _, controlName in ipairs({"Sea (manual if auto fails)", "Sea for Volcano (manual if auto fails)"}) do
+            local control = UIControls[controlName]
+            if control and control.GetValue() ~= value then control.SetValue(value) end
+        end
+        syncingSea = false
+        reportRecord("Teleport / Sea manual", "OBSERVADO", "Selecao=" .. tostring(value)
+            .. " | PlaceId=" .. tostring(game.PlaceId))
+        if UIControls["Select Island"] and UIControls["Select NPC"]
+            and LocalActions.lp_refresh_destinations then
+            return LocalActions.lp_refresh_destinations()
+        end
+        return true
+    end
+
 
     local function seaName(sea)
         return ({[1] = "First Sea", [2] = "Second Sea", [3] = "Third Sea"})[sea]
@@ -3948,42 +4009,24 @@ do
     local function findNpcByAliases(aliases)
         local roots = {}
         local npcFolder = workspace:FindFirstChild("NPCs")
-        if npcFolder then
-            table.insert(roots, npcFolder)
-        end
-
-        local function scan(list)
-            for _, obj in ipairs(list) do
-                local low = string.lower(obj.Name)
-                for _, alias in ipairs(aliases) do
-                    local want = string.lower(alias)
-                    if low == want or string.find(low, want, 1, true) then
-                        if obj:IsA("Model") then
+        if npcFolder then table.insert(roots, npcFolder) end
+        local map = workspace:FindFirstChild("Map")
+        if map then table.insert(roots, map) end
+        for _, root in ipairs(roots) do
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("Model") then
+                    local low = string.lower(obj.Name)
+                    for _, alias in ipairs(aliases) do
+                        local want = string.lower(alias)
+                        if low == want or string.find(low, want, 1, true) then
                             local part = obj:FindFirstChild("HumanoidRootPart")
-                                or obj:FindFirstChild("Head")
-                                or obj.PrimaryPart
-                                or obj:FindFirstChildWhichIsA("BasePart", true)
-                            if part then
-                                return part
-                            end
-                        elseif obj:IsA("BasePart") then
-                            return obj
+                                or obj:FindFirstChild("Head") or obj.PrimaryPart
+                            if part and part:IsA("BasePart") then return part end
                         end
                     end
                 end
             end
-            return nil
         end
-
-        for _, root in ipairs(roots) do
-            local result = scan(root:GetDescendants())
-            if result then
-                return result
-            end
-        end
-
-        -- Detached instances have no live world position and can send the
-        -- player to a stale NPC location.
         return nil
     end
 
@@ -4331,10 +4374,17 @@ do
 
         local sea = currentSeaLocal()
         if sea == 0 then
-            lpNotify("Cannot identify this Sea (PlaceId " .. tostring(game.PlaceId) .. ").")
+            local loaded = findNpcByAliases(data.aliases or {name})
+            if loaded then
+                reportRecord("Teleport / " .. name, "OBSERVADO", "Sea desconhecido; NPC carregado encontrado")
+                task.spawn(function() travelTo(loaded.CFrame * CFrame.new(0, 0, 4), name) end)
+                return true
+            end
+            lpTravelStatus("Sea unknown and NPC not loaded: " .. name)
+            lpNotify("Select the current Sea or wait for the NPC to load (PlaceId " .. tostring(game.PlaceId) .. ").")
             return false
         end
-        if data.stages and not data.stages[sea]
+        if (not isCanonicalPlace() or not data.stages or not data.stages[sea])
             and not findNpcByAliases(data.aliases or {name}) then
             lpTravelStatus("No NPC route in " .. seaName(sea) .. ": " .. name)
             lpNotify(name .. " has no route in " .. seaName(sea) .. ".")
@@ -4370,10 +4420,12 @@ do
                 return
             end
 
-            local stage = data.stages and data.stages[sea]
+            local stage = isCanonicalPlace() and data.stages and data.stages[sea] or nil
 
             if not stage then
-                lpNotify("No teleport location available for this NPC in the current Sea.")
+                lpTravelStatus("NPC not loaded / no live route: " .. name)
+                reportRecord("Teleport / " .. name, "RECUSADO", "NPC nao carregado; coordenada estatica ignorada neste PlaceId")
+                lpNotify("NPC not loaded; no live route in this PlaceId.")
                 return
             end
 
@@ -4435,6 +4487,8 @@ do
             ["Mansion"] = CFrame.new(-390, 332, 673),
             ["Factory"] = CFrame.new(430, 210, -433),
             ["Green Zone"] = CFrame.new(-2372, 73, -3167),
+            ["Dark Arena"] = CFrame.new(3494, 13, -3259),
+            ["Flamingo Room"] = CFrame.new(2285, 15, 905),
             ["Colosseum"] = CFrame.new(-1837, 45, 1360),
             ["Graveyard"] = CFrame.new(-5411, 49, -721),
             ["Snow Mountain"] = CFrame.new(512, 402, -5380),
@@ -4458,14 +4512,15 @@ do
             ["Mansion"] = CFrame.new(-12553.8125, 332.404, -7621.9175),
             ["Castle on the Sea"] = CFrame.new(-5477.6284, 313.7947, -2808.4585),
             ["Cake Island"] = CFrame.new(-1897, 15, -11576),
+            ["Candy Cane Island"] = CFrame.new(-1038, 10, -14076),
             ["Room Enma/Yama & Secret Temple"] = CFrame.new(5319, 23, -93),
         },
     }
 
     local IslandOrder = {
         [1] = {"Pirate Starter", "Marine Starter", "Middle Town", "Jungle", "Pirate Village", "Desert", "Frozen Village", "Marine Fortress", "Colosseum", "Sky Island 1", "Sky Island 2", "Sky Island 3", "Prison", "Magma Village", "Underwater City", "Fountain City"},
-        [2] = {"Dock", "Kingdom of Rose", "Cafe", "Mansion", "Factory", "Green Zone", "Colosseum", "Graveyard", "Snow Mountain", "Hot Island", "Cold Island", "Cursed Ship", "Ice Castle", "Forgotten Island", "Usoap Island"},
-        [3] = {"Hydra Island", "Peanut Island", "Ice Cream Island", "House Hydra Island", "Tiki", "Haunted Castle", "Port Town", "Great Tree", "Floating Turtle", "Mansion", "Castle on the Sea", "Cake Island", "Room Enma/Yama & Secret Temple"},
+        [2] = {"Dock", "Kingdom of Rose", "Cafe", "Mansion", "Factory", "Green Zone", "Dark Arena", "Flamingo Room", "Colosseum", "Graveyard", "Snow Mountain", "Hot Island", "Cold Island", "Cursed Ship", "Ice Castle", "Forgotten Island", "Usoap Island"},
+        [3] = {"Hydra Island", "Peanut Island", "Ice Cream Island", "House Hydra Island", "Tiki", "Haunted Castle", "Port Town", "Great Tree", "Floating Turtle", "Mansion", "Castle on the Sea", "Cake Island", "Candy Cane Island", "Room Enma/Yama & Secret Temple"},
     }
 
     -- Build these lists from the live place when the page is created, and on refresh.
@@ -4481,14 +4536,14 @@ do
                     seen[name] = true
                 end
             end
-            local folder = workspace:FindFirstChild("NPCs")
-            if folder then
-                for _, obj in ipairs(folder:GetDescendants()) do
-                    if obj:IsA("Model") and obj.Parent and not obj.Parent:IsA("Model")
-                        and not seen[obj.Name] and obj:FindFirstChildWhichIsA("BasePart", true) then
-                        seen[obj.Name] = true
-                        table.insert(names, obj.Name)
-                    end
+        end
+        local folder = workspace:FindFirstChild("NPCs")
+        if folder then
+            for _, obj in ipairs(folder:GetDescendants()) do
+                if obj:IsA("Model") and not seen[obj.Name]
+                    and (obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")) then
+                    seen[obj.Name] = true
+                    table.insert(names, obj.Name)
                 end
             end
         end
@@ -4509,15 +4564,66 @@ do
         islandControl.SetOptions(islands)
         npcControl.SetOptions(names)
         if sea == 0 then
-            lpTravelStatus("Sea unknown / PlaceId " .. tostring(game.PlaceId))
-            reportRecord("Teleport / Destinos", "ERRO", "Sea nao identificado; PlaceId=" .. tostring(game.PlaceId))
-            return false
+            lpTravelStatus("Sea unknown; select Sea for islands / " .. tostring(#names) .. " NPC entries")
+            reportRecord("Teleport / Destinos", "OBSERVADO", "Sea nao identificado; PlaceId="
+                .. tostring(game.PlaceId) .. " | NPCs carregados=" .. tostring(#names))
+            return #names > 0 and names[1] ~= "No NPCs available in this Sea"
         end
-        lpTravelStatus(seaName(sea) .. " / " .. tostring(#islands) .. " islands / " .. tostring(#names) .. " NPCs")
+        lpTravelStatus(seaName(sea) .. (manualSea and " (manual)" or " (auto)")
+            .. " / " .. tostring(#islands) .. " islands / " .. tostring(#names) .. " NPCs")
         reportRecord("Teleport / Destinos", "CONFIRMADO", "PlaceId=" .. tostring(game.PlaceId)
-            .. " | " .. seaName(sea) .. " | ilhas=" .. tostring(#islands) .. " | NPCs=" .. tostring(#names)
+            .. " | " .. seaName(sea) .. " | fonte=" .. (manualSea and "manual" or "auto")
+            .. " | ilhas=" .. tostring(#islands) .. " | NPCs=" .. tostring(#names)
             .. " | selecionada=" .. tostring(islandControl.GetValue()))
         return true
+    end
+
+    local IslandAliases = {
+        [1] = {
+            ["Pirate Starter"] = {"WindMill", "Pirate Starter"}, ["Marine Starter"] = {"Marine", "Marine Starter"},
+            ["Middle Town"] = {"Middle Town", "MiddleTown"}, ["Frozen Village"] = {"Snow", "Frozen Village"},
+            ["Sky Island 1"] = {"Sky Island 1"}, ["Sky Island 2"] = {"Sky Island 2"},
+            ["Sky Island 3"] = {"Sky Island 3"}, ["Underwater City"] = {"FishmanIsland", "Underwater City"},
+        },
+        [2] = {
+            ["Dock"] = {"Dock", "First Spot"}, ["Cafe"] = {"Cafe", "The Cafe"},
+            ["Mansion"] = {"Mansion", "Flamingo Mansion"}, ["Hot Island"] = {"Hot Island", "Hot"},
+            ["Cold Island"] = {"Cold Island", "Cold"}, ["Cursed Ship"] = {"Cursed Ship", "CursedShip"},
+            ["Usoap Island"] = {"Usoap Island", "Ussop Island"},
+        },
+        [3] = {
+            ["Tiki"] = {"Tiki", "Tiki Outpost"}, ["Mansion"] = {"Mansion", "Floating Turtle Mansion"},
+            ["Cake Island"] = {"Cake Island", "CakeIsland"},
+        },
+    }
+    local function liveIslandDestination(sea, destination)
+        local map = workspace:FindFirstChild("Map")
+        if not map then return nil end
+        local aliases = IslandAliases[sea] and IslandAliases[sea][destination] or {destination}
+        local wanted = {}
+        for _, alias in ipairs(aliases) do wanted[normalizeMapName(alias)] = true end
+        local function candidate(obj)
+            if not wanted[normalizeMapName(obj.Name)] then return nil end
+            local part = obj:IsA("BasePart") and obj or (obj:IsA("Model")
+                and (obj:FindFirstChild("SpawnPoint", true)
+                    or obj:FindFirstChild("Entrance", true)
+                    or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)))
+            if part and part:IsA("BasePart") and part.Position.Magnitude > 20 then
+                return CFrame.new(part.Position + Vector3.new(0, 10, 0))
+            end
+            return nil
+        end
+        for _, obj in ipairs(map:GetChildren()) do
+            local cf = candidate(obj)
+            if cf then return cf end
+            if obj:IsA("Folder") then
+                for _, nested in ipairs(obj:GetChildren()) do
+                    cf = candidate(nested)
+                    if cf then return cf end
+                end
+            end
+        end
+        return nil
     end
 
     LocalActions.lp_select_island = function(value)
@@ -4529,16 +4635,23 @@ do
         local sea = currentSeaLocal()
         local routes = IslandData[sea]
         local destination = LocalRuntime.selectedIsland
-        local target = routes and routes[destination]
+        local target = isCanonicalPlace() and routes and routes[destination]
+            or liveIslandDestination(sea, destination)
         if not target then
-            lpTravelStatus("No route: " .. tostring(destination))
-            lpNotify("No route for " .. tostring(destination) .. " in " .. seaName(sea) .. ".")
+            lpTravelStatus("No live island route: " .. tostring(destination))
+            reportRecord("Teleport / " .. tostring(destination), "RECUSADO",
+                "Sem marcador carregado no mapa; PlaceId=" .. tostring(game.PlaceId)
+                    .. " | Sea=" .. tostring(sea))
+            lpNotify("Island marker not loaded for " .. tostring(destination) .. ".")
             return false
         end
+        reportRecord("Teleport / Rota", "OBSERVADO",
+            "Sea=" .. tostring(sea) .. " | ilha=" .. tostring(destination)
+                .. " | origem=" .. (isCanonicalPlace() and "coordenada salva" or "mapa carregado"))
 
         task.spawn(function()
-            if (sea == 1 and destination == "Underwater City")
-                or (sea == 2 and destination == "Cursed Ship") then
+            if isCanonicalPlace() and ((sea == 1 and destination == "Underwater City")
+                or (sea == 2 and destination == "Cursed Ship")) then
                 -- These regions are separated from the ordinary island map.
                 -- Request the game's entrance and verify the resulting position.
                 local ok = commFLocal("requestEntrance", target.Position)
@@ -5532,7 +5645,7 @@ end
 
 local ActionRegistry = setmetatable(LocalActions, {
     __index = function(_, key)
-        return ReportActions[key] or FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
+        return ReportActions[key] or VolcanoActions[key] or FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
             or QuickActions[key] or StatusActions[key] or ShopActions[key]
     end
 })
@@ -5628,6 +5741,7 @@ local PagesData = {
         } },
         { title = "NPC Teleport", items = {
             { type = "info", text = "Teleport: Ready", infoKey = "teleport_status" },
+            { type = "dropdown", text = "Sea (manual if auto fails)", options = { "Auto", "First Sea", "Second Sea", "Third Sea" }, action = "lp_sea_override" },
             { type = "button", text = "Refresh Destinations", action = "lp_refresh_destinations" },
             { type = "dropdown", text = "Select NPC", options = (function() local _, _, list = LocalActions.lp_destination_lists(); return list end)(), action = "lp_select_npc" },
             { type = "button", text = "Teleport To NPC", action = "lp_teleport_npc" },
@@ -5955,6 +6069,7 @@ local PagesData = {
     { name = "Volcano Event", sections = {
         { title = "Volcano", items = {
             { type = "info", text = "Volcano: scan the island before automation", infoKey = "volcano_status" },
+            { type = "dropdown", text = "Sea for Volcano (manual if auto fails)", options = { "Auto", "First Sea", "Second Sea", "Third Sea" }, action = "lp_sea_override" },
             { type = "button", text = "Diagnosticar Ilha Vulcão", action = "volcano_diagnose" },
             { type = "button", text = "Craft Volcanic Magnet (1 tentativa)", action = "volcano_craft" },
             { type = "toggle", text = "Auto Crafting Volcanic Magnet", action = "volcano_auto_craft" },
@@ -6086,7 +6201,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Teleporte 7.4)',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Teleporte 7.6)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -7265,7 +7380,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
-reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.4 iniciado; teleporte por Sea e diagnostico do Vulcao; validacao no Roblox pendente.")
+reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.6 iniciado; rotas de ilha/NPC por mapa e Sea; validacao no Roblox pendente.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
@@ -7284,4 +7399,5 @@ task.defer(function()
 end)
 
 print("[Tave Hub] Relatorio 7.3 loaded - copy/export diagnostics from Relatorio.")
-    
+
+
