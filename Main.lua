@@ -75,7 +75,7 @@ local ReportRuntime = {
 local ReportActions = {}
 local function reportSnapshot()
     local lines = {
-        "Floquitave 7.11 - Relatorio da sessao",
+        "Floquitave 7.12 - Relatorio da sessao",
         "PlaceId: " .. tostring(game.PlaceId),
         "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
         "ACEITE = comando aceite; nao comprova efeito no jogo.",
@@ -5487,7 +5487,7 @@ local VolcanoRuntime = {
     counts = nil, countsAt = 0, questAt = -math.huge, lastBoatBuy = -math.huge,
     dragonCheckAt = -math.huge, dragonQuest = nil, dragonMisses = 0,
     lastEmberRemote = -math.huge, lastEmberScan = -math.huge, emberPart = nil,
-    lastTreeAttack = -math.huge, treeIndex = 1,
+    lastTreeAttack = -math.huge, treeIndex = 1, treeSkillIndex = 0,
     questSwitchAt = 0, questPhase = "dragon", dojoBelt = nil, lastDojoAt = -math.huge,
     boatDirection = -1, boatLastPosition = nil, boatLastProgress = 0, boatStalls = 0,
     pressed = {}, inputMode = nil,
@@ -5603,6 +5603,25 @@ local function volcanoDojo()
         if remote then pcall(function() remote:InvokeServer("requestEntrance", entrance) end) end
     end
     return volcanoGoTo(Vector3.new(5864.864, 1209.551, 812.775), "Dragon Hunter")
+end
+local function volcanoDojoTrainer()
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local fallback = Vector3.new(5855.196, 1208.322, 872.714)
+    if root and (root.Position - fallback).Magnitude > 450 then
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("CommF_")
+        if remote then pcall(function()
+            remote:InvokeServer("requestEntrance", Vector3.new(5661.532, 1013.091, -334.965))
+        end) end
+    end
+    local npcs = workspace:FindFirstChild("NPCs")
+    local npc = npcs and npcs:FindFirstChild("Dojo Trainer", true)
+    local part = npc and volcanoPart(npc)
+    local destination = part and part.Position or fallback
+    -- The two NPCs stand close together; the generic 20-stud tolerance selects the wrong one.
+    if root and (root.Position - destination).Magnitude <= 6 then return true end
+    volcanoStatus("going to Dojo Trainer")
+    return QuickRuntime.smoothTeleport(CFrame.new(destination + Vector3.new(0, 0, 3)))
 end
 local function volcanoAttack(part, category, model)
     local tool = volcanoTool(category)
@@ -5735,6 +5754,59 @@ local volcanoTreePoints = {
     Vector3.new(5255.105, 1004.195, 344.770), Vector3.new(5340.358, 1004.195, 362.639),
     Vector3.new(5323.644, 1004.195, 440.716), Vector3.new(5244.362, 1004.195, 422.457),
 }
+local function volcanoTreeAttack(point)
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    pcall(function() root.CFrame = CFrame.lookAt(root.Position, point) end)
+    -- Use the existing Skill page choices; when none are selected, try the standard Z/X/C keys.
+    local choices = {}
+    for _, category in ipairs({"Melee", "Blox Fruit", "Sword", "Gun"}) do
+        local selected = SkillSettings.getSelected(category)
+        local keys = #selected > 0 and selected or {
+            {key = "Z", hold = 0.12}, {key = "X", hold = 0.12}, {key = "C", hold = 0.12},
+        }
+        if category == "Gun" then
+            if #selected == 0 then keys = {{key = "Z", hold = 0.12}, {key = "X", hold = 0.12}} end
+        end
+        for _, skill in ipairs(keys) do
+            table.insert(choices, {category = category, skill = skill})
+        end
+    end
+    if #choices == 0 then return false end
+    local start = VolcanoRuntime.treeSkillIndex % #choices
+    for delta = 1, #choices do
+        local index = (start + delta - 1) % #choices + 1
+        local choice = choices[index]
+        local tool = volcanoTool(choice.category)
+        if tool then
+            VolcanoRuntime.treeSkillIndex = index
+            local key = choice.skill.key
+            local duration = math.max(0.05, tonumber(choice.skill.hold) or 0.12)
+            local code = string.byte(key)
+            local sent = false
+            if typeof(keypress) == "function" and typeof(keyrelease) == "function" then
+                sent = pcall(keypress, code)
+                if sent then task.wait(duration); pcall(keyrelease, code) end
+            end
+            if not sent then
+                local ok, manager = pcall(function() return game:GetService("VirtualInputManager") end)
+                if ok and manager then
+                    sent = pcall(function()
+                        manager:SendKeyEvent(true, Enum.KeyCode[key], false, game)
+                        task.wait(duration)
+                        manager:SendKeyEvent(false, Enum.KeyCode[key], false, game)
+                    end)
+                end
+            end
+            if tool.Enabled then pcall(function() tool:Activate() end) end
+            volcanoStatus(sent and ("Hydra trees: " .. choice.category .. " " .. key)
+                or "tree skill input unavailable; check executor")
+            return sent
+        end
+    end
+    volcanoStatus("equip a combat tool to break Hydra trees")
+    return false
+end
 local function volcanoDragonHunterStep()
     local now = os.clock()
     if now - VolcanoRuntime.dragonCheckAt >= 4 then
@@ -5756,14 +5828,17 @@ local function volcanoDragonHunterStep()
         volcanoFarmEnemy("Venomous Assailant", Vector3.new(4674.927, 1134.827, 996.309))
     elseif low:find("destroy", 1, true) and low:find("tree", 1, true) then
         local point = volcanoTreePoints[VolcanoRuntime.treeIndex]
-        if not volcanoGoTo(point + Vector3.new(0, 3, 0), "Hydra trees") then return end
-        if now - VolcanoRuntime.lastTreeAttack >= 2 then
+        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not root then volcanoStatus("waiting for character at Hydra trees"); return end
+        if (root.Position - point).Magnitude > 9 then
+            volcanoStatus("going to Hydra tree " .. VolcanoRuntime.treeIndex)
+            if not QuickRuntime.smoothTeleport(CFrame.new(point + Vector3.new(0, 3, 3))) then return end
+        end
+        if now - VolcanoRuntime.lastTreeAttack >= 1.5 then
             VolcanoRuntime.lastTreeAttack = now
-            local tool = volcanoTool("Melee")
-            if tool and tool.Enabled then pcall(function() tool:Activate() end) end
+            volcanoTreeAttack(point)
             VolcanoRuntime.treeIndex = VolcanoRuntime.treeIndex % #volcanoTreePoints + 1
         end
-        volcanoStatus("attacking Hydra trees; awaiting quest progress")
     elseif low:find("head back", 1, true) or low:find("return", 1, true) then
         if not volcanoDojo() then return end
         if now - VolcanoRuntime.questAt >= 8 then
@@ -5816,11 +5891,13 @@ local function volcanoDojoQuestStep()
         if os.clock() - VolcanoRuntime.lastDojoAt >= 8 then
             VolcanoRuntime.lastDojoAt = os.clock()
             local ok, result = volcanoNetFunction("RF/InteractDragonQuest",
-                {NPC = "Dojo Trainer", Command = "CheckQuest"})
+                {NPC = "Dojo Trainer", Command = "RequestQuest"})
             if ok then
                 local checked = string.lower(volcanoQuestText(result, 0))
-                if checked:find("complete", 1, true) or checked:find("claim", 1, true) then
+                if result == nil or checked:find("complete", 1, true)
+                    or checked:find("claim", 1, true) then
                     VolcanoRuntime.dojoBelt = "claim"
+                    volcanoStatus("White belt complete; returning to Dojo Trainer")
                     return
                 end
             end
@@ -5828,7 +5905,7 @@ local function volcanoDojoQuestStep()
         volcanoFarmEnemy("Skull Slayer", Vector3.new(-16759.59, 71.28, 1595.34))
         return
     end
-    if not volcanoDojo() then return end
+    if not volcanoDojoTrainer() then return end
     if os.clock() - VolcanoRuntime.lastDojoAt < 8 then return end
     VolcanoRuntime.lastDojoAt = os.clock()
     local command = belt == "claim" and "ClaimQuest" or "RequestQuest"
@@ -6273,10 +6350,13 @@ local function volcanoSetFlag(flag, enabled)
         return false
     end
     if enabled and FarmingRuntime.mode then
-        volcanoStatus("stop Farming before Volcano automation")
-        return false
+        FarmingRuntime.stop()
+        volcanoStatus("Farming paused; starting Volcano " .. flag)
     end
     VolcanoRuntime.flags[flag] = enabled == true
+    if enabled and flag == "dojo" then
+        VolcanoRuntime.questPhase, VolcanoRuntime.questSwitchAt = "dojo", os.clock()
+    end
     if not (VolcanoRuntime.flags.find or VolcanoRuntime.flags.fully) then
         volcanoReleaseBoatKeys()
     end
@@ -6881,7 +6961,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Volcano 7.11)',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Volcano 7.12)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -8060,7 +8140,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
-reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.11 iniciado; magneto e busca maritima; validacao no Roblox pendente.")
+reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.12 iniciado; magneto e busca maritima; validacao no Roblox pendente.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
@@ -8078,4 +8158,4 @@ task.defer(function()
     end
 end)
 
-print("[Floquitave] Volcano 7.11 loaded - copy/export diagnostics from Relatorio.")
+print("[Floquitave] Volcano 7.12 loaded - copy/export diagnostics from Relatorio.")
