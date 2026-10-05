@@ -75,7 +75,7 @@ local ReportRuntime = {
 local ReportActions = {}
 local function reportSnapshot()
     local lines = {
-        "Floquitave 7.12 - Relatorio da sessao",
+        "Floquitave 7.13 - Relatorio da sessao",
         "PlaceId: " .. tostring(game.PlaceId),
         "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
         "ACEITE = comando aceite; nao comprova efeito no jogo.",
@@ -5428,6 +5428,7 @@ end
 local VolcanoActions = {}
 local volcanoLastStatus
 local volcanoMaterialCounts
+local volcanoCraftPosition
 local function volcanoStatus(message)
     local label = StatusRuntime.infoLabels.volcano_status
     if label and label.Parent then label.Text = "Volcano: " .. tostring(message) end
@@ -5454,6 +5455,7 @@ VolcanoActions.volcano_craft = function()
         volcanoStatus("materials needed: Scrap " .. counts.scrap .. "/10, Ember " .. counts.ember .. "/15")
         return false
     end
+    if volcanoCraftPosition and not volcanoCraftPosition() then return false end
     local remotes = ReplicatedStorage:FindFirstChild("Remotes")
     local remote = remotes and remotes:FindFirstChild("CommF_")
     if not remote then
@@ -5603,6 +5605,15 @@ local function volcanoDojo()
         if remote then pcall(function() remote:InvokeServer("requestEntrance", entrance) end) end
     end
     return volcanoGoTo(Vector3.new(5864.864, 1209.551, 812.775), "Dragon Hunter")
+end
+volcanoCraftPosition = function()
+    local target = Vector3.new(5864.864, 1209.551, 812.775)
+    if not volcanoDojo() then return false end
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    if (root.Position - target).Magnitude <= 8 then return true end
+    volcanoStatus("approaching Dragon Hunter to craft magnet")
+    return QuickRuntime.smoothTeleport(CFrame.new(target + Vector3.new(0, 0, 3)))
 end
 local function volcanoDojoTrainer()
     local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -5911,10 +5922,21 @@ local function volcanoDojoQuestStep()
     local command = belt == "claim" and "ClaimQuest" or "RequestQuest"
     local ok, result = volcanoNetFunction("RF/InteractDragonQuest",
         {NPC = "Dojo Trainer", Command = command})
-    if not ok then volcanoStatus("Dojo Trainer " .. command .. " unavailable"); return end
+    if not ok then volcanoStatus("Dojo Trainer " .. command .. " unavailable: " .. tostring(result)); return end
+    if command == "RequestQuest" and result == nil then
+        local claimed, claimReply = volcanoNetFunction("RF/InteractDragonQuest",
+            {NPC = "Dojo Trainer", Command = "ClaimQuest"})
+        reportRecord("Volcano / Dojo Trainer", claimed and "OBSERVADO" or "ERRO",
+            "ClaimQuest: " .. tostring(claimReply))
+        ok, result = volcanoNetFunction("RF/InteractDragonQuest",
+            {NPC = "Dojo Trainer", Command = "RequestQuest"})
+        if not ok then volcanoStatus("Dojo quest request refused: " .. tostring(result)); return end
+    end
     local response = volcanoQuestText(result, 0)
-    local low = string.lower(response)
-    reportRecord("Volcano / Dojo Trainer", "OBSERVADO", command .. ": " .. response:sub(1, 110))
+    local beltName = type(result) == "table" and tostring(result.Belt or result.belt or "") or ""
+    local low = string.lower(beltName .. " " .. response)
+    reportRecord("Volcano / Dojo Trainer", "OBSERVADO", command .. ": "
+        .. (beltName ~= "" and (beltName .. " | ") or "") .. response:sub(1, 110))
     if low:find("skull slayer", 1, true) or low:find("white", 1, true) then
         VolcanoRuntime.dojoBelt = "white"
         volcanoStatus("White belt: farming Skull Slayer")
@@ -5922,8 +5944,8 @@ local function volcanoDojoQuestStep()
         VolcanoRuntime.dojoBelt = nil
         volcanoStatus("Dojo claim attempted; awaiting next quest")
     else
-        VolcanoRuntime.dojoBelt = response ~= "" and response or nil
-        volcanoStatus("Dojo quest: " .. (response ~= "" and response:sub(1, 65) or "awaiting response"))
+        VolcanoRuntime.dojoBelt = beltName ~= "" and beltName or (response ~= "" and response or nil)
+        volcanoStatus("Dojo quest: " .. (low ~= " " and low:sub(1, 65) or "awaiting response"))
     end
 end
 local function volcanoInputKey(letter, down)
@@ -6144,15 +6166,20 @@ local function volcanoStep()
         return
     end
     local full = VolcanoRuntime.flags.fully
-    local island = volcanoIsland()
-    if not island and (VolcanoRuntime.flags.craft or (full and not VolcanoRuntime.flags.ignoreCraft)) then
+    local island = (full or VolcanoRuntime.flags.find or VolcanoRuntime.flags.event
+        or VolcanoRuntime.flags.bone or VolcanoRuntime.flags.egg) and volcanoIsland() or nil
+    if VolcanoRuntime.flags.craft or (full and not island and not VolcanoRuntime.flags.ignoreCraft) then
         volcanoReleaseBoatKeys()
         if not volcanoFarmMagnet() then return end
     end
     if not island then
         VolcanoRuntime.island, VolcanoRuntime.prompted, VolcanoRuntime.visited = nil, false, {}
         VolcanoRuntime.pickup, VolcanoRuntime.arrivedIsland = nil, false
-        if full or VolcanoRuntime.flags.find then
+        if (full or VolcanoRuntime.flags.find) and VolcanoRuntime.flags.dojo
+            and os.clock() - VolcanoRuntime.questSwitchAt < 45 then
+            volcanoReleaseBoatKeys()
+            volcanoDojoQuestStep()
+        elseif full or VolcanoRuntime.flags.find then
             volcanoBoatSearch()
         elseif VolcanoRuntime.flags.dragon and VolcanoRuntime.flags.dojo then
             volcanoReleaseBoatKeys()
@@ -6961,7 +6988,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Volcano 7.12)',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Volcano 7.13)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -8140,7 +8167,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
-reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.12 iniciado; magneto e busca maritima; validacao no Roblox pendente.")
+reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.13 iniciado; magneto e busca maritima; validacao no Roblox pendente.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
@@ -8158,4 +8185,4 @@ task.defer(function()
     end
 end)
 
-print("[Floquitave] Volcano 7.12 loaded - copy/export diagnostics from Relatorio.")
+print("[Floquitave] Volcano 7.13 loaded - copy/export diagnostics from Relatorio.")
