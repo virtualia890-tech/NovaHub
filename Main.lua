@@ -75,7 +75,7 @@ local ReportRuntime = {
 local ReportActions = {}
 local function reportSnapshot()
     local lines = {
-        "Floquitave 7.13 - Relatorio da sessao",
+        "Floquitave 7.14 - Relatorio da sessao",
         "PlaceId: " .. tostring(game.PlaceId),
         "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
         "ACEITE = comando aceite; nao comprova efeito no jogo.",
@@ -4390,6 +4390,8 @@ do
         return false
     end
 
+    LocalActions.lp_enter_cursed_ship = enterCursedShip
+
     LocalActions.lp_select_npc = function(value)
         LocalRuntime.selectedNpc = tostring(value or "")
         return true
@@ -6433,9 +6435,371 @@ VolcanoRuntime.stop = function()
     QuickRuntime.stopSmoothTeleport()
 end
 
+-- Race Normal automation. One bounded worker owns movement; no permanent background polling.
+local RaceActions = {}
+local RaceRuntime = {
+    mode = nil, nonce = 0, running = false, hopCaptain = false,
+    lastHop = -math.huge, lastCheck = -math.huge, lastBuy = -math.huge,
+    lastFlower = -math.huge, lastChest = -math.huge, lastAttack = -math.huge,
+    counts = nil, countsAt = -math.huge, visitedChests = {},
+    chestStarted = os.clock(), chestCount = 0,
+}
+local function raceStatus(value, state)
+    local message = tostring(value)
+    local label = StatusRuntime.infoLabels.race_status
+    if label and label.Parent then label.Text = "Race: " .. message end
+    if RaceRuntime.status ~= message then
+        RaceRuntime.status = message
+        reportRecord("Upgrade Race / Estado", state or "OBSERVADO", message)
+    end
+end
+local function raceInvoke(...)
+    local args = {...}
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    local remote = remotes and remotes:FindFirstChild("CommF_")
+    if not remote then return false, "CommF_ missing" end
+    return pcall(function() return remote:InvokeServer(table.unpack(args)) end)
+end
+local function raceName()
+    local data = LocalPlayer:FindFirstChild("Data")
+    local value = data and data:FindFirstChild("Race")
+    return value and tostring(value.Value) or ""
+end
+local function raceRoot()
+    return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+end
+local function racePart(model)
+    if not model then return nil end
+    if model:IsA("BasePart") then return model end
+    return model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+        or model:FindFirstChildWhichIsA("BasePart", true)
+end
+local function raceGo(position, label)
+    local root = raceRoot()
+    if not root then raceStatus("waiting for character"); return false end
+    if (root.Position - position).Magnitude <= 8 then return true end
+    raceStatus("going to " .. label)
+    return QuickRuntime.smoothTeleport(CFrame.new(position + Vector3.new(0, 3, 3)))
+end
+local function raceTool()
+    local character = LocalPlayer.Character
+    local hum = character and character:FindFirstChildOfClass("Humanoid")
+    if not hum then return nil end
+    local tool = character:FindFirstChildOfClass("Tool")
+    if tool then return tool end
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if backpack then
+        for _, candidate in ipairs(backpack:GetChildren()) do
+            if candidate:IsA("Tool") then
+                pcall(function() hum:EquipTool(candidate) end)
+                return character:FindFirstChildOfClass("Tool")
+            end
+        end
+    end
+end
+local function raceFight(names, stage)
+    local enemies = workspace:FindFirstChild("Enemies")
+    local root = raceRoot()
+    local target, nearest
+    if enemies and root then
+        for _, model in ipairs(enemies:GetChildren()) do
+            local low = string.lower(model.Name)
+            for _, name in ipairs(names) do
+                if low:find(string.lower(name), 1, true) then
+                    local hum = model:FindFirstChildOfClass("Humanoid")
+                    local part = racePart(model)
+                    if hum and hum.Health > 0 and part then
+                        local dist = (part.Position - root.Position).Magnitude
+                        if not nearest or dist < nearest then target, nearest = model, dist end
+                    end
+                    break
+                end
+            end
+        end
+    end
+    if not target then
+        if stage then raceGo(stage, table.concat(names, "/") .. " spawn") end
+        raceStatus("waiting for " .. table.concat(names, "/"))
+        return false
+    end
+    local part = racePart(target)
+    if not raceGo(part.Position, target.Name) then return false end
+    local tool = raceTool()
+    if not tool then raceStatus("equip a combat Tool for " .. target.Name); return false end
+    if os.clock() - RaceRuntime.lastAttack >= 0.45 then
+        RaceRuntime.lastAttack = os.clock()
+        pcall(function() root.CFrame = CFrame.lookAt(root.Position, part.Position) end)
+        if tool.Enabled then pcall(function() tool:Activate() end) end
+    end
+    raceStatus("attacking " .. target.Name)
+    return true
+end
+local function raceHasItem(name)
+    local character = LocalPlayer.Character
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    return (character and character:FindFirstChild(name))
+        or (backpack and backpack:FindFirstChild(name))
+end
+local function raceMaterials(force)
+    if not force and RaceRuntime.counts and os.clock() - RaceRuntime.countsAt < 5 then
+        return RaceRuntime.counts
+    end
+    local ok, inventory = raceInvoke("getInventory")
+    if not ok or type(inventory) ~= "table" then return nil end
+    local counts = {ectoplasm = 0}
+    for key, item in pairs(inventory) do
+        local name = type(item) == "table" and tostring(item.Name or item.name or key)
+            or tostring(key)
+        local amount = type(item) == "table" and tonumber(item.Count or item.count
+            or item.Amount or item.amount or 1) or tonumber(item)
+        if string.lower(name) == "ectoplasm" then counts.ectoplasm = amount or 0 end
+    end
+    RaceRuntime.counts, RaceRuntime.countsAt = counts, os.clock()
+    return counts
+end
+local function raceChestStep()
+    local root = raceRoot()
+    if not root then raceStatus("waiting for character"); return end
+    local nearest, nearestChest, distance
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child.Name:find("Chest", 1, true) then
+            local part = racePart(child)
+            if part and (not RaceRuntime.visitedChests[child]
+                or os.clock() - RaceRuntime.visitedChests[child] > 90) then
+                local current = (root.Position - part.Position).Magnitude
+                if not distance or current < distance then
+                    nearest, nearestChest, distance = part, child, current
+                end
+            end
+        end
+    end
+    if not nearest then
+        if os.clock() - RaceRuntime.chestStarted > 180
+            and os.clock() - RaceRuntime.lastHop > 180 then
+            RaceRuntime.lastHop, RaceRuntime.chestStarted = os.clock(), os.clock()
+            raceStatus("Fist not found; hopping for new chests")
+            StatusActions.hop_server()
+        else
+            raceStatus("no loaded chest; waiting for Fist of Darkness")
+        end
+        return
+    end
+    if not raceGo(nearest.Position, "chest") then return end
+    RaceRuntime.visitedChests[nearestChest] = os.clock()
+    RaceRuntime.chestCount = RaceRuntime.chestCount + 1
+    if typeof(firetouchinterest) == "function" then
+        pcall(firetouchinterest, root, nearest, 0)
+        pcall(firetouchinterest, root, nearest, 1)
+    end
+    raceStatus("chest contact attempted; checking for Fist of Darkness")
+end
+local function raceGhoulStep()
+    if string.lower(raceName()) == "ghoul" then raceStatus("Ghoul race confirmed", "CONFIRMADO"); return end
+    if LocalActions.lp_current_sea() ~= 2 then
+        raceStatus("Ghoul requires Second Sea; travel there first"); return
+    end
+    local counts = raceMaterials()
+    if not counts then raceStatus("inventory unavailable; Ghoul paused"); return end
+    if not LocalActions.lp_enter_cursed_ship() then
+        raceStatus("Cursed Ship entrance unconfirmed"); return
+    end
+    if counts.ectoplasm < 100 then
+        raceFight({"Ship Deckhand", "Ship Engineer", "Ship Steward", "Ship Officer"},
+            Vector3.new(923, 126, 33200))
+        return
+    end
+    if not raceHasItem("Hellfire Torch") then
+        local enemies = workspace:FindFirstChild("Enemies")
+        local captain
+        if enemies then
+            for _, enemy in ipairs(enemies:GetChildren()) do
+                if string.lower(enemy.Name):find("cursed captain", 1, true) then
+                    captain = enemy; break
+                end
+            end
+        end
+        if captain and racePart(captain) then
+            raceFight({"Cursed Captain"}, racePart(captain).Position)
+        elseif RaceRuntime.hopCaptain and os.clock() - RaceRuntime.lastHop > 90 then
+            RaceRuntime.lastHop = os.clock()
+            raceStatus("Cursed Captain absent; changing server")
+            StatusActions.hop_server()
+        else
+            raceStatus("waiting for Cursed Captain / Hellfire Torch")
+        end
+        return
+    end
+    if os.clock() - RaceRuntime.lastBuy < 10 then return end
+    RaceRuntime.lastBuy = os.clock()
+    local check, reason = raceInvoke("Ectoplasm", "BuyCheck", 4)
+    local ok, answer = raceInvoke("Ectoplasm", "Change", 4)
+    reportRecord("Upgrade Race / Ghoul", ok and "OBSERVADO" or "ERRO",
+        "check=" .. tostring(reason) .. " | change=" .. tostring(answer))
+    raceStatus(check and ok and "Ghoul purchase sent; checking race"
+        or "Ghoul purchase refused: " .. tostring(answer))
+end
+local function raceV2Step()
+    if LocalActions.lp_current_sea() ~= 2 then
+        raceStatus("V2/V3 requires Second Sea"); return
+    end
+    if os.clock() - RaceRuntime.lastCheck < 5 then return end
+    RaceRuntime.lastCheck = os.clock()
+    local okV3, v3 = raceInvoke("Wenlocktoad", "1")
+    if okV3 and v3 == -2 then raceStatus(raceName() .. " V3 confirmed", "CONFIRMADO"); return end
+    local ok, stage = raceInvoke("Alchemist", "1")
+    if not ok then raceStatus("Alchemist status unavailable: " .. tostring(stage)); return end
+    if stage == -2 then
+        raceStatus("V2 complete; V3 requires the race-specific Arowe quest")
+        reportRecord("Upgrade Race / V3", "NAO IMPLEMENTADA",
+            "Arowe quest varies by race; progress is not inferred from the V2 result")
+        return
+    end
+    if type(stage) == "number" and stage < 0 then
+        raceStatus("Alchemist prerequisites unavailable: " .. tostring(stage))
+        return
+    end
+    if stage == 0 or stage == 1 then
+        if not raceGo(Vector3.new(-2777.453, 72.992, -3572.257), "Alchemist") then return end
+        local started, response = raceInvoke("Alchemist", "2")
+        raceStatus(started and "Alchemist quest requested: " .. tostring(response)
+            or "Alchemist rejected quest: " .. tostring(response))
+        return
+    end
+    local flowers = {"Flower 1", "Flower 2", "Flower 3"}
+    for _, flower in ipairs(flowers) do
+        if not raceHasItem(flower) then
+            local world = workspace:FindFirstChild(flower)
+            local part = racePart(world)
+            if part then
+                if raceGo(part.Position, flower) then
+                    local root = raceRoot()
+                    if root and typeof(firetouchinterest) == "function" then
+                        pcall(firetouchinterest, root, part, 0)
+                        pcall(firetouchinterest, root, part, 1)
+                    end
+                    raceStatus("collecting " .. flower)
+                end
+            elseif flower == "Flower 3" then
+                raceFight({"Swan Pirate", "Factory Staff"}, Vector3.new(883, 122, 1240))
+            else
+                raceStatus(flower .. " not spawned / not streamed")
+            end
+            return
+        end
+    end
+    if not raceGo(Vector3.new(-2777.453, 72.992, -3572.257), "Alchemist") then return end
+    local complete, answer = raceInvoke("Alchemist", "3")
+    reportRecord("Upgrade Race / V2", complete and "OBSERVADO" or "ERRO", tostring(answer))
+    raceStatus("V2 turn-in attempted; checking Alchemist")
+end
+local function raceCyborgStep()
+    if string.lower(raceName()) == "cyborg" then raceStatus("Cyborg race confirmed", "CONFIRMADO"); return end
+    if LocalActions.lp_current_sea() ~= 2 then raceStatus("Cyborg requires Second Sea"); return end
+    local brain = raceHasItem("Core Brain")
+    local fist = raceHasItem("Fist of Darkness")
+    if brain or fist then
+        raceStatus((fist and "Fist of Darkness" or "Core Brain")
+            .. " found; lab capsule interaction still needs live validation")
+        return
+    end
+    if RaceRuntime.mode == "cyborg_chests" or RaceRuntime.mode == "cyborg_full" then
+        raceChestStep()
+        return
+    end
+    if os.clock() - RaceRuntime.lastBuy > 10 then
+        RaceRuntime.lastBuy = os.clock()
+        local ok, reply = raceInvoke("CyborgTrainer", "Buy")
+        reportRecord("Upgrade Race / Cyborg", ok and "OBSERVADO" or "ERRO", tostring(reply))
+    end
+    raceStatus("Cyborg prerequisites missing: Fist / Core Brain / puzzle")
+end
+local function raceStep()
+    if RaceRuntime.mode == "ghoul" then raceGhoulStep()
+    elseif RaceRuntime.mode == "v2v3" then raceV2Step()
+    elseif RaceRuntime.mode then raceCyborgStep()
+    elseif RaceRuntime.hopCaptain then
+        if LocalActions.lp_current_sea() ~= 2 then raceStatus("Cursed Captain requires Second Sea"); return end
+        if not LocalActions.lp_enter_cursed_ship() then return end
+        local enemies = workspace:FindFirstChild("Enemies")
+        local boss
+        if enemies then
+            for _, enemy in ipairs(enemies:GetChildren()) do
+                if string.lower(enemy.Name):find("cursed captain", 1, true) then
+                    boss = enemy; break
+                end
+            end
+        end
+        if boss and racePart(boss) then
+            raceFight({"Cursed Captain"}, racePart(boss).Position)
+        elseif os.clock() - RaceRuntime.lastHop > 90 then
+            RaceRuntime.lastHop = os.clock()
+            raceStatus("Cursed Captain absent; changing server")
+            StatusActions.hop_server()
+        else
+            raceStatus("waiting for Cursed Captain")
+        end
+    end
+end
+local function raceSetMode(mode, enabled)
+    if enabled then
+        if RaceRuntime.mode and RaceRuntime.mode ~= mode then
+            raceStatus("turn off " .. RaceRuntime.mode .. " before starting " .. mode)
+            return false
+        end
+        if VolcanoRuntime.running then
+            raceStatus("stop Volcano before Race Normal")
+            return false
+        end
+        if FarmingRuntime.mode then FarmingRuntime.stop() end
+        if mode == "cyborg_chests" or mode == "cyborg_full" then
+            RaceRuntime.chestStarted = os.clock()
+        end
+        RaceRuntime.mode = mode
+    elseif RaceRuntime.mode == mode then
+        RaceRuntime.mode = nil
+        QuickRuntime.stopSmoothTeleport()
+    end
+    if (RaceRuntime.mode or RaceRuntime.hopCaptain) and not RaceRuntime.running then
+        RaceRuntime.running = true
+        RaceRuntime.nonce = RaceRuntime.nonce + 1
+        local nonce = RaceRuntime.nonce
+        task.spawn(function()
+            while session.alive and nonce == RaceRuntime.nonce
+                and (RaceRuntime.mode or RaceRuntime.hopCaptain) do
+                local ok, err = pcall(raceStep)
+                if not ok then
+                    raceStatus("error: " .. tostring(err):sub(1, 90), "ERRO")
+                    break
+                end
+                task.wait(1.5)
+            end
+            if nonce == RaceRuntime.nonce then RaceRuntime.running = false end
+        end)
+    elseif not (RaceRuntime.mode or RaceRuntime.hopCaptain) then
+        RaceRuntime.nonce = RaceRuntime.nonce + 1
+        RaceRuntime.running = false
+        raceStatus("idle")
+    end
+    return true
+end
+RaceActions.race_auto_v2v3 = function(value) return raceSetMode("v2v3", value) end
+RaceActions.race_auto_cyborg_full = function(value) return raceSetMode("cyborg_full", value) end
+RaceActions.race_auto_cyborg_chests = function(value) return raceSetMode("cyborg_chests", value) end
+RaceActions.race_auto_cyborg = function(value) return raceSetMode("cyborg", value) end
+RaceActions.race_auto_ghoul = function(value) return raceSetMode("ghoul", value) end
+RaceActions.race_hop_captain = function(value)
+    RaceRuntime.hopCaptain = value == true
+    return raceSetMode(RaceRuntime.mode, RaceRuntime.mode ~= nil)
+end
+RaceRuntime.stop = function()
+    RaceRuntime.mode, RaceRuntime.hopCaptain = nil, false
+    RaceRuntime.nonce = RaceRuntime.nonce + 1
+    QuickRuntime.stopSmoothTeleport()
+end
+
 local ActionRegistry = setmetatable(LocalActions, {
     __index = function(_, key)
-        return ReportActions[key] or VolcanoActions[key] or FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
+        return ReportActions[key] or VolcanoActions[key] or RaceActions[key] or FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
             or QuickActions[key] or StatusActions[key] or ShopActions[key]
     end
 })
@@ -6795,12 +7159,13 @@ local PagesData = {
             { type = "toggle", text = "Auto Finish Train Draco Quest" },
         } },
         { title = "Race Normal", items = {
-            { type = "toggle", text = "Auto Upgrade Race V2-V3" },
-            { type = "toggle", text = "Auto Get Fully Cyborg" },
-            { type = "toggle", text = "Auto Get Cyborg Hop Collect Chest" },
-            { type = "toggle", text = "Auto Get Cyborg" },
-            { type = "toggle", text = "Hop Cursed Captain" },
-            { type = "toggle", text = "Auto Get Ghoul" },
+            { type = "info", text = "Race: status da automação", infoKey = "race_status" },
+            { type = "toggle", text = "Auto Upgrade Race V2 (V3: status)", action = "race_auto_v2v3" },
+            { type = "toggle", text = "Auto Get Fully Cyborg (puzzle parcial)", action = "race_auto_cyborg_full" },
+            { type = "toggle", text = "Auto Get Cyborg Hop Collect Chest (parcial)", action = "race_auto_cyborg_chests" },
+            { type = "toggle", text = "Auto Get Cyborg (prerequisites)", action = "race_auto_cyborg" },
+            { type = "toggle", text = "Hop Cursed Captain", action = "race_hop_captain" },
+            { type = "toggle", text = "Auto Get Ghoul", action = "race_auto_ghoul" },
         } },
         { title = "Race V4", items = {
             { type = "toggle", text = "No Frog" },
@@ -6988,7 +7353,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Volcano 7.13)',
+    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Race Normal 7.14)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -8104,6 +8469,7 @@ local function stopHub()
     if FarmRuntime.stop then FarmRuntime.stop() end
     if FarmingRuntime.stop then FarmingRuntime.stop() end
     if VolcanoRuntime.stop then VolcanoRuntime.stop() end
+    if RaceRuntime.stop then RaceRuntime.stop() end
 
     if LocalRuntime and LocalRuntime.stop then
         pcall(LocalRuntime.stop)
@@ -8167,7 +8533,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
-reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.13 iniciado; magneto e busca maritima; validacao no Roblox pendente.")
+reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.14 iniciado; magneto e busca maritima; validacao no Roblox pendente.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
@@ -8185,4 +8551,4 @@ task.defer(function()
     end
 end)
 
-print("[Floquitave] Volcano 7.13 loaded - copy/export diagnostics from Relatorio.")
+print("[Floquitave] Race Normal 7.14 loaded - copy/export diagnostics from Relatorio.")
