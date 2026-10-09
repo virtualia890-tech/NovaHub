@@ -1,10 +1,11 @@
--- Anime Dice | Hub básico 1.0 | 09/10/2026
+-- Anime Dice | Hub básico 1.1 | 09/10/2026
 -- Execute dentro de Anime Dice. A lista abaixo é fixa nesta versão;
 -- códigos podem expirar ou surgir depois da publicação.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
@@ -74,12 +75,27 @@ local title = make("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left
 }, frame)
 local close = make("TextButton", {
-    Size = UDim2.fromOffset(30, 28), Position = UDim2.new(1, -40, 0, 10),
+    Size = UDim2.fromOffset(30, 28), Position = UDim2.new(1, -39, 0, 10),
     Text = "×", TextSize = 20, Font = Enum.Font.GothamBold,
     TextColor3 = Color3.new(1, 1, 1),
     BackgroundColor3 = Color3.fromRGB(110, 50, 62), BorderSizePixel = 0
 }, frame)
 make("UICorner", {CornerRadius = UDim.new(0, 7)}, close)
+local minimize = make("TextButton", {
+    Size = UDim2.fromOffset(30, 28), Position = UDim2.new(1, -76, 0, 10),
+    Text = "−", TextSize = 22, Font = Enum.Font.GothamBold,
+    TextColor3 = Color3.new(1, 1, 1),
+    BackgroundColor3 = Color3.fromRGB(63, 74, 105), BorderSizePixel = 0
+}, frame)
+make("UICorner", {CornerRadius = UDim.new(0, 7)}, minimize)
+local opener = make("TextButton", {
+    Size = UDim2.fromOffset(112, 36), Position = UDim2.fromOffset(12, 112),
+    Text = "Anime Dice  +", TextSize = 13, Font = Enum.Font.GothamBold,
+    TextColor3 = Color3.new(1, 1, 1),
+    BackgroundColor3 = Color3.fromRGB(58, 109, 88), BorderSizePixel = 0,
+    Visible = false, Active = true, ZIndex = 10
+}, gui)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, opener)
 
 local function button(textValue, y, color)
     local result = make("TextButton", {
@@ -108,6 +124,14 @@ local function setStatus(value)
 end
 
 connect(close.MouseButton1Click, closeHub)
+connect(minimize.MouseButton1Click, function()
+    frame.Visible = false
+    opener.Visible = true
+end)
+connect(opener.MouseButton1Click, function()
+    frame.Visible = true
+    opener.Visible = false
+end)
 connect(antiAfkButton.MouseButton1Click, function()
     if antiAfkConnection then
         antiAfkConnection:Disconnect()
@@ -229,7 +253,26 @@ local function findRedeemButton(box)
     end
 end
 
--- Usa um clique virtual na interface original do jogo; não adivinha remotes.
+-- O comando explícito do jogo é a primeira opção; clique na interface é reserva.
+local function findCodeRemote()
+    local best, score = nil, 0
+    for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
+        if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+            local name = string.lower(remote.Name)
+            local points = 0
+            if name == "redeemcode" or name == "redeemcodes" then
+                points = 100
+            elseif string.find(name, "redeem") and string.find(name, "code") then
+                points = 80
+            elseif name == "coderedeem" or name == "claimcode" then
+                points = 70
+            end
+            if points > score then best, score = remote, points end
+        end
+    end
+    return best
+end
+
 local function clickGameButton(buttonObject)
     if not buttonObject or not buttonObject.Parent or not visible(buttonObject) then
         return false
@@ -246,6 +289,20 @@ local function clickGameButton(buttonObject)
     end)
     if not ok and type(firesignal) == "function" then
         ok = pcall(firesignal, buttonObject.MouseButton1Click)
+    end
+    if not ok and type(getconnections) == "function" then
+        for _, signal in ipairs({buttonObject.MouseButton1Click, buttonObject.Activated}) do
+            local got, list = pcall(getconnections, signal)
+            if got and type(list) == "table" then
+                for _, connection in ipairs(list) do
+                    if type(connection.Fire) == "function" then
+                        local fired = pcall(function() connection:Fire() end)
+                        if fired then ok = true end
+                    end
+                end
+            end
+            if ok then break end
+        end
     end
     return ok
 end
@@ -284,40 +341,57 @@ connect(redeemButton.MouseButton1Click, function()
     busy = true
     redeemButton.Text = "Resgatando..."
     task.spawn(function()
-        frame.Visible = false -- evita que a janela cubra Shop ou Redeem
-        local box, submit, err = locateRedemption()
-        if cancelled then return end
-        if not box then
-            setStatus(err)
-        else
-            local sent = 0
+        local wasOpen = frame.Visible
+        frame.Visible = false -- deixa Shop e Redeem livres durante os cliques
+        opener.Visible = false
+        local ok, failure = pcall(function()
+            local remote = findCodeRemote()
+            local box, submit, err
+            if not remote then
+                box, submit, err = locateRedemption()
+                if not box then error(err) end
+            end
             for index, code in ipairs(CODES) do
                 if cancelled then return end
-                if not box.Parent or not submit.Parent then
-                    setStatus("A área de códigos fechou. Reabra Shop e tente novamente.")
-                    break
-                end
-                revealInScroll(box)
-                pcall(function()
+                if remote then
+                    local sent, response = pcall(function()
+                        if remote:IsA("RemoteFunction") then
+                            return remote:InvokeServer(code)
+                        end
+                        remote:FireServer(code)
+                    end)
+                    if not sent then
+                        error("O comando de códigos falhou: " .. tostring(response))
+                    end
+                else
+                    if not box.Parent or not submit.Parent then
+                        error("A área de códigos fechou. Abra Shop novamente.")
+                    end
+                    revealInScroll(box)
                     box:CaptureFocus()
                     box.Text = code
                     box:ReleaseFocus(false)
-                end)
-                task.wait(0.08)
-                if not clickGameButton(submit) then
-                    setStatus("O executor não conseguiu clicar em Redeem. Use Copiar lista.")
-                    break
+                    task.wait(0.1)
+                    if not clickGameButton(submit) then
+                        error("Clique virtual indisponível neste executor.")
+                    end
+                    -- Se o jogo não limpar/alterar o campo, não dispare os outros 18.
+                    if index == 1 then
+                        task.wait(0.8)
+                        if box.Text == code then
+                            error("O jogo não reagiu ao 1º código. Abra Shop > Codes e tente de novo.")
+                        end
+                    end
                 end
-                sent = index
-                setStatus(string.format("Tentativa enviada: %d/%d — %s", index, #CODES, code))
-                task.wait(0.65)
+                setStatus(string.format("Enviado: %d/%d — %s", index, #CODES, code))
+                task.wait(0.8)
             end
-            if sent == #CODES then
-                setStatus("19 tentativas enviadas. Confira as respostas do jogo.")
-            end
-        end
+            if not cancelled then setStatus("Códigos enviados. Veja o resultado no jogo.") end
+        end)
         if not cancelled then
-            frame.Visible = true
+            if not ok then setStatus("Resgate parou: " .. tostring(failure)) end
+            frame.Visible = wasOpen
+            opener.Visible = not wasOpen
             redeemButton.Text = "Resgatar os 19 códigos"
             busy = false
         end
