@@ -1,10 +1,4 @@
-INÃCIO DO CÃ“DIGO FLOQUITAVE 7.15
 
--- Tave Hub Relatorio 7.3: Sea destinations and visible travel diagnostics.
--- Volcano Event worker: guarded local defense/collection; sea search and quest chain need live validation.
--- UI based on the supplied screenshots/videos.
--- LocalPlayer 4: preserves all approved pages and connects the complete LocalPlayer page.
--- Shop, Status & Server, LocalPlayer, ESP, PVP, Tab Webhook and Setting are functional.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
