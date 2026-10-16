@@ -1,13 +1,13 @@
---
-  ====================================================================================================================
-  -- FLOQUITAVE v8.0 (THE ABSURD EDITION)
-  --
-  ====================================================================================================================
-  -- Versão: 8.0 Final
-  -- Objetivo: Automação Total, Blindagem de Movimento e Ativação de Módulos Ociosos.
-  -- Preservações: Cursed Ship Route, Anti-Freeze Session, Cleanup System.
-  --
-  ====================================================================================================================
+ --[[
+    ====================================================================================================================
+    -- FLOQUITAVE v8.0 (THE ABSURD EDITION) - FULL VERSION
+    --
+    ====================================================================================================================
+    -- Versão: 8.0 Final (Consertada e Expandida)
+    -- Objetivo: Automação Total, Blindagem de Movimento e Ativação de Módulos Ociosos.
+    -- Fixes: Syntax Errors, Missing Execution Loops, and Block Logic.
+    ====================================================================================================================
+  ]]
 
   local Players = game:GetService("Players")
   local TweenService = game:GetService("TweenService")
@@ -53,9 +53,11 @@
 
       updateStatus = function(text)
           TaveTaskManager.statusText = text
+          -- Tenta atualizar a UI se ela existir globalmente
           if _G.TaveUI and _G.TaveUI.StatusLabel then
               _G.TaveUI.StatusLabel.Text = "Status: " .. text
           end
+          print("[TAVE STATUS]: " .. text)
       end,
 
       setWorker = function(workerName)
@@ -122,7 +124,7 @@
       local distance = (root.Position - targetCFrame.Position).Magnitude
       if distance < 5 then return true end
 
-      local duration = distance / 170
+      local duration = distance / 170 -- Velocidade ajustada para evitar detecção
       local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
 
       local noclip = RunService.Stepped:Connect(function()
@@ -163,11 +165,11 @@
 
   --
   ====================================================================================================================
-  -- 6. THE ABSURD MODULES (IMPLEMENTAÇÕES FINAIS)
+  -- 6. THE ABSURD MODULES (EXPANDED IMPLEMENTATIONS)
   --
   ====================================================================================================================
 
-  -- [VOLCANO] Auto Craft Volcanic Magnet
+  -- [VOLCANO] Auto Craft Volcanic Magnet (EXPANDIDO)
   local function runVolcanicMagnet()
       TaveTaskManager.setWorker("VolcanoMagnet")
       while TaveTaskManager.isActive("VolcanoMagnet") do
@@ -179,16 +181,19 @@
               smoothTeleport(TaveLocations.Volcano.MagnetCraft, "VolcanoMagnet")
               pcall(function() ReplicatedStorage.Remotes.CommF_:InvokeServer('CraftItem','Craft','Volcanic Magnet') end)
               TaveTaskManager.updateStatus("Magnet Complete!")
+              task.wait(2)
               break
           else
-              TaveTaskManager.updateStatus("Farm Materials... Scrap: "..scrap.."/10 Ember: "..ember.."/15")
-              -- Aqui o script faria o loop de farm de scrap/ember
+              TaveTaskManager.updateStatus("Farming Materials... Scrap: "..scrap.."/10 Ember: "..ember.."/15")
+              -- Lógica de Farm: Teleporta para o local de scrap/ember e ataca
+              smoothTeleport(TaveLocations.Volcano.DragonHunter, "VolcanoMagnet")
+              pcall(function() ReplicatedStorage.Remotes.CommE_:FireServer("Attack", "All") end)
               task.wait(5)
           end
       end
   end
 
-  -- [VOLCANO] Auto Quest Dojo Trainer (Precisão 3 Studs)
+  -- [VOLCANO] Auto Quest Dojo Trainer (PRECISÃO ABSURDA)
   local function runDojoTrainer()
       TaveTaskManager.setWorker("DojoTrainer")
       while TaveTaskManager.isActive("DojoTrainer") do
@@ -218,12 +223,19 @@
       pcall(function() ReplicatedStorage.Remotes.CommE_:FireServer("ActivateAbility", "V3") end)
 
       TaveTaskManager.updateStatus("Waiting for Trial Timer...")
-      repeat task.wait(1) until LocalPlayer.PlayerGui.Main.Timer.Visible == true or not
-  TaveTaskManager.isActive("RaceV4")
+      -- Loop de espera corrigido para evitar crash
+      while TaveTaskManager.isActive("RaceV4") do
+          local timer = LocalPlayer.PlayerGui:FindFirstChild("Main") and
+  LocalPlayer.PlayerGui.Main:FindFirstChild("Timer")
+          if timer and timer.Visible then break end
+          task.wait(1)
+      end
 
       TaveTaskManager.updateStatus("Trial Active! Auto-Completing...")
-      -- Lógica de combate simplificada: ataca tudo ao redor
-      while TaveTaskManager.isActive("RaceV4") and LocalPlayer.PlayerGui.Main.Timer.Visible do
+      while TaveTaskManager.isActive("RaceV4") do
+          local timer = LocalPlayer.PlayerGui:FindFirstChild("Main") and
+  LocalPlayer.PlayerGui.Main:FindFirstChild("Timer")
+          if not (timer and timer.Visible) then break end
           pcall(function() ReplicatedStorage.Remotes.CommE_:FireServer("Attack", "All") end)
           task.wait(0.5)
       end
@@ -234,14 +246,20 @@
   local function runSeaEvent()
       TaveTaskManager.setWorker("SeaEvent")
       local map = workspace:FindFirstChild("Map")
-      if not map then return end
+      if not map then
+          TaveTaskManager.updateStatus("Map not found!")
+          return
+      end
 
-      for _, obj in ipairs(map:GetDescendants()) do
-          if obj.Name:find("Mirage") or obj.Name:find("Prehistoric") or obj.Name:find("Frozen") then
-              TaveTaskManager.updateStatus("Event Found: " .. obj.Name)
-              smoothTeleport(obj:GetPivot(), "SeaEvent")
-              break
+      while TaveTaskManager.isActive("SeaEvent") do
+          for _, obj in ipairs(map:GetDescendants()) do
+              if obj.Name:find("Mirage") or obj.Name:find("Prehistoric") or obj.Name:find("Frozen") then
+                  TaveTaskManager.updateStatus("Event Found: " .. obj.Name)
+                  smoothTeleport(obj:GetPivot(), "SeaEvent")
+                  break
+              end
           end
+          task.wait(10)
       end
   end
 
@@ -264,47 +282,64 @@
 
   --
   ====================================================================================================================
-  -- 7. UI BINDINGS (Connecting v8 logic to your Interface)
+  -- 7. UI BINDINGS & ACTION HANDLERS (FIXED LOGIC)
   --
   ====================================================================================================================
-  -- Se você usa a tabela ShopActions da v7.15, substitua ou adicione estas:
-
   local ShopActions = {}
 
   ShopActions.volcano_auto_craft = function(enabled)
-      if enabled then task.spawn(runVolcanicMagnet) else _G.Stop_Magnet = function() TaveTaskManager.clearWorker() end
-  end
+      if enabled then
+          task.spawn(runVolcanicMagnet)
+      else
+          _G.Stop_Magnet = function() TaveTaskManager.clearWorker() end
+          _G.Stop_Magnet()
+      end
       return true
   end
 
   ShopActions.volcano_dojo_quest = function(enabled)
-      if enabled then task.spawn(runDojoTrainer) else _G.Stop_Dojo = function() TaveTaskManager.clearWorker() end end
+      if enabled then
+          task.spawn(runDojoTrainer)
+      else
+          _G.Stop_Dojo = function() TaveTaskManager.clearWorker() end
+          _G.Stop_Dojo()
+      end
       return true
   end
 
   ShopActions.v4_auto_trial = function(enabled)
       if enabled then
-          task.spawn(function() runRaceV4("Human") end) -- Adicionar seletor de raça aqui
+          task.spawn(function() runRaceV4("Human") end)
       else
           _G.Stop_V4 = function() TaveTaskManager.clearWorker() end
+          _G.Stop_V4()
       end
       return true
   end
 
   ShopActions.auto_sea_event = function(enabled)
-      if enabled then task.spawn(runSeaEvent) else _G.Stop_Sea = function() TaveTaskManager.clearWorker() end end
+      if enabled then
+          task.spawn(runSeaEvent)
+      else
+          _G.Stop_Sea = function() TaveTaskManager.clearWorker() end
+          _G.Stop_Sea()
+      end
       return true
   end
 
   ShopActions.auto_raid = function(enabled)
-      if enabled then task.spawn(function() runAutoRaid("Difficult") end) else _G.Stop_Raid = function()
-  TaveTaskManager.clearWorker() end end
+      if enabled then
+          task.spawn(function() runAutoRaid("Difficult") end)
+      else
+          _G.Stop_Raid = function() TaveTaskManager.clearWorker() end
+          _G.Stop_Raid()
+      end
       return true
   end
 
   --
   ====================================================================================================================
-  -- 8. INITIALIZATION & FINAL CLEANUP
+  -- 8. INITIALIZATION, FINAL CLEANUP & AUTO-EXECUTION
   --
   ====================================================================================================================
   session.cleanup = function()
@@ -312,14 +347,25 @@
       for _, conn in ipairs(session.connections) do
           pcall(function() conn:Disconnect() end)
       end
-      -- Remove a UI se existir
       local gui = CoreGui:FindFirstChild("Floquitave_UI") or CoreGui:FindFirstChild("TaveHub_UI")
       if gui then gui:Destroy() end
       TaveTaskManager.updateStatus("Session Closed.")
   end
 
-  -- FINAL LOAD
+  -- [ESTE É O GATILHO QUE ESTAVA FALTANDO]
+  -- Como não temos a UI aqui, vou criar um sistema de ativação via Console/Chat ou Auto-start
   TaveTaskManager.updateStatus("v8.0 ABSURD LOADED!")
   print("====================================================")
   print("    FLOQUITAVE v8.0 - THE ABSURD EDITION LOADED    ")
   print("====================================================")
+
+  -- EXEMPLO DE ATIVAÇÃO MANUAL:
+  -- Para rodar no console do seu executor:
+  -- task.spawn(function() runVolcanicMagnet() end)
+  -- task.spawn(function() runRaceV4("Human") end)
+
+  -- AUTO-START PARA TESTE (Remova as linhas abaixo se quiser que ele NÃO comece sozinho)
+  -- task.spawn(function()
+  --     TaveTaskManager.updateStatus("Auto-starting Test Sequence...")
+  --     runVolcanicMagnet()
+  -- end)
