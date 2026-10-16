@@ -1,5 +1,4 @@
-
--- Needle Finder 0.1 | Search For The Needle (Garage Games)
+-- Needle Finder 0.2 | Search For The Needle (Garage Games)
 -- Cole este TXT inteiro no executor. Nenhum codigo externo e baixado.
 -- Busca apenas objetos presentes no cliente; nao revela dados mantidos no servidor.
 
@@ -18,7 +17,8 @@ end
 local S = {
     alive = true, monitoring = true, esp = true, scanning = false,
     scanId = 0, target = nil, part = nil, candidates = {},
-    lastScan = 0, scanned = 0, truncated = false,
+    lastScan = 0, scanned = 0, truncated = false, excluded = 0,
+    groundY = nil, staged = nil,
     connections = {}, highlight = nil, marker = nil,
 }
 global.__NeedleFinder = S
@@ -36,6 +36,21 @@ end
 
 local function validPart(part)
     return part and part:IsA("BasePart") and part:IsDescendantOf(workspace)
+end
+
+local function getRoot()
+    return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+end
+
+local function groundHeight()
+    local root = getRoot()
+    if not root then return nil end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = player.Character and {player.Character} or {}
+    local hit = workspace:Raycast(root.Position + Vector3.new(0, 3, 0),
+        Vector3.new(0, -120, 0), params)
+    return hit and hit.Position.Y or root.Position.Y - 3
 end
 
 local function partOf(obj)
@@ -145,13 +160,37 @@ local function choose(list)
         return shortPath(a.obj) < shortPath(b.obj)
     end)
     S.candidates = list
-    local best = list[1]
+    S.groundY = groundHeight()
+    S.excluded, S.staged = 0, nil
+    local best
+    for _, item in ipairs(list) do
+        -- A mesh kept well below the floor is usually a staging copy. It can
+        -- have the exact name Needle, but teleporting there cannot collect it.
+        local y = item.part.Position.Y
+        item.reason = nil
+        if S.groundY and y < S.groundY - 35 then
+            item.reason = string.format("abaixo do piso (%.1f < %.1f)", y, S.groundY)
+            S.staged = S.staged or item
+            S.excluded = S.excluded + 1
+        elseif item.part.Transparency >= 0.99 and not item.part.CanTouch
+            and not item.obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+            and not item.obj:FindFirstChildWhichIsA("ClickDetector", true) then
+            item.reason = "invisivel, sem toque nem interacao"
+            S.staged = S.staged or item
+            S.excluded = S.excluded + 1
+        end
+        if not best and not item.reason then best = item end
+    end
     S.target, S.part = best and best.obj or nil, best and best.part or nil
     updateESP()
     if best then
-        status("Objeto candidato: " .. best.obj.Name,
-            string.format("%s  |  pontuacao %d  |  %d candidato(s)",
-                shortPath(best.obj), best.score, #list))
+        status("Possivel agulha acessivel: " .. best.obj.Name,
+            string.format("%s  |  %d candidato(s) descartado(s)",
+                shortPath(best.obj), S.excluded))
+    elseif S.staged then
+        status("Agulha sob o mapa: ignorada",
+            shortPath(S.staged.obj) .. " | " .. S.staged.reason
+                .. ". Monitorando a agulha da rodada.")
     else
         status("Agulha ainda nao exposta no cliente",
             "Varredura: " .. S.scanned .. " objetos"
@@ -198,10 +237,6 @@ local function scan()
         if scanButton then scanButton.Text = "Buscar agora" end
         choose(list)
     end)
-end
-
-local function getRoot()
-    return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 end
 
 local function teleport()
@@ -256,17 +291,20 @@ end
 
 local function report()
     local lines = {
-        "Needle Finder 0.1 | " .. os.date("!%Y-%m-%d %H:%M UTC"),
+        "Needle Finder 0.2 | " .. os.date("!%Y-%m-%d %H:%M UTC"),
         "PlaceId=" .. tostring(game.PlaceId) .. " | GameId=" .. tostring(game.GameId),
         "Status=" .. tostring(S.message or ""),
         "Varredura=" .. tostring(S.scanned) .. " | limite=" .. tostring(S.truncated),
-        "Candidatos=" .. tostring(#S.candidates),
+        "PisoY=" .. tostring(S.groundY) .. " | altura jogador="
+            .. tostring(getRoot() and getRoot().Position.Y),
+        "Candidatos=" .. tostring(#S.candidates) .. " | descartados=" .. tostring(S.excluded),
     }
     for i, item in ipairs(S.candidates) do
         if i > 25 then break end
-        table.insert(lines, string.format("%d. %s | %s | score=%d | %.1f, %.1f, %.1f",
+        table.insert(lines, string.format("%d. %s | %s | score=%d | %.1f, %.1f, %.1f | transparencia=%.2f | toque=%s | %s",
             i, shortPath(item.obj), item.obj.ClassName, item.score,
-            item.part.Position.X, item.part.Position.Y, item.part.Position.Z))
+            item.part.Position.X, item.part.Position.Y, item.part.Position.Z,
+            item.part.Transparency, tostring(item.part.CanTouch), item.reason or "candidato ativo"))
     end
     for _, name in ipairs({"HiddenNeedleClient", "HaystackClient", "Haystack"}) do
         local folder = workspace:FindFirstChild(name)
@@ -284,14 +322,14 @@ local function new(class, properties, parent)
 end
 
 local parent = (type(gethui) == "function" and gethui()) or CoreGui
-ui = new("ScreenGui", {Name="NeedleFinder_0_1", ResetOnSpawn=false,
+ui = new("ScreenGui", {Name="NeedleFinder_0_2", ResetOnSpawn=false,
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling}, parent)
 local frame = new("Frame", {Name="Panel", Size=UDim2.fromOffset(380, 330),
     Position=UDim2.new(0.5,-190,0.5,-165), BackgroundColor3=Color3.fromRGB(24,22,32),
     BorderSizePixel=0, Active=true}, ui)
 new("UICorner", {CornerRadius=UDim.new(0,12)}, frame)
 new("UIStroke", {Color=Color3.fromRGB(136,98,199), Thickness=1.3}, frame)
-local title = new("TextLabel", {Text="NEEDLE FINDER  0.1", Size=UDim2.new(1,-55,0,38),
+local title = new("TextLabel", {Text="NEEDLE FINDER  0.2", Size=UDim2.new(1,-55,0,38),
     Position=UDim2.fromOffset(14,3), BackgroundTransparency=1,
     TextColor3=Color3.fromRGB(225,208,255), TextSize=17,
     Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left},frame)
@@ -397,6 +435,15 @@ else
     scan()
 end
 
+connect(workspace.DescendantAdded, function(obj)
+    if S.monitoring and not S.scanning
+        and string.lower(obj.Name):find("needle", 1, true) then
+        task.delay(0.3, function()
+            if S.alive and S.monitoring and not S.scanning then scan() end
+        end)
+    end
+end)
+
 task.spawn(function()
     while S.alive do
         if S.monitoring and not S.scanning and os.clock()-S.lastScan >= 7 then scan() end
@@ -409,4 +456,4 @@ task.spawn(function()
     end
 end)
 
-print("[Needle Finder] 0.1 carregado | PlaceId=" .. tostring(game.PlaceId))
+print("[Needle Finder] 0.2 carregado | PlaceId=" .. tostring(game.PlaceId))
