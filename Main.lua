@@ -1,4 +1,4 @@
--- Needle Finder 0.2 | Search For The Needle (Garage Games)
+-- Needle Finder 0.3 | Search For The Needle (Garage Games)
 -- Cole este TXT inteiro no executor. Nenhum codigo externo e baixado.
 -- Busca apenas objetos presentes no cliente; nao revela dados mantidos no servidor.
 
@@ -18,7 +18,7 @@ local S = {
     alive = true, monitoring = true, esp = true, scanning = false,
     scanId = 0, target = nil, part = nil, candidates = {},
     lastScan = 0, scanned = 0, truncated = false, excluded = 0,
-    groundY = nil, staged = nil,
+    groundY = nil, staged = nil, haySkipped = 0, hiddenChildren = 0,
     connections = {}, highlight = nil, marker = nil,
 }
 global.__NeedleFinder = S
@@ -101,6 +101,17 @@ local function rank(obj, part)
     return score
 end
 
+local function sceneReason(obj)
+    local current = obj
+    while current and current ~= workspace do
+        if current.Name == "EndCutscene" then
+            return "objeto da cena EndCutscene"
+        end
+        current = current.Parent
+    end
+    return nil
+end
+
 local ui, statusLabel, detailLabel, scanButton, monitorButton, espButton
 local function status(message, detail)
     if not S.alive then return end
@@ -161,14 +172,19 @@ local function choose(list)
     end)
     S.candidates = list
     S.groundY = groundHeight()
+    local hidden = workspace:FindFirstChild("HiddenNeedleClient")
+    S.hiddenChildren = hidden and #hidden:GetChildren() or 0
     S.excluded, S.staged = 0, nil
     local best
     for _, item in ipairs(list) do
         -- A mesh kept well below the floor is usually a staging copy. It can
         -- have the exact name Needle, but teleporting there cannot collect it.
         local y = item.part.Position.Y
-        item.reason = nil
-        if S.groundY and y < S.groundY - 35 then
+        item.reason = sceneReason(item.obj)
+        if item.reason then
+            S.staged = S.staged or item
+            S.excluded = S.excluded + 1
+        elseif S.groundY and y < S.groundY - 35 then
             item.reason = string.format("abaixo do piso (%.1f < %.1f)", y, S.groundY)
             S.staged = S.staged or item
             S.excluded = S.excluded + 1
@@ -188,9 +204,10 @@ local function choose(list)
             string.format("%s  |  %d candidato(s) descartado(s)",
                 shortPath(best.obj), S.excluded))
     elseif S.staged then
-        status("Agulha sob o mapa: ignorada",
-            shortPath(S.staged.obj) .. " | " .. S.staged.reason
-                .. ". Monitorando a agulha da rodada.")
+        status("Aguardando agulha da rodada",
+            tostring(S.excluded) .. " objeto(s) de cena/espera ignorado(s). "
+                .. "HiddenNeedleClient: " .. tostring(S.hiddenChildren)
+                .. " filho(s). Continue a busca no feno.")
     else
         status("Agulha ainda nao exposta no cliente",
             "Varredura: " .. S.scanned .. " objetos"
@@ -205,11 +222,12 @@ local function scan()
     S.scanId = S.scanId + 1
     local id = S.scanId
     if scanButton then scanButton.Text = "Varrendo..." end
-    status("Procurando objetos carregados...", "Limite de 18.000 objetos por varredura.")
+    status("Procurando objetos carregados...", "Pilha de feno examinada por nome, sem percorrer cada fibra.")
     task.spawn(function()
         local queue, cursor = {workspace}, 1
         local list, seen = {}, {}
-        local count, limit = 0, 18000
+        local count, limit = 0, 30000
+        S.haySkipped = 0
         while S.alive and id == S.scanId and cursor <= #queue and count < limit do
             local stop = math.min(cursor + 139, #queue)
             while cursor <= stop and count < limit do
@@ -223,8 +241,25 @@ local function scan()
                     -- may be templates and are intentionally ignored.
                     local ok, children = pcall(function() return obj:GetChildren() end)
                     if ok then
-                        for _, child in ipairs(children) do
-                            table.insert(queue, child)
+                        if obj == workspace then
+                            -- The active needle folder is searched first, even when
+                            -- the workspace has tens of thousands of hay objects.
+                            local hidden = workspace:FindFirstChild("HiddenNeedleClient")
+                            if hidden then table.insert(queue, hidden) end
+                            for _, child in ipairs(children) do
+                                if child ~= hidden then table.insert(queue, child) end
+                            end
+                        elseif obj.Name == "HaystackClient" and obj.Parent == workspace then
+                            S.haySkipped = #children
+                            for _, child in ipairs(children) do
+                                if string.lower(child.Name):find("needle", 1, true) then
+                                    table.insert(queue, child)
+                                end
+                            end
+                        else
+                            for _, child in ipairs(children) do
+                                table.insert(queue, child)
+                            end
                         end
                     end
                 end
@@ -291,10 +326,12 @@ end
 
 local function report()
     local lines = {
-        "Needle Finder 0.2 | " .. os.date("!%Y-%m-%d %H:%M UTC"),
+        "Needle Finder 0.3 | " .. os.date("!%Y-%m-%d %H:%M UTC"),
         "PlaceId=" .. tostring(game.PlaceId) .. " | GameId=" .. tostring(game.GameId),
         "Status=" .. tostring(S.message or ""),
         "Varredura=" .. tostring(S.scanned) .. " | limite=" .. tostring(S.truncated),
+        "HaystackClient filhos ignorados=" .. tostring(S.haySkipped)
+            .. " | HiddenNeedleClient filhos=" .. tostring(S.hiddenChildren),
         "PisoY=" .. tostring(S.groundY) .. " | altura jogador="
             .. tostring(getRoot() and getRoot().Position.Y),
         "Candidatos=" .. tostring(#S.candidates) .. " | descartados=" .. tostring(S.excluded),
@@ -322,14 +359,14 @@ local function new(class, properties, parent)
 end
 
 local parent = (type(gethui) == "function" and gethui()) or CoreGui
-ui = new("ScreenGui", {Name="NeedleFinder_0_2", ResetOnSpawn=false,
+ui = new("ScreenGui", {Name="NeedleFinder_0_3", ResetOnSpawn=false,
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling}, parent)
 local frame = new("Frame", {Name="Panel", Size=UDim2.fromOffset(380, 330),
     Position=UDim2.new(0.5,-190,0.5,-165), BackgroundColor3=Color3.fromRGB(24,22,32),
     BorderSizePixel=0, Active=true}, ui)
 new("UICorner", {CornerRadius=UDim.new(0,12)}, frame)
 new("UIStroke", {Color=Color3.fromRGB(136,98,199), Thickness=1.3}, frame)
-local title = new("TextLabel", {Text="NEEDLE FINDER  0.2", Size=UDim2.new(1,-55,0,38),
+local title = new("TextLabel", {Text="NEEDLE FINDER  0.3", Size=UDim2.new(1,-55,0,38),
     Position=UDim2.fromOffset(14,3), BackgroundTransparency=1,
     TextColor3=Color3.fromRGB(225,208,255), TextSize=17,
     Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left},frame)
@@ -456,4 +493,4 @@ task.spawn(function()
     end
 end)
 
-print("[Needle Finder] 0.2 carregado | PlaceId=" .. tostring(game.PlaceId))
+print("[Needle Finder] 0.3 carregado | PlaceId=" .. tostring(game.PlaceId))
