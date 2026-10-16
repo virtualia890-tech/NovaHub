@@ -1,4 +1,6 @@
 
+-- Floquitave 7.16: expansao da versao completa recuperada.
+-- Os resultados de remotes e das automacoes novas precisam ser confirmados no jogo.
 -- Tave Hub Relatorio 7.3: Sea destinations and visible travel diagnostics.
 -- Volcano Event worker: guarded local defense/collection; sea search and quest chain need live validation.
 -- UI based on the supplied screenshots/videos.
@@ -75,7 +77,7 @@ local ReportRuntime = {
 local ReportActions = {}
 local function reportSnapshot()
     local lines = {
-        "Floquitave 7.15 - Relatorio da sessao",
+        "Floquitave 7.16 - Relatorio da sessao",
         "PlaceId: " .. tostring(game.PlaceId),
         "Tempo da sessao: " .. tostring(math.floor(os.clock() - ReportRuntime.startedAt)) .. "s",
         "ACEITE = comando aceite; nao comprova efeito no jogo.",
@@ -1480,7 +1482,7 @@ do
     end)
 
     task.spawn(function()
-        while session.alive and task.wait(0.85) do
+        while session.alive and task.wait(8) do
             if ShopRuntime.autoLegendarySword then
                 for slot = 1, 3 do
                     if not ShopRuntime.autoLegendarySword then
@@ -1494,7 +1496,7 @@ do
     end)
 
     task.spawn(function()
-        while session.alive and task.wait(0.85) do
+        while session.alive and task.wait(8) do
             if ShopRuntime.autoTrueTripleKatana then
                 commF("MysteriousMan", "1")
                 task.wait(0.10)
@@ -2492,8 +2494,10 @@ do
 
         tween:Play()
 
+        local deadline = os.clock() + duration + 3
         while not done do
-            if nonce ~= QuickRuntime.pvp.moveNonce then
+            if not session.alive or os.clock() > deadline
+                or nonce ~= QuickRuntime.pvp.moveNonce then
                 pcall(function() tween:Cancel() end)
                 conn:Disconnect()
                 restore()
@@ -4953,6 +4957,9 @@ end
 local SettingFarmActions = {}
 local FarmRuntime = {
     clickRunning = false,
+    abilityRunning = false,
+    observationCharacter = nil,
+    lastV4Input = -math.huge,
     busoCharacterConnection = nil,
     healthCharacterConnection = nil,
     healthConnection = nil,
@@ -5067,35 +5074,119 @@ do
         return true
     end
 
+    local function sendFarmKey(letter)
+        if UserInputService:GetFocusedTextBox() then return false end
+        if typeof(keypress) == "function" and typeof(keyrelease) == "function" then
+            local ok = pcall(function()
+                keypress(string.byte(letter))
+                task.wait(0.08)
+                keyrelease(string.byte(letter))
+            end)
+            return ok
+        end
+        local ok, manager = pcall(game.GetService, game, "VirtualInputManager")
+        if not ok or not manager then return false end
+        return pcall(function()
+            manager:SendKeyEvent(true, Enum.KeyCode[letter], false, game)
+            task.wait(0.08)
+            manager:SendKeyEvent(false, Enum.KeyCode[letter], false, game)
+        end)
+    end
+    local function ensureAbilityLoop()
+        if FarmRuntime.abilityRunning then return end
+        FarmRuntime.abilityRunning = true
+        task.spawn(function()
+            while session.alive and (FarmSettings.autoV3 or FarmSettings.autoV4
+                or FarmSettings.autoObservation) do
+                if FarmSettings.autoV3 then
+                    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+                    local event = remotes and remotes:FindFirstChild("CommE")
+                    if event and event:IsA("RemoteEvent") then
+                        local ok, err = pcall(function()
+                            event:FireServer("ActivateAbility")
+                        end)
+                        reportRecord("Setting Farm / Race Ability",
+                            ok and "OBSERVADO" or "ERRO",
+                            ok and "ativacao enviada; efeito nao confirmado" or tostring(err))
+                    else
+                        reportRecord("Setting Farm / Race Ability", "RECUSADO",
+                            "Remotes.CommE nao disponivel")
+                    end
+                end
+                local character = LocalPlayer.Character
+                if FarmSettings.autoV4 and character
+                    and not character:FindFirstChild("RaceTransformed")
+                    and os.clock() - FarmRuntime.lastV4Input > 30 then
+                    FarmRuntime.lastV4Input = os.clock()
+                    local ok = sendFarmKey("Y")
+                    reportRecord("Setting Farm / V4", ok and "OBSERVADO" or "RECUSADO",
+                        ok and "tecla Y enviada; transformacao nao confirmada"
+                            or "entrada Y indisponivel ou chat ativo")
+                end
+                if FarmSettings.autoObservation and character
+                    and character ~= FarmRuntime.observationCharacter then
+                    local ok = sendFarmKey("E")
+                    if ok then FarmRuntime.observationCharacter = character end
+                    reportRecord("Setting Farm / Observation",
+                        ok and "OBSERVADO" or "RECUSADO",
+                        ok and "tecla E enviada; efeito nao confirmado"
+                            or "entrada de teclado indisponivel ou campo de texto ativo")
+                end
+                task.wait(20)
+            end
+            FarmRuntime.abilityRunning = false
+        end)
+    end
+    SettingFarmActions.farm_auto_v3 = function(enabled)
+        FarmSettings.autoV3 = enabled == true
+        if enabled then ensureAbilityLoop() end
+        return true
+    end
+    SettingFarmActions.farm_auto_v4 = function(enabled)
+        if enabled and typeof(keypress) ~= "function" then
+            local ok, manager = pcall(game.GetService, game, "VirtualInputManager")
+            if not ok or not manager then
+                farmNotify("V4 precisa de entrada de teclado do executor.")
+                return false
+            end
+        end
+        FarmSettings.autoV4 = enabled == true
+        if enabled then ensureAbilityLoop() end
+        return true
+    end
+    SettingFarmActions.farm_auto_observation = function(enabled)
+        if enabled and typeof(keypress) ~= "function" then
+            local ok, manager = pcall(game.GetService, game, "VirtualInputManager")
+            if not ok or not manager then
+                farmNotify("Observation precisa de entrada de teclado do executor.")
+                return false
+            end
+        end
+        FarmSettings.autoObservation = enabled == true
+        if enabled then
+            FarmRuntime.observationCharacter = nil
+            ensureAbilityLoop()
+        end
+        return true
+    end
+
     local passiveFlags = {
         farm_dragon_storm = "dragonStormAura",
-        farm_auto_observation = "autoObservation",
-        farm_auto_v4 = "autoV4", farm_auto_v3 = "autoV3",
         farm_dodge_mobs = "autoDodgeMobs",
         farm_safe_items = "safeTweenWithItems",
-        farm_portal = "usePortalTeleport", farm_bring_mob = "bringMob",
+        farm_portal = "usePortalTeleport",
         farm_reset_teleport = "resetTeleport",
     }
     for action, key in pairs(passiveFlags) do
         SettingFarmActions[action] = function(enabled)
-            FarmSettings[key] = enabled == true
             if enabled then
-                if key == "bringMob" then
-                    farmNotify("Bring Mob enabled - will group enemies when farming.")
-                elseif key == "autoV4" then
-                    farmNotify("Auto V4 enabled - will activate V4 abilities during farm.")
-                elseif key == "autoV3" then
-                    farmNotify("Auto V3 enabled - will activate V3 during farm.")
-                elseif key == "dragonStormAura" then
-                    farmNotify("Dragon Storm Aura enabled - will use Dragon Storm when available.")
-                elseif key == "autoObservation" then
-                    farmNotify("Auto Observation enabled - will use Ken Haki during farm.")
-                elseif key == "autoDodgeMobs" then
-                    farmNotify("Auto Dodge Mobs enabled - will attempt to dodge enemy attacks.")
-                else
-                    farmNotify("Setting saved.")
-                end
+                FarmSettings[key] = false
+                reportRecord("Setting Farm / " .. action, "NAO IMPLEMENTADA",
+                    "A opcao nao tem mecanica verificada nesta versao")
+                farmNotify("Opcao pendente; veja a aba Relatorio.")
+                return false
             end
+            FarmSettings[key] = false
             return true
         end
     end
@@ -5165,6 +5256,9 @@ do
         FarmRuntime.healthBindNonce = FarmRuntime.healthBindNonce + 1
         FarmSettings.autoClick = false
         FarmSettings.autoBuso = false
+        FarmSettings.autoV3 = false
+        FarmSettings.autoV4 = false
+        FarmSettings.autoObservation = false
         FarmSettings.lowHealthTeleport = false
         if FarmRuntime.busoCharacterConnection then FarmRuntime.busoCharacterConnection:Disconnect() end
         if FarmRuntime.healthCharacterConnection then FarmRuntime.healthCharacterConnection:Disconnect() end
@@ -5383,6 +5477,13 @@ do
         local title, target = getCurrentQuest()
         if title and target then
             if hasQuestForEnemy(enemyName) then return true end
+        end
+        -- The farm worker can run multiple times per second; never spam quest remotes.
+        if os.clock() - (FarmingRuntime.lastQuestRequest or -math.huge) < 8 then
+            return false
+        end
+        FarmingRuntime.lastQuestRequest = os.clock()
+        if title and target then
             -- Wrong quest, abandon it
             cancelQuest()
             task.wait(0.5)
@@ -5413,13 +5514,14 @@ do
         local q = mode == "main" and questMap[enemyName] or materialQuestMap[enemyName]
         if q then
             local ok, result = requestQuest(q[1], q[2])
-            if ok then
-                setFarmStatus("Quest started: " .. q[1] .. " #" .. q[2])
+            if ok and result ~= false then
+                setFarmStatus("Quest request sent: " .. q[1] .. " #" .. q[2]
+                    .. "; awaiting quest UI")
                 task.wait(0.5)
             else
                 setFarmStatus("Quest failed: " .. tostring(result))
             end
-            return ok
+            return ok and result ~= false
         end
         return true -- No quest mapping, continue anyway
     end
@@ -6730,10 +6832,14 @@ VolcanoActions.volcano_golem_weapon = function(value) VolcanoRuntime.golemWeapon
 VolcanoActions.volcano_lava_weapon = function(value) VolcanoRuntime.lavaWeapon = value; return true end
 VolcanoActions.volcano_golem_method = function(value) VolcanoRuntime.method = value; return true end
 VolcanoActions.volcano_auto_finish_draco = function(enabled)
-    VolcanoRuntime.flags.finishDraco = enabled == true
     if enabled then
-        volcanoStatus("Auto Finish Draco Quest enabled")
+        VolcanoRuntime.flags.finishDraco = false
+        volcanoStatus("Draco final quest: steps not mapped in this build")
+        reportRecord("Volcano / Draco", "NAO IMPLEMENTADA",
+            "A opcao nao conclui a quest; requer estado e interacoes reais do templo")
+        return false
     end
+    VolcanoRuntime.flags.finishDraco = false
     return true
 end
 VolcanoRuntime.stop = function()
@@ -7016,7 +7122,7 @@ raceV3Step = function(race)
     if not root then return "waiting for character" end
 
     local raceLower = string.lower(race)
-    local arowPos = Vector3.new(-2777.453, 72.992, -3572.257) -- Alchemist/Arowe area
+    local arowPos = Vector3.new(-1994.510, 125.519, -72.262) -- Arowe, Second Sea
 
     if raceLower == "human" then
         -- Human V3: Talk to Arowe, then kill 10 players
@@ -7024,7 +7130,7 @@ raceV3Step = function(race)
         local ok, result = raceInvoke("Arowe", "1")
         if ok and result then
             raceStatus("Arowe Human quest: " .. tostring(result))
-            return "Human V3 quest started - kill players"
+            return "Human V3 request sent; confirm quest in game"
         end
         return "Arowe Human unavailable"
 
@@ -7034,7 +7140,7 @@ raceV3Step = function(race)
         local ok, result = raceInvoke("Arowe", "2")
         if ok and result then
             raceStatus("Arowe Angel quest: " .. tostring(result))
-            return "Angel V3 quest started - sky trial"
+            return "Angel V3 request sent; confirm quest in game"
         end
         return "Arowe Angel unavailable"
 
@@ -7044,7 +7150,7 @@ raceV3Step = function(race)
         local ok, result = raceInvoke("Arowe", "3")
         if ok and result then
             raceStatus("Arowe Shark quest: " .. tostring(result))
-            return "Shark V3 quest started - Sea Beasts"
+            return "Shark V3 request sent; confirm quest in game"
         end
         return "Arowe Shark unavailable"
 
@@ -7054,7 +7160,7 @@ raceV3Step = function(race)
         local ok, result = raceInvoke("Arowe", "4")
         if ok and result then
             raceStatus("Arowe Cyborg quest: " .. tostring(result))
-            return "Cyborg V3 quest started - lab"
+            return "Cyborg V3 request sent; confirm quest in game"
         end
         return "Arowe Cyborg unavailable"
 
@@ -7064,7 +7170,7 @@ raceV3Step = function(race)
         local ok, result = raceInvoke("Arowe", "5")
         if ok and result then
             raceStatus("Arowe Ghoul quest: " .. tostring(result))
-            return "Ghoul V3 quest started - Cursed Captain"
+            return "Ghoul V3 request sent; confirm quest in game"
         end
         return "Arowe Ghoul unavailable"
 
@@ -7074,7 +7180,7 @@ raceV3Step = function(race)
         local ok, result = raceInvoke("Arowe", "6")
         if ok and result then
             raceStatus("Arowe Mink/Rabbit quest: " .. tostring(result))
-            return "Rabbit V3 quest started - trial"
+            return "Rabbit V3 request sent; confirm quest in game"
         end
         return "Arowe Mink/Rabbit unavailable"
     end
@@ -7416,8 +7522,8 @@ local function v4TrialParkour(name)
         v4Status(name .. " finish reached; waiting for server confirmation")
         -- Check if trial completed by monitoring timer
         if not v4TimerActive() then
-            v4Status(name .. " trial completed!")
-            reportRecord("Race V4 / Trial", "CONFIRMADO", name .. " trial finish reached")
+            v4Status(name .. " timer ended; checking game progress")
+            reportRecord("Race V4 / Trial", "OBSERVADO", name .. " timer ended at finish")
         end
     end
 end
@@ -7431,8 +7537,8 @@ local function v4TrialCyborg()
         v4Status("Cyborg trial: holding position until timer ends")
         -- Check if trial completed by monitoring timer
         if not v4TimerActive() then
-            v4Status("Cyborg trial completed!")
-            reportRecord("Race V4 / Trial", "CONFIRMADO", "Cyborg trial timer ended")
+            v4Status("Cyborg timer ended; checking game progress")
+            reportRecord("Race V4 / Trial", "OBSERVADO", "Cyborg timer ended")
         end
     end
 end
@@ -7531,9 +7637,583 @@ V4Runtime.stop = function()
     QuickRuntime.stopSmoothTeleport()
 end
 
+-- Shared worker for options that can use loaded objects and existing travel/combat.
+-- One auxiliary mode at a time prevents different pages from fighting over movement.
+local RaidRuntime
+local AuxActions = {}
+local AuxRuntime = {
+    mode = nil, nonce = 0, running = false, lastMessage = nil,
+    visited = setmetatable({}, {__mode = "k"}), missingSince = 0,
+    lastHop = -math.huge, lastWorld = -math.huge,
+    selectedMob = nil, selectedBoss = nil,
+    berryQueue = {}, berryIndex = 1,
+}
+local auxBosses = {
+    rip = {"rip indra", "rip_indra"}, soul = {"soul reaper"},
+    dough = {"dough king"}, dark = {"darkbeard"},
+    elite = {"deandre", "diablo", "urban"},
+    factory = {"core"},
+}
+local function auxStatus(message, level)
+    if message == AuxRuntime.lastMessage then return end
+    AuxRuntime.lastMessage = message
+    reportRecord("Automacao adicional", level or "OBSERVADO", message)
+    local label = StatusRuntime.infoLabels.farm_status
+    if label and label.Parent then label.Text = "Farm: " .. message end
+end
+local function auxPart(object)
+    if not object then return nil end
+    if object:IsA("BasePart") then return object end
+    if object:IsA("Tool") then return object:FindFirstChild("Handle") end
+    if object:IsA("Model") then
+        return object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+    end
+    return nil
+end
+local function auxMatch(object, kind)
+    local name = string.lower(object.Name)
+    if kind == "chest" then return name:find("chest", 1, true) ~= nil end
+    if kind == "fruit" then
+        return (object:IsA("Tool") or object:IsA("Model") or object:IsA("BasePart"))
+            and (name:find("fruit", 1, true) ~= nil
+                or (object:IsA("Tool") and object.ToolTip == "Blox Fruit"))
+    end
+    if kind == "berry" then
+        return (object:IsA("Tool") or object:IsA("BasePart"))
+            and name:find("berry", 1, true) ~= nil
+    end
+    return false
+end
+local function auxFind(kind)
+    local root = raceRoot()
+    if not root then return nil, nil end
+    if kind == "berry" then
+        if AuxRuntime.berryIndex > #AuxRuntime.berryQueue then
+            AuxRuntime.berryQueue = {workspace:FindFirstChild("Map")}
+            AuxRuntime.berryIndex = 1
+        end
+        local checked = 0
+        while AuxRuntime.berryIndex <= #AuxRuntime.berryQueue and checked < 180 do
+            local object = AuxRuntime.berryQueue[AuxRuntime.berryIndex]
+            AuxRuntime.berryIndex = AuxRuntime.berryIndex + 1
+            checked = checked + 1
+            if object and object.Parent then
+                if auxMatch(object, kind) and auxPart(object)
+                    and os.clock() - (AuxRuntime.visited[object] or -math.huge) > 90 then
+                    return object, auxPart(object)
+                end
+                for _, child in ipairs(object:GetChildren()) do
+                    table.insert(AuxRuntime.berryQueue, child)
+                end
+            end
+        end
+        return nil, nil
+    end
+    local best, part, distance
+    for _, object in ipairs(workspace:GetChildren()) do
+        if auxMatch(object, kind) then
+            local candidate = auxPart(object)
+            if candidate and os.clock() - (AuxRuntime.visited[object] or -math.huge) > 90 then
+                local current = (root.Position - candidate.Position).Magnitude
+                if not distance or current < distance then
+                    best, part, distance = object, candidate, current
+                end
+            end
+        end
+    end
+    return best, part
+end
+local function auxCollect(kind)
+    local object, part = auxFind(kind)
+    if not object then return false end
+    auxStatus("indo ate " .. object.Name)
+    if not QuickRuntime.smoothTeleport(CFrame.new(part.Position + Vector3.new(0, 3, 3))) then
+        return true
+    end
+    if AuxRuntime.mode == nil or not object.Parent then return true end
+    local root = raceRoot()
+    if not root or (root.Position - part.Position).Magnitude > 18 then return true end
+    if typeof(firetouchinterest) == "function" then
+        pcall(firetouchinterest, root, part, 0)
+        pcall(firetouchinterest, root, part, 1)
+    end
+    AuxRuntime.visited[object] = os.clock()
+    auxStatus("contato tentado: " .. object.Name .. "; verificar inventario")
+    return true
+end
+local function auxEnemy(aliases, bossesOnly)
+    local enemies = workspace:FindFirstChild("Enemies")
+    local root = raceRoot()
+    if not enemies or not root then return nil end
+    local best, distance
+    for _, enemy in ipairs(enemies:GetChildren()) do
+        local low = string.lower(enemy.Name)
+        local matched = aliases == nil
+        if aliases then
+            for _, alias in ipairs(aliases) do
+                if low:find(alias, 1, true) then matched = true; break end
+            end
+        end
+        if bossesOnly and matched then
+            matched = low:find("boss", 1, true) ~= nil
+                or low:find("raid boss", 1, true) ~= nil
+            if not matched then
+                for _, names in pairs(auxBosses) do
+                    for _, alias in ipairs(names) do
+                        if low:find(alias, 1, true) then matched = true; break end
+                    end
+                    if matched then break end
+                end
+            end
+        end
+        if matched then
+            local hum = enemy:FindFirstChildOfClass("Humanoid")
+            local part = auxPart(enemy)
+            if hum and hum.Health > 0 and part then
+                local current = (root.Position - part.Position).Magnitude
+                if not distance or current < distance then
+                    best, distance = enemy, current
+                end
+            end
+        end
+    end
+    return best
+end
+local function auxAttack(enemy)
+    local part = auxPart(enemy)
+    if not part then return end
+    local rootBefore = raceRoot()
+    if rootBefore and (rootBefore.Position - part.Position).Magnitude > 20 then
+        auxStatus("indo combater " .. enemy.Name)
+    end
+    if not QuickRuntime.smoothTeleport(CFrame.new(part.Position + Vector3.new(0, 7, 6))) then return end
+    if not AuxRuntime.mode or not enemy.Parent then return end
+    local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+    local tool = raceTool()
+    if not tool then return auxStatus("equipe uma arma para " .. enemy.Name) end
+    local root = raceRoot()
+    if root then pcall(function() root.CFrame = CFrame.lookAt(root.Position, part.Position) end) end
+    if tool.Enabled then pcall(function() tool:Activate() end) end
+    auxStatus("ataque enviado a " .. enemy.Name .. "; aguardando vida do alvo")
+end
+local function auxStep(mode)
+    if FarmingRuntime.mode or VolcanoRuntime.running or RaceRuntime.mode
+        or (RaidRuntime and RaidRuntime.enabled)
+        or RaceRuntime.hopCaptain or V4Runtime.enabled then
+        return auxStatus("pausado: outra automacao usa movimento")
+    end
+    local sea = LocalActions.lp_current_sea()
+    if mode == "newworld" or mode == "thirdworld" then
+        local wanted = mode == "newworld" and 2 or 3
+        if sea >= wanted then return auxStatus("Sea " .. sea .. " ja atingido", "CONFIRMADO") end
+        if os.clock() - AuxRuntime.lastWorld < 30 then return end
+        AuxRuntime.lastWorld = os.clock()
+        if mode == "thirdworld" and sea == 1 then
+            ShopActions.travel_dressrosa()
+        elseif mode == "newworld" or sea == 2 then
+            (mode == "newworld" and ShopActions.travel_dressrosa
+                or ShopActions.travel_zou)()
+        end
+        return auxStatus("viagem solicitada; aguardando mudanca de Sea")
+    end
+    if mode == "mirage" or mode == "frozen" then
+        local origin = workspace:FindFirstChild("_WorldOrigin")
+        local locations = origin and origin:FindFirstChild("Locations")
+        local map = workspace:FindFirstChild("Map")
+        local island
+        if mode == "mirage" then
+            island = (locations and locations:FindFirstChild("Mirage Island"))
+                or (map and (map:FindFirstChild("MysticIsland")
+                    or map:FindFirstChild("MirageIsland") or map:FindFirstChild("Mirage Island")))
+        else
+            island = (locations and locations:FindFirstChild("Frozen Dimension"))
+                or (map and (map:FindFirstChild("FrozenDimension")
+                    or map:FindFirstChild("Frozen Dimension")))
+        end
+        if island then
+            if os.clock() - (AuxRuntime.lastEventTravel or -math.huge) > 20 then
+                AuxRuntime.lastEventTravel = os.clock()
+                auxStatus(island.Name .. " encontrado no mapa; teleporte solicitado")
+                if mode == "mirage" then
+                    LocalActions.lp_teleport_mirage()
+                else
+                    local part = auxPart(island)
+                    if part then
+                        QuickRuntime.smoothTeleport(CFrame.new(part.Position
+                            + Vector3.new(0, 25, 0)))
+                    end
+                end
+            end
+        else auxStatus("aguardando " .. mode .. " carregar no mapa") end
+        return
+    end
+    local collectKind = mode:find("fruit", 1, true) and "fruit"
+        or mode:find("chest", 1, true) and "chest"
+        or mode:find("berry", 1, true) and "berry"
+    if collectKind then
+        if auxCollect(collectKind) then
+            AuxRuntime.missingSince = os.clock()
+            return
+        end
+        auxStatus("nenhum " .. collectKind .. " coletavel carregado")
+    else
+        local bossKey = mode:match("^boss[_h]*:(.+)$")
+        if bossKey == "factory" and sea ~= 2 then
+            return auxStatus("Factory requer Second Sea")
+        end
+        local selected = mode == "mob" and AuxRuntime.selectedMob
+            or (mode == "selectedboss" or mode == "selectedboss_hop")
+                and AuxRuntime.selectedBoss or nil
+        if (mode == "mob" or mode == "selectedboss" or mode == "selectedboss_hop")
+            and not selected then
+            return auxStatus("escolha um inimigo no menu e atualize a lista")
+        end
+        local aliases = bossKey and auxBosses[bossKey]
+            or (selected and {string.lower(selected)}) or nil
+        local enemy = auxEnemy(aliases, mode == "allboss")
+        if enemy then
+            AuxRuntime.missingSince = os.clock()
+            return auxAttack(enemy)
+        end
+        auxStatus((bossKey or selected) and ("aguardando " .. (bossKey or selected) .. " carregar")
+            or "aguardando inimigos carregarem")
+    end
+    if mode:find("hop", 1, true) and os.clock() - AuxRuntime.missingSince > 90
+        and os.clock() - AuxRuntime.lastHop > 120 then
+        AuxRuntime.lastHop = os.clock()
+        auxStatus("alvo nao encontrado por 90s; procurando outro servidor")
+        StatusActions.hop_server()
+    end
+end
+local function auxSetMode(mode, enabled)
+    if enabled then
+        if AuxRuntime.mode and AuxRuntime.mode ~= mode then
+            auxStatus("desative " .. AuxRuntime.mode .. " antes de iniciar " .. mode, "RECUSADO")
+            return false
+        end
+        if AuxRuntime.mode == mode then return true end
+        AuxRuntime.mode, AuxRuntime.missingSince = mode, os.clock()
+        AuxRuntime.berryQueue, AuxRuntime.berryIndex = {}, 1
+        AuxRuntime.nonce = AuxRuntime.nonce + 1
+        local nonce = AuxRuntime.nonce
+        task.spawn(function()
+            while session.alive and AuxRuntime.mode == mode and nonce == AuxRuntime.nonce do
+                local ok, err = pcall(auxStep, mode)
+                if not ok then
+                    auxStatus("erro em " .. mode .. ": " .. tostring(err):sub(1, 100), "ERRO")
+                    break
+                end
+                task.wait((mode == "newworld" or mode == "thirdworld") and 5 or 1.5)
+            end
+            if nonce == AuxRuntime.nonce then AuxRuntime.mode = nil end
+        end)
+    elseif AuxRuntime.mode == mode then
+        AuxRuntime.mode = nil
+        AuxRuntime.nonce = AuxRuntime.nonce + 1
+        QuickRuntime.stopSmoothTeleport()
+        auxStatus("parado: " .. mode)
+    end
+    return true
+end
+for action, mode in pairs({
+    stack_new_world="newworld", stack_third_world="thirdworld",
+    stack_fruit="fruit", stack_fruit_hop="fruit_hop",
+    other_chest="chest", other_chest_hop="chest_hop",
+    other_berry="berry", other_berry_hop="berry_hop",
+    other_attack_all="all", other_kill_mob="mob",
+    other_kill_boss="selectedboss", other_kill_all_boss="allboss",
+    other_hop_boss="selectedboss_hop", sea_find_mirage="mirage",
+    sea_find_frozen="frozen",
+    stack_elite="boss:elite", stack_elite_hop="boss_hop:elite",
+    stack_factory="boss:factory",
+    stack_rip="boss:rip",
+    stack_soul="boss:soul", stack_dough="boss:dough",
+    stack_dough_hop="boss_hop:dough", stack_dark="boss:dark",
+    stack_dark_hop="boss_hop:dark",
+}) do
+    AuxActions[action] = function(enabled) return auxSetMode(mode, enabled) end
+end
+AuxActions.other_select_mob = function(value)
+    AuxRuntime.selectedMob = value ~= "Select..." and tostring(value) or nil
+    return true
+end
+AuxActions.other_select_boss = function(value)
+    AuxRuntime.selectedBoss = value ~= "Select..." and tostring(value) or nil
+    return true
+end
+AuxActions.other_refresh_boss = function()
+    local enemies = workspace:FindFirstChild("Enemies")
+    local names, found = {"Select..."}, {}
+    if enemies then
+        for _, enemy in ipairs(enemies:GetChildren()) do
+            if enemy:IsA("Model") and not found[enemy.Name] then
+                found[enemy.Name] = true
+                table.insert(names, enemy.Name)
+            end
+        end
+    end
+    table.sort(names, function(a, b)
+        if a == "Select..." then return true end
+        if b == "Select..." then return false end
+        return a < b
+    end)
+    for _, label in ipairs({"Select Mob", "Select Boss"}) do
+        local dropdown = UIControls[label]
+        if dropdown and dropdown.SetOptions then dropdown.SetOptions(names) end
+    end
+    auxStatus("lista de inimigos carregados: " .. tostring(#names - 1))
+    return #names > 1
+end
+AuxActions.sea_teleport_kitsune = function()
+    local map = workspace:FindFirstChild("Map")
+    local origin = workspace:FindFirstChild("_WorldOrigin")
+    local locations = origin and origin:FindFirstChild("Locations")
+    local island = (locations and locations:FindFirstChild("Kitsune Island"))
+        or (map and (map:FindFirstChild("KitsuneIsland")
+            or map:FindFirstChild("Kitsune Island")))
+    local part = auxPart(island)
+    if not part then
+        auxStatus("Kitsune Island nao carregada no mapa", "RECUSADO")
+        return false
+    end
+    local arrived = QuickRuntime.smoothTeleport(CFrame.new(part.Position
+        + Vector3.new(0, 25, 0)))
+    auxStatus(arrived and "Kitsune Island: chegada local confirmada"
+        or "Kitsune Island: teleporte nao confirmado",
+        arrived and "CONFIRMADO" or "RECUSADO")
+    return arrived
+end
+AuxRuntime.stop = function()
+    AuxRuntime.mode = nil
+    AuxRuntime.nonce = AuxRuntime.nonce + 1
+    AuxRuntime.berryQueue = {}
+    QuickRuntime.stopSmoothTeleport()
+end
+
+-- Fruit requests and raids use bounded workers; responses are checked separately.
+local FruitActions = {}
+local FruitRuntime = {store = false, running = false, attempted = setmetatable({}, {__mode = "k"})}
+local function fruitTools()
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local tools = {}
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") and (item.ToolTip == "Blox Fruit"
+                or string.lower(item.Name):find("fruit", 1, true)) then
+                table.insert(tools, item)
+            end
+        end
+    end
+    return tools
+end
+FruitActions.fruit_random = function()
+    local before = #fruitTools()
+    local ok, response = raceInvoke("Cousin", "Buy")
+    if not ok or response == false then
+        reportRecord("Fruit / Gacha", "RECUSADO", tostring(response))
+        return false
+    end
+    task.wait(0.8)
+    local after = #fruitTools()
+    reportRecord("Fruit / Gacha", after > before and "CONFIRMADO" or "OBSERVADO",
+        "resposta=" .. tostring(response) .. " | frutas mochila=" .. before .. "->" .. after)
+    return true
+end
+FruitActions.fruit_auto_store = function(enabled)
+    FruitRuntime.store = enabled == true
+    if not enabled or FruitRuntime.running then return true end
+    FruitRuntime.running = true
+    task.spawn(function()
+        while session.alive and FruitRuntime.store do
+            for _, item in ipairs(fruitTools()) do
+                if not FruitRuntime.store or not session.alive then break end
+                if os.clock() - (FruitRuntime.attempted[item] or -math.huge) >= 20 then
+                    FruitRuntime.attempted[item] = os.clock()
+                    local original = item:GetAttribute("OriginalName")
+                    if type(original) ~= "string" or original == "" then
+                        reportRecord("Fruit / Store", "RECUSADO",
+                            item.Name .. ": OriginalName ausente")
+                    else
+                        local ok, response = raceInvoke("StoreFruit", original, item)
+                        task.wait(0.6)
+                        local stored = item.Parent ~= LocalPlayer:FindFirstChildOfClass("Backpack")
+                        reportRecord("Fruit / Store",
+                            stored and "CONFIRMADO" or (ok and "OBSERVADO" or "ERRO"),
+                            item.Name .. ": " .. tostring(response):sub(1, 70))
+                    end
+                end
+            end
+            task.wait(3)
+        end
+        FruitRuntime.running = false
+    end)
+    return true
+end
+FruitRuntime.stop = function() FruitRuntime.store = false end
+
+local RaidActions = {}
+RaidRuntime = {
+    raid = "Flame", enabled = false, running = false, nonce = 0,
+    hop = false, awaken = false, hadIsland = false,
+    lastChip = -math.huge, lastClick = -math.huge,
+    lastHop = -math.huge, lastMessage = nil, missingSince = os.clock(),
+}
+local function raidStatus(message, state)
+    if RaidRuntime.lastMessage == message then return end
+    RaidRuntime.lastMessage = message
+    reportRecord("Raid / Estado", state or "OBSERVADO", message)
+    local label = StatusRuntime.infoLabels.farm_status
+    if label and label.Parent then label.Text = "Raid: " .. message end
+end
+local function raidChip()
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local character = LocalPlayer.Character
+    return (backpack and backpack:FindFirstChild("Special Microchip"))
+        or (character and character:FindFirstChild("Special Microchip"))
+end
+local function raidIsland()
+    local origin = workspace:FindFirstChild("_WorldOrigin")
+    local locations = origin and origin:FindFirstChild("Locations")
+    if not locations then return nil end
+    for index = 5, 1, -1 do
+        local island = locations:FindFirstChild("Island " .. index)
+        if island and auxPart(island) then return island, index end
+    end
+    return nil
+end
+local function raidFight(island)
+    local part = auxPart(island)
+    if not part then return end
+    local root = raceRoot()
+    if not root then return raidStatus("aguardando personagem") end
+    local enemies = workspace:FindFirstChild("Enemies")
+    local enemy, nearest
+    if enemies then
+        for _, candidate in ipairs(enemies:GetChildren()) do
+            local hum = candidate:FindFirstChildOfClass("Humanoid")
+            local candidatePart = auxPart(candidate)
+            if hum and hum.Health > 0 and candidatePart
+                and (candidatePart.Position - part.Position).Magnitude < 950 then
+                local distance = (root.Position - candidatePart.Position).Magnitude
+                if not nearest or distance < nearest then
+                    enemy, nearest = candidate, distance
+                end
+            end
+        end
+    end
+    local enemyPart = enemy and auxPart(enemy)
+    if enemyPart and (enemyPart.Position - part.Position).Magnitude < 950 then
+        raidStatus("combatendo " .. enemy.Name)
+        if not QuickRuntime.smoothTeleport(CFrame.new(enemyPart.Position
+            + Vector3.new(0, 7, 5))) then return end
+        if not RaidRuntime.enabled or not enemy.Parent then return end
+        local tool = raceTool()
+        if tool and tool.Enabled then pcall(function() tool:Activate() end) end
+        if not tool then raidStatus("equipe uma arma para o raid") end
+    elseif (root.Position - part.Position).Magnitude > 100 then
+        raidStatus("indo para " .. island.Name)
+        QuickRuntime.smoothTeleport(CFrame.new(part.Position + Vector3.new(0, 30, 0)))
+    else
+        raidStatus("aguardando inimigos em " .. island.Name)
+    end
+end
+local function raidStep()
+    if FarmingRuntime.mode or AuxRuntime.mode or VolcanoRuntime.running
+        or RaceRuntime.mode or V4Runtime.enabled then
+        return raidStatus("pausado: outra automacao usa movimento")
+    end
+    local sea = LocalActions.lp_current_sea()
+    if sea ~= 2 and sea ~= 3 then return raidStatus("raid requer Second/Third Sea") end
+    local island = raidIsland()
+    if island then
+        RaidRuntime.hadIsland = true
+        RaidRuntime.missingSince = os.clock()
+        return raidFight(island)
+    end
+    if RaidRuntime.hadIsland then
+        RaidRuntime.hadIsland = false
+        raidStatus("ilhas desapareceram; resultado do raid ainda nao confirmado")
+        if RaidRuntime.awaken then
+            local ok, response = raceInvoke("Awakener", "Awaken")
+            reportRecord("Raid / Awaken", ok and "OBSERVADO" or "ERRO",
+                "resposta=" .. tostring(response))
+        end
+    end
+    if not raidChip() then
+        if os.clock() - RaidRuntime.lastChip >= 20 then
+            RaidRuntime.lastChip = os.clock()
+            local ok, response = raceInvoke("RaidsNpc", "Select", RaidRuntime.raid)
+            reportRecord("Raid / Chip", ok and "OBSERVADO" or "ERRO",
+                RaidRuntime.raid .. ": " .. tostring(response))
+        end
+        raidStatus("aguardando Special Microchip")
+        if RaidRuntime.hop and os.clock() - RaidRuntime.missingSince > 120
+            and os.clock() - RaidRuntime.lastHop > 180 then
+            RaidRuntime.lastHop = os.clock()
+            StatusActions.hop_server()
+        end
+        return
+    end
+    if os.clock() - RaidRuntime.lastClick < 12 then return end
+    local map = workspace:FindFirstChild("Map")
+    local zone = map and map:FindFirstChild(sea == 2 and "CircleIsland" or "Boat Castle")
+    local summon = zone and zone:FindFirstChild("RaidSummon2", true)
+    local click = summon and summon:FindFirstChildWhichIsA("ClickDetector", true)
+    local part = click and click.Parent
+    if not part or not part:IsA("BasePart") then
+        return raidStatus("botao RaidSummon2 nao carregado no mapa")
+    end
+    if typeof(fireclickdetector) ~= "function" then
+        return raidStatus("executor sem fireclickdetector para iniciar raid", "RECUSADO")
+    end
+    raidStatus("indo ao botao de raid")
+    if not QuickRuntime.smoothTeleport(CFrame.new(part.Position + Vector3.new(0, 3, 3))) then return end
+    if not RaidRuntime.enabled then return end
+    RaidRuntime.lastClick = os.clock()
+    local ok, err = pcall(fireclickdetector, click)
+    reportRecord("Raid / Start", ok and "OBSERVADO" or "ERRO",
+        ok and "clique enviado; aguardando Island 1" or tostring(err))
+end
+RaidActions.raid_select = function(value)
+    RaidRuntime.raid = tostring(value)
+    return true
+end
+RaidActions.raid_auto = function(enabled)
+    RaidRuntime.enabled = enabled == true
+    if enabled and not RaidRuntime.running then
+        RaidRuntime.running = true
+        RaidRuntime.nonce = RaidRuntime.nonce + 1
+        local nonce = RaidRuntime.nonce
+        task.spawn(function()
+            while session.alive and RaidRuntime.enabled and nonce == RaidRuntime.nonce do
+                local ok, err = pcall(raidStep)
+                if not ok then
+                    raidStatus("erro: " .. tostring(err):sub(1, 100), "ERRO")
+                    break
+                end
+                task.wait(1.5)
+            end
+            if nonce == RaidRuntime.nonce then RaidRuntime.running = false end
+        end)
+    elseif not enabled then
+        RaidRuntime.nonce = RaidRuntime.nonce + 1
+        RaidRuntime.running = false
+        QuickRuntime.stopSmoothTeleport()
+    end
+    return true
+end
+RaidActions.raid_hop = function(value) RaidRuntime.hop = value == true; return true end
+RaidActions.raid_awaken = function(value) RaidRuntime.awaken = value == true; return true end
+RaidRuntime.stop = function()
+    RaidRuntime.enabled, RaidRuntime.hop, RaidRuntime.awaken = false, false, false
+    RaidRuntime.nonce = RaidRuntime.nonce + 1
+end
+
 local ActionRegistry = setmetatable(LocalActions, {
     __index = function(_, key)
-        return ReportActions[key] or VolcanoActions[key] or RaceActions[key] or FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
+        return ReportActions[key] or AuxActions[key] or RaidActions[key] or FruitActions[key]
+            or VolcanoActions[key] or RaceActions[key] or FarmingActions[key] or SkillActions[key] or SettingFarmActions[key]
             or QuickActions[key] or StatusActions[key] or ShopActions[key]
     end
 })
@@ -7707,38 +8387,38 @@ local PagesData = {
     } },
     { name = "Stack Farming", sections = {
         { title = "Auto World", items = {
-            { type = "toggle", text = "Auto New World" },
-            { type = "toggle", text = "Auto Third World" },
+            { type = "toggle", text = "Auto New World", action = "stack_new_world" },
+            { type = "toggle", text = "Auto Third World", action = "stack_third_world" },
         } },
         { title = "Devil Fruit", items = {
             { type = "toggle", text = "Collect Chest When Server Spawn God's Chalice or Fist of Darkness" },
-            { type = "toggle", text = "Teleport To Fruit" },
-            { type = "toggle", text = "Teleport To Fruit [Hop Server]" },
+            { type = "toggle", text = "Teleport To Fruit", action = "stack_fruit" },
+            { type = "toggle", text = "Teleport To Fruit [Hop Server]", action = "stack_fruit_hop" },
         } },
         { title = "Event Game", items = {
-            { type = "toggle", text = "Auto Factory" },
+            { type = "toggle", text = "Auto Factory (Core carregado)", action = "stack_factory" },
             { type = "toggle", text = "Auto Pirate Raid" },
         } },
         { title = "Boss Rip Indra", items = {
-            { type = "toggle", text = "Auto Elite Hunter" },
-            { type = "toggle", text = "Hop Server Elite Hunter" },
+            { type = "toggle", text = "Auto Elite Hunter (elite carregado)", action = "stack_elite" },
+            { type = "toggle", text = "Hop Server Elite Hunter", action = "stack_elite_hop" },
             { type = "toggle", text = "Auto Touch Pad Haki" },
             { type = "toggle", text = "Auto Summon Rip Indra" },
-            { type = "toggle", text = "Attack Rip Indra" },
+            { type = "toggle", text = "Attack Rip Indra", action = "stack_rip" },
         } },
         { title = "Boss Soul Reaper", items = {
-            { type = "toggle", text = "Attack Soul Reaper" },
+            { type = "toggle", text = "Attack Soul Reaper", action = "stack_soul" },
             { type = "toggle", text = "Summon Soul Reaper" },
         } },
         { title = "Boss Dough King", items = {
-            { type = "toggle", text = "Attack Dough King" },
+            { type = "toggle", text = "Attack Dough King", action = "stack_dough" },
             { type = "toggle", text = "Summon Dough King" },
-            { type = "toggle", text = "Hop Find Dough King" },
+            { type = "toggle", text = "Hop Find Dough King", action = "stack_dough_hop" },
         } },
         { title = "Boss Darkbeard", items = {
-            { type = "toggle", text = "Attack Darkbeard" },
+            { type = "toggle", text = "Attack Darkbeard", action = "stack_dark" },
             { type = "toggle", text = "Summon Darkbeard" },
-            { type = "toggle", text = "Hop Find Darkbeard" },
+            { type = "toggle", text = "Hop Find Darkbeard", action = "stack_dark_hop" },
         } },
     } },
     { name = "Farming Other", sections = {
@@ -7760,17 +8440,17 @@ local PagesData = {
             { type = "toggle", text = "Auto Accept Quest Fishing" },
         } },
         { title = "Attack All Mobs", items = {
-            { type = "toggle", text = "Auto Attack All Mob and Boss" },
+            { type = "toggle", text = "Auto Attack All Mob and Boss", action = "other_attack_all" },
         } },
         { title = "Berry", items = {
-            { type = "toggle", text = "Hop Find Berry" },
-            { type = "toggle", text = "Auto Collect Berry" },
+            { type = "toggle", text = "Hop Find Berry", action = "other_berry_hop" },
+            { type = "toggle", text = "Auto Collect Berry", action = "other_berry" },
         } },
         { title = "Farm Chest", items = {
             { type = "slider", text = "Value Collect Chest to Hop", value = 29.5, min = 1, max = 100 },
-            { type = "toggle", text = "Auto Chest Hop" },
+            { type = "toggle", text = "Auto Chest Hop", action = "other_chest_hop" },
             { type = "toggle", text = "Use Method Teleport [Risk]" },
-            { type = "toggle", text = "Auto Chest" },
+            { type = "toggle", text = "Auto Chest", action = "other_chest" },
         } },
         { title = "Raid Law", items = {
             { type = "toggle", text = "Auto Buy Chip and Attack Law" },
@@ -7781,31 +8461,31 @@ local PagesData = {
             { type = "toggle", text = "Farm Observation [Hop Server]" },
         } },
         { title = "Auto Kill Mob", items = {
-            { type = "dropdown", text = "Select Mob", options = { "Select..." } },
-            { type = "toggle", text = "Kill Mob" },
+            { type = "dropdown", text = "Select Mob", options = { "Select..." }, action = "other_select_mob" },
+            { type = "toggle", text = "Kill Mob", action = "other_kill_mob" },
         } },
         { title = "Auto Boss", items = {
-            { type = "dropdown", text = "Select Boss", options = { "Select..." } },
-            { type = "button", text = "Refresh Boss" },
-            { type = "toggle", text = "Kill Boss" },
-            { type = "toggle", text = "Kill All Boss" },
-            { type = "toggle", text = "Hop Server Find Boss" },
+            { type = "dropdown", text = "Select Boss", options = { "Select..." }, action = "other_select_boss" },
+            { type = "button", text = "Refresh Boss/Mob", action = "other_refresh_boss" },
+            { type = "toggle", text = "Kill Boss", action = "other_kill_boss" },
+            { type = "toggle", text = "Kill All Boss", action = "other_kill_all_boss" },
+            { type = "toggle", text = "Hop Server Find Boss", action = "other_hop_boss" },
         } },
     } },
     { name = "Fruit and Raid and Dungeon", sections = {
         { title = "Devil Fruit", items = {
-            { type = "button", text = "Random Devil Fruit" },
+            { type = "button", text = "Random Devil Fruit", action = "fruit_random" },
             { type = "toggle", text = "Auto Roll Magnetic Gacha" },
-            { type = "toggle", text = "Auto Store Fruit" },
+            { type = "toggle", text = "Auto Store Fruit", action = "fruit_auto_store" },
             { type = "dropdown", text = "Blox Fruit Sniper Shop", options = { "Select Fruit" } },
             { type = "toggle", text = "Buy Blox Fruit Sniper Shop" },
         } },
         { title = "Raids", items = {
-            { type = "dropdown", text = "Select Raid", options = { "Flame", "Ice", "Sand", "Dark", "Light", "Magma", "Quake", "Buddha", "Spider", "Rumble", "Phoenix", "Dough" } },
+            { type = "dropdown", text = "Select Raid", options = { "Flame", "Ice", "Sand", "Dark", "Light", "Magma", "Quake", "Buddha", "Spider", "Rumble", "Phoenix", "Dough" }, action = "raid_select" },
             { type = "toggle", text = "Get Fruit In Inventory Low Beli" },
-            { type = "toggle", text = "Auto Raid" },
-            { type = "toggle", text = "Hop Server Raid" },
-            { type = "toggle", text = "Auto Awake Fruit" },
+            { type = "toggle", text = "Auto Raid", action = "raid_auto" },
+            { type = "toggle", text = "Hop Server Raid", action = "raid_hop" },
+            { type = "toggle", text = "Auto Awake Fruit", action = "raid_awaken" },
         } },
         { title = "Multi Raid", items = {
             { type = "dropdown", text = "Select Player", options = { "Select Player" } },
@@ -7851,10 +8531,10 @@ local PagesData = {
             { type = "toggle", text = "Auto Sea Event With Friend" },
             { type = "toggle", text = "Auto Repair Ur Ship" },
             { type = "toggle", text = "Auto Sea Event" },
-            { type = "toggle", text = "Auto Find Mirage" },
+            { type = "toggle", text = "Teleport Mirage quando carregada", action = "sea_find_mirage" },
         } },
         { title = "Kitsune Event", items = {
-            { type = "button", text = "Teleport Kitsune Island" },
+            { type = "button", text = "Teleport Kitsune Island carregada", action = "sea_teleport_kitsune" },
             { type = "toggle", text = "Hop Server" },
             { type = "toggle", text = "Auto Spawn Kitsune Island" },
             { type = "toggle", text = "Auto Summon/Collect Soul Ember" },
@@ -7872,7 +8552,7 @@ local PagesData = {
             { type = "toggle", text = "Attack Leviathan With Fruit" },
             { type = "toggle", text = "Attack Leviathan With DragonStorm" },
             { type = "toggle", text = "Attack Leviathan With Skull Guitar" },
-            { type = "toggle", text = "Auto Find Frozen Dimension" },
+            { type = "toggle", text = "Teleport Frozen quando carregada", action = "sea_find_frozen" },
             { type = "toggle", text = "Shoot Leviathan Heart" },
         } },
         { title = "Boat Setting", items = {
@@ -7920,7 +8600,7 @@ local PagesData = {
     { name = "Get and Upgrade Items", sections = {
         { title = "Items", items = {
             { type = "toggle", text = "Auto Trade Bone" },
-            { type = "toggle", text = "Auto Buy Legendary Sword" },
+            { type = "toggle", text = "Auto Buy Legendary Sword", action = "auto_legendary_sword" },
             { type = "toggle", text = "Auto Buy Haki Color" },
             { type = "toggle", text = "Hop Server [Haki color or Legendary Sword]" },
             { type = "toggle", text = "Auto Get Rainbow Haki" },
@@ -7929,7 +8609,7 @@ local PagesData = {
             { type = "toggle", text = "Auto CDK" },
             { type = "toggle", text = "Auto Yama" },
             { type = "toggle", text = "Auto Tushita" },
-            { type = "toggle", text = "Auto TTK" },
+            { type = "toggle", text = "Auto TTK", action = "auto_true_triple_katana" },
             { type = "toggle", text = "Auto Saber" },
             { type = "toggle", text = "Auto Craft Shark Anchor" },
             { type = "toggle", text = "Auto Yoru Mini" },
@@ -8080,7 +8760,7 @@ local Title = New("TextLabel", {
     Size = UDim2.new(1, 0, 1, 0),
     BackgroundTransparency = 1,
     RichText = true,
-    Text = '<font color="#975CFF"><b>Tave Hub</b></font>  - Blox Fruit (Race V4 7.15)',
+    Text = '<font color="#975CFF"><b>Floquitave</b></font>  - Blox Fruit (7.16)',
     TextColor3 = Theme.Text,
     Font = Enum.Font.Gotham,
     TextSize = 16,
@@ -8302,15 +8982,18 @@ local function AddButton(parent, text, callback)
         button.Text = "..."
         Tween(button, {BackgroundColor3 = Theme.Accent}, 0.08)
 
-        local callbackOk = true
+        local callbackOk = callback ~= nil
         if callback then
             local ok, result = pcall(callback)
             callbackOk = ok and result ~= false
+        else
+            reportRecord("Controle / " .. text, "NAO IMPLEMENTADA",
+                "Botao sem acao ligada nesta versao")
         end
 
         task.delay(0.18, function()
             if button.Parent then
-                button.Text = callbackOk and old or "Error"
+                button.Text = callbackOk and old or (callback and "Error" or "Pendente")
                 Tween(button, {BackgroundColor3 = callbackOk and Theme.AccentSoft or Color3.fromRGB(145, 55, 76)}, 0.12)
                 if not callbackOk then
                     task.delay(0.65, function()
@@ -8371,6 +9054,11 @@ local function AddToggle(parent, text, callback, defaultValue)
         ZIndex = 5,
     }, row)
     hitArea.MouseButton1Click:Connect(function()
+        if not callback then
+            reportRecord("Controle / " .. text, "NAO IMPLEMENTADA",
+                "Toggle sem acao ligada nesta versao")
+            return
+        end
         enabled = not enabled
         fill.Visible = enabled
         row:SetAttribute("Value", enabled)
@@ -9198,6 +9886,9 @@ local function stopHub()
     if VolcanoRuntime.stop then VolcanoRuntime.stop() end
     if RaceRuntime.stop then RaceRuntime.stop() end
     if V4Runtime.stop then V4Runtime.stop() end
+    if AuxRuntime.stop then AuxRuntime.stop() end
+    if RaidRuntime.stop then RaidRuntime.stop() end
+    if FruitRuntime.stop then FruitRuntime.stop() end
 
     if LocalRuntime and LocalRuntime.stop then
         pcall(LocalRuntime.stop)
@@ -9261,7 +9952,7 @@ session.cleanup = stopHub
 CloseBtn.MouseButton1Click:Connect(stopHub)
 ScreenGui.Destroying:Connect(stopHub)
 
-reportRecord("Hub / Sessao", "OBSERVADO", "Relatorio 7.15 iniciado; magneto e busca maritima; validacao no Roblox pendente.")
+reportRecord("Hub / Sessao", "OBSERVADO", "7.16 iniciada; funcoes novas requerem validacao no Roblox.")
 ShowPage("Shop")
 
 -- Populate cheap local status once. Remote status refreshes when its page opens.
@@ -9279,4 +9970,4 @@ task.defer(function()
     end
 end)
 
-print("[Floquitave] Race V4 7.15 loaded - copy/export diagnostics from Relatorio.")
+print("[Floquitave] 7.16 loaded - copy/export diagnostics from Relatorio.")
