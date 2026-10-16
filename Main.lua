@@ -1,12 +1,12 @@
 
--- NEEDLE KAITUN 1.0 | Search For The Needle
+-- NEEDLE KAITUN 1.2 | Search For The Needle
 -- Cole todo este TXT no executor dentro do lobby ou de um dos mapas.
 -- O script comeca automaticamente. Use Pausar/Continuar, Mapa e Dificuldade no painel.
 -- Ao usar Encerrar, a copia local da continuidade e desativada.
 -- Nenhuma compra com Robux e realizada.
 
 local source = [====[
--- Needle Kaitun 1.0 | Search For The Needle | Garage Games
+-- Needle Kaitun 1.2 | Search For The Needle | Garage Games
 -- Este arquivo e iniciado pelo TXT distribuido junto com ele.
 -- Apenas moeda do jogo; nenhuma compra de gamepass/Robux.
 
@@ -37,13 +37,14 @@ end
 
 local S = {
     alive = true, auto = true, phase = "iniciando", detail = "", started = os.clock(),
-    picks = 0, sells = 0, upgrades = 0, gems = 0, wins = 0, rounds = 0,
-    lastPick = 0, lastFork = 0, lastVacuum = 0, lastTnt = 0,
-    lastBuy = 0, lastGemBuy = 0, lastHandIn = 0, lastRoundAction = 0,
+    picks = 0, forks = 0, vacuums = 0, needleAttempts = 0, deliveryAttempts = 0,
+    sells = 0, upgrades = 0, gems = 0, wins = 0, rounds = 0,
+    lastBuy = 0, lastGemBuy = 0, lastHandIn = 0, lastNeedlePick = 0,
+    lastRoundAction = 0, roundReturnAttempts = 0,
     lastState = 0, lastCache = 0, hay = {}, cursor = 1, recent = {},
     lastObjectiveScan = 0, objectiveCache = nil, roundHandled = false,
     needleId = nil, needlePos = nil, needleAnchor = nil,
-    lastNeedleLookup = 0, tntLit = false,
+    lastNeedleLookup = 0, vacuumFocus = nil, deliveredAt = nil, roundEvent = false,
     connections = {}, events = {}, maxEvents = 120,
 }
 global.__NeedleKaitunSession = S
@@ -51,7 +52,7 @@ global.__NeedleKaitunSession = S
 local settings = {
     map = "FARMHOUSE", difficulty = "NORMAL", sellPercent = 100,
     buyTools = true, buyUpgrades = true, buyGemUpgrades = true,
-    useFork = true, useVacuum = true, useTnt = true,
+    useFork = true, useVacuum = true,
     collectGems = true, antiAfk = true,
 }
 local settingsPath = "NeedleKaitun_settings.json"
@@ -180,8 +181,15 @@ pcall(function()
     local module = scripts and scripts:WaitForChild("HotbarSlots", 10)
     if module then hotbar = require(module) end
 end)
+local lastEquipError = 0
 local function equip(slot)
-    if not hotbar or type(hotbar.select) ~= "function" then return false end
+    if not hotbar or type(hotbar.select) ~= "function" then
+        if os.clock() - lastEquipError >= 10 then
+            lastEquipError = os.clock()
+            log("HotbarSlots indisponivel: ferramenta nao equipada")
+        end
+        return false
+    end
     if type(hotbar.getEquipped) == "function" then
         local ok, current = pcall(hotbar.getEquipped)
         if ok and current == slot then return true end
@@ -189,8 +197,16 @@ local function equip(slot)
     local ok = pcall(hotbar.select, slot)
     if not ok then return false end
     if type(hotbar.getEquipped) ~= "function" then return true end
-    local confirmed, current = pcall(hotbar.getEquipped)
-    return confirmed and current == slot
+    for _ = 1, 3 do
+        local confirmed, current = pcall(hotbar.getEquipped)
+        if confirmed and current == slot then return true end
+        RunService.Heartbeat:Wait()
+    end
+    if os.clock() - lastEquipError >= 10 then
+        lastEquipError = os.clock()
+        log("Nao confirmou equipamento do slot " .. tostring(slot))
+    end
+    return false
 end
 
 local function refreshHay(force)
@@ -278,7 +294,7 @@ local function grabNeighbors(piece)
     return ids
 end
 
-local handAt, forkAt, vacAt, tntAt = 0, 0, 0, 0
+local handAt, forkAt, vacAt = 0, 0, 0
 local function pick(part)
     if not part or not part.Parent then return false end
     local id = part:GetAttribute("HayId")
@@ -292,25 +308,29 @@ local function pick(part)
 end
 local function fork(part)
     if not settings.useFork or not attr("PitchforkOwned", false)
-        or os.clock() < forkAt or not part then return end
+        or os.clock() < forkAt or not part or not part.Parent then return false end
     local r = root()
-    if not r or (r.Position-part.Position).Magnitude > (tonumber(Config.INTERACT_DISTANCE) or 20)-2 then return end
-    equip(tonumber(Config.PITCHFORK_SLOT_INDEX) or 3)
+    if not r or (r.Position-part.Position).Magnitude > (tonumber(Config.INTERACT_DISTANCE) or 20)-2 then return false end
+    if not equip(tonumber(Config.PITCHFORK_SLOT_INDEX) or 3) then return false end
     local id = part:GetAttribute("HayId")
     if id and fire("PitchforkDig", id) then
         S.recent[id] = os.clock()
         forkAt = os.clock() + num("PitchforkCooldown", tonumber(Config.PITCHFORK_COOLDOWN) or 0.85) + 0.05
+        S.forks = S.forks + 1
+        return true
     end
+    return false
 end
 local function vacuum(part)
     if not settings.useVacuum or not attr("VacuumOwned", false)
         or attr("VacuumState", "Ready") == "Overheated"
-        or attr("VacuumOverheated", false) or os.clock() < vacAt then return false end
+        or attr("VacuumOverheated", false) or os.clock() < vacAt
+        or not part or not part.Parent then return false end
     local r = root()
     if not r or (r.Position - part.Position).Magnitude > (tonumber(Config.VACUUM_RANGE) or 11) - 1 then
         return false
     end
-    equip(tonumber(Config.VACUUM_SLOT_INDEX) or 5)
+    if not equip(tonumber(Config.VACUUM_SLOT_INDEX) or 5) then return false end
     if not fire("VacuumAction", "Start") then return false end
     RunService.Heartbeat:Wait()
     local ids, seen = {}, {}
@@ -334,32 +354,11 @@ local function vacuum(part)
             end
         end
     end
-    if #ids > 0 then fire("VacuumAction", "Tick", part.Position, r.Position, ids) end
+    local used = #ids > 0 and fire("VacuumAction", "Tick", part.Position, r.Position, ids)
     fire("VacuumAction", "Stop")
     vacAt = os.clock() + math.max(0.12, tonumber(Config.VACUUM_TICK) or 0.16)
-    return true
-end
-local function tnt(part)
-    if not settings.useTnt or not attr("TntOwned", false)
-        or os.clock() < tntAt or not remote("TntAction") or not hotbar or not part then return false end
-    local pos = part.Position + Vector3.new(0, 14, 7)
-    local face = CFrame.lookAt(pos, part.Position)
-    if not hold(face, 0.15) then return false end
-    if not equip(tonumber(Config.TNT_SLOT_INDEX) or 2) then return false end
-    S.tntLit = false
-    tntAt = os.clock() + 3
-    fire("TntAction", "light")
-    local deadline = os.clock() + 1.3
-    while S.alive and S.auto and not S.tntLit and os.clock() < deadline do
-        hold(face, 0.05)
-    end
-    if not S.tntLit then return false end
-    hold(face, (tonumber(Config.TNT_LIGHT_TIME) or 0.48) + 0.07)
-    local velocity = (part.Position - pos).Unit * 22
-    fire("TntAction", "throw", face * CFrame.new(0, 1, -1), velocity)
-    tntAt = os.clock() + num("TntCooldown", tonumber(Config.TNT_COOLDOWN) or 20) + 0.2
-    log("TNT lancado")
-    return true
+    if used then S.vacuums = S.vacuums + 1 end
+    return used
 end
 
 local function sellPart()
@@ -396,13 +395,11 @@ end
 
 local toolOrder = {
     {name="Pitchfork", attr="PitchforkOwned", cost=8},
-    {name="Tnt", attr="TntOwned", cost=25},
     {name="Vacuum", attr="VacuumOwned", cost=69.99},
 }
 local baseTracks = {"Speed", "Grab", "Capacity", "Value"}
 local toolTracks = {
     PitchforkOwned={"Pitchfork", "PitchforkCooldown", "PitchforkHold"},
-    TntOwned={"TntCooldown", "TntPower", "TntLuck"},
     VacuumOwned={"VacuumPower", "VacuumCooling", "VacuumRuntime"},
     DroneOwned={"DroneSpeed", "DroneGrab", "DroneCapacity"},
 }
@@ -428,6 +425,9 @@ local function shop()
             if not before and attr(pending.attr, false) then
                 log("comprou " .. pending.name)
                 pending = nil
+                for _, tool in ipairs(toolOrder) do
+                    if not attr(tool.attr, false) then pending = tool; break end
+                end
             end
         end
         if not attr("DroneOwned", false) and num("Gems", 0) >= 40 then
@@ -492,9 +492,18 @@ local function claimNeedle()
     local obj = objective()
     if obj then
         phase("coletando agulha")
+        if os.clock() - S.lastNeedlePick < 1 then return true end
+        S.lastNeedlePick = os.clock()
         if hold(CFrame.new(obj.Position + Vector3.new(0, 4, 2)), 0.2) then
-            fire("PickHay", "Objective")
-            task.wait(0.5)
+            if fire("PickHay", "Objective") then S.needleAttempts = S.needleAttempts + 1 end
+            local deadline = os.clock() + 1
+            while S.alive and S.auto and not attr("NeedleOwned", false)
+                and os.clock() < deadline do task.wait(0.08) end
+            if attr("NeedleOwned", false) then
+                log("agulha coletada; indo entregar ao Farmer")
+            elseif S.needleAttempts > 0 and S.needleAttempts % 5 == 0 then
+                log("coleta da agulha sem confirmacao; tentativas=" .. S.needleAttempts)
+            end
         end
         return true
     end
@@ -518,12 +527,22 @@ local function handIn()
     local farmer = npc and npc:FindFirstChild("Farmer_NPC")
     if not farmer then phase("entrega", "Farmer_NPC nao carregado"); return end
     phase("entregando agulha")
-    equip(tonumber(Config.NEEDLE_SLOT_INDEX) or 4)
+    if not equip(tonumber(Config.NEEDLE_SLOT_INDEX) or 4) then
+        log("nao conseguiu equipar a agulha para entrega")
+        return
+    end
     local pos = farmer:GetPivot().Position
     if hold(CFrame.lookAt(pos + farmer:GetPivot().LookVector * 5 + Vector3.new(0, 2, 0), pos), 0.35) then
-        fire("NeedleHandIn")
-        task.wait(0.7)
-        if not attr("NeedleOwned", false) then log("agulha entregue; aguardando fim da rodada") end
+        if fire("NeedleHandIn") then S.deliveryAttempts = S.deliveryAttempts + 1 end
+        local deadline = os.clock() + 1.2
+        while S.alive and S.auto and attr("NeedleOwned", false)
+            and os.clock() < deadline do task.wait(0.08) end
+        if not attr("NeedleOwned", false) then
+            S.deliveredAt = os.clock()
+            log("agulha entregue; aguardando fim da rodada")
+        elseif S.deliveryAttempts > 0 and S.deliveryAttempts % 3 == 0 then
+            log("entrega sem confirmacao; tentativas=" .. S.deliveryAttempts)
+        end
     end
 end
 local function afterWin()
@@ -535,17 +554,34 @@ local function afterWin()
         log("vitoria confirmada")
     end
     if os.clock() - S.completedAt < 4 then return end
-    if os.clock() - S.lastRoundAction < 12 then return end
+    if os.clock() - S.lastRoundAction < 10 then return end
     S.lastRoundAction = os.clock()
-    -- O pedido e voltar ao lobby, comprar melhorias permanentes e iniciar outra.
-    if fire("ReturnToLobby") then log("volta ao lobby solicitada") end
+    S.roundReturnAttempts = S.roundReturnAttempts + 1
+    -- O lobby permite comprar melhorias permanentes antes da proxima rodada.
+    if S.roundReturnAttempts <= 3 and remote("ReturnToLobby") then
+        if fire("ReturnToLobby") then
+            log("volta ao lobby solicitada; tentativa " .. S.roundReturnAttempts)
+        end
+    elseif remote("ReplayVote") then
+        if fire("ReplayVote", true) then
+            log("revanche solicitada porque o lobby nao abriu")
+        end
+    else
+        log("sem remoto de retorno ou revanche")
+    end
 end
 
 local function mapStep()
     if not NH then phase("aguardando", "NeedleHaystack nao carregado"); return 2 end
-    if attr("NeedleRoundComplete", false) then afterWin(); return 1 end
+    if S.roundEvent or attr("NeedleRoundComplete", false) then afterWin(); return 1 end
     if attr("NeedleInputLocked", false) then phase("cutscene"); return 0.6 end
     if attr("NeedleOwned", false) then handIn(); return 0.5 end
+    if S.deliveredAt then
+        phase("aguardando resultado da entrega")
+        if os.clock() - S.deliveredAt < 25 then return 0.8 end
+        log("entrega confirmada, mas rodada nao finalizou; retomando coleta")
+        S.deliveredAt = nil
+    end
     local held = num("HayHeld", 0)
     local capacity = attr("InfiniteBagOwned", false) and 200 or num("HayCapacity", 25)
     if held >= math.max(1, math.floor(capacity * settings.sellPercent / 100)) then
@@ -557,20 +593,37 @@ local function mapStep()
     end
     if collectGem() then return 0.1 end
     shop()
-    local part = chooseHay()
-    if not part then phase("aguardando feno", "HaystackClient sem objetos carregados"); return 1 end
-    phase("coletando feno")
     local vacReady = settings.useVacuum and attr("VacuumOwned",false)
         and not attr("VacuumOverheated",false)
         and attr("VacuumState","Ready") ~= "Overheated"
+    local part = (vacReady and S.vacuumFocus and chooseHay(S.vacuumFocus, 7)) or chooseHay()
+    if not part then phase("aguardando feno", "HaystackClient sem objetos carregados"); return 1 end
+    phase(vacReady and "aspirando feno" or
+        (attr("PitchforkOwned", false) and "colhendo com garfo" or "coletando feno"))
     local reach = vacReady and math.max(5, (tonumber(Config.VACUUM_RANGE) or 11)-3)
         or math.max(7, (tonumber(Config.INTERACT_DISTANCE) or 20)-3)
     if not moveNear(part.Position, reach) then return 0.4 end
-    if settings.useTnt and os.clock() >= tntAt and tnt(part) then return 0.35 end
-    if os.clock() >= handAt then pick(part) end
-    local toolTarget = chooseHay(part.Position, 5) or chooseHay()
-    if toolTarget and not vacuum(toolTarget) then fork(toolTarget) end
-    return math.clamp(handAt - os.clock(), 0.12, 0.7)
+    local usedTool = false
+    if vacReady then
+        S.vacuumFocus = part.Position
+        if os.clock() >= vacAt then
+            usedTool = vacuum(part)
+            if not usedTool then usedTool = fork(part) end
+        end
+    else
+        S.vacuumFocus = nil
+        if os.clock() >= forkAt then usedTool = fork(part) end
+    end
+    if os.clock() >= handAt then
+        local handTarget = usedTool and chooseHay(part.Position, 5) or part
+        if handTarget then pick(handTarget) end
+    end
+    if vacReady then return math.clamp(vacAt - os.clock(), 0.07, 0.25) end
+    local nextAt = handAt
+    if settings.useFork and attr("PitchforkOwned", false) then
+        nextAt = math.min(nextAt, forkAt)
+    end
+    return math.clamp(nextAt - os.clock(), 0.12, 0.7)
 end
 
 local function lobbyRemote(service, class)
@@ -685,13 +738,11 @@ if NH then
             end
         end)
     end
-    local tntEvent = remote("TntAction")
-    if tntEvent and tntEvent:IsA("RemoteEvent") then
-        connect(tntEvent.OnClientEvent, function(state, delay)
-            if state == "lit" then S.tntLit = true
-            elseif state == "denied" then
-                tntAt = os.clock() + (tonumber(delay) or 3) + 0.3
-            end
+    local completed = remote("NeedleRoundCompleted")
+    if completed and completed:IsA("RemoteEvent") then
+        connect(completed.OnClientEvent, function()
+            S.roundEvent = true
+            log("fim da rodada recebido do servidor")
         end)
     end
 end
@@ -715,7 +766,7 @@ local panel = create("Frame", {Size=UDim2.fromOffset(370, 358),
     Active=true, BorderSizePixel=0}, gui)
 create("UICorner", {CornerRadius=UDim.new(0,12)}, panel)
 create("UIStroke", {Color=Color3.fromRGB(152,111,222), Thickness=1.2}, panel)
-local title = create("TextLabel", {Text="NEEDLE KAITUN  1.0", Size=UDim2.new(1,-60,0,35),
+local title = create("TextLabel", {Text="NEEDLE KAITUN  1.2", Size=UDim2.new(1,-60,0,35),
     Position=UDim2.fromOffset(12,4), BackgroundTransparency=1,
     TextColor3=Color3.fromRGB(236,220,255), TextSize=17,
     TextXAlignment=Enum.TextXAlignment.Left, Font=Enum.Font.GothamBold}, panel)
@@ -758,14 +809,18 @@ toggle = button("Pausar kaitun", 12,244,169,function()
 end)
 button("Copiar relatorio", 190,244,169,function()
     local lines = {
-        "Needle Kaitun 1.0 | PlaceId=" .. game.PlaceId .. " | GameId=" .. game.GameId,
+        "Needle Kaitun 1.2 | PlaceId=" .. game.PlaceId .. " | GameId=" .. game.GameId,
         "Fase=" .. S.phase .. " | detalhe=" .. S.detail,
         "Ativo=" .. tostring(S.auto) .. " | continuidade=" .. tostring(S.canContinue),
         "Feno=" .. num("HayHeld",0) .. "/" .. num("HayCapacity",25)
             .. " | Cash=" .. cash() .. " | Gems=" .. num("Gems",0),
         "Agulha=" .. tostring(attr("NeedleOwned",false)) .. " | alvo=" .. tostring(S.needleId)
             .. " | rodada concluida=" .. tostring(attr("NeedleRoundComplete",false)),
-        "Coletas=" .. S.picks .. " | vendas=" .. S.sells .. " | melhorias=" .. S.upgrades
+        "Tentativas agulha=" .. S.needleAttempts .. " | entrega=" .. S.deliveryAttempts
+            .. " | retorno=" .. S.roundReturnAttempts,
+        "Mao=" .. S.picks .. " | disparos garfo=" .. S.forks
+            .. " | pulsos aspirador=" .. S.vacuums
+            .. " | vendas=" .. S.sells .. " | melhorias=" .. S.upgrades
             .. " | vitorias=" .. S.wins .. " | partidas=" .. S.rounds,
         "Remotes=" .. tostring(NH and NH:GetFullName() or "ausente"), "Historico:",
     }
@@ -829,7 +884,8 @@ task.spawn(function()
             .. "  |  Feno: " .. num("HayHeld",0) .. "/" .. num("HayCapacity",25)
             .. "\nCash: " .. cash() .. "  |  Gems: " .. num("Gems",0)
             .. "  |  Vitorias: " .. wins()
-            .. "\nColetas: " .. S.picks .. "  Vendas: " .. S.sells
+            .. "\nMao: " .. S.picks .. "  Garfo: " .. S.forks
+            .. "  Aspirador: " .. S.vacuums .. "  Vendas: " .. S.sells
             .. "  Melhorias: " .. S.upgrades
             .. "\nAgulha: " .. (attr("NeedleOwned",false) and "na mochila"
                 or (S.needleId and "revelada" or "ainda escondida"))
@@ -856,8 +912,8 @@ task.spawn(function()
     end
 end)
 
-log("Kaitun iniciado. Mapa padrao: FARMHOUSE NORMAL; ao vencer, retorna ao lobby.")
-print("[Needle Kaitun] 1.0 carregado | PlaceId=" .. game.PlaceId)
+log("Kaitun 1.2 iniciado. Agulha -> Farmer -> lobby -> nova partida.")
+print("[Needle Kaitun] 1.2 carregado | PlaceId=" .. game.PlaceId)
 
 ]====]
 local env = (type(getgenv) == "function" and getgenv()) or _G
