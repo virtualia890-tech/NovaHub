@@ -1,930 +1,1032 @@
 
--- NEEDLE KAITUN 1.2 | Search For The Needle
--- Cole todo este TXT no executor dentro do lobby ou de um dos mapas.
--- O script comeca automaticamente. Use Pausar/Continuar, Mapa e Dificuldade no painel.
--- Ao usar Encerrar, a copia local da continuidade e desativada.
--- Nenhuma compra com Robux e realizada.
+Carregando mensagens mais antigas…
+vamos fazer o kaitun como eu falei
+[PELICAN] Fiz o kaitun para Search For The Needle: ele tenta iniciar a partida, coletar e vender feno, comprar melhorias, buscar e entregar a agulha, voltar ao lobby e repetir. O painel permite pausar, escolher mapa e dificuldade e copiar um relatório.
 
-local source = [====[
--- Needle Kaitun 1.2 | Search For The Needle | Garage Games
--- Este arquivo e iniciado pelo TXT distribuido junto com ele.
--- Apenas moeda do jogo; nenhuma compra de gamepass/Robux.
+Cole o TXT inteiro no executor. A sintaxe foi verificada, mas ainda não consegui confirmar o ciclo dentro do Roblox. A continuidade após teleporte depende de o executor oferecer queue_on_teleport; se não oferecer, execute o TXT novamente no próximo local.
+
+
+NeedleKaitun_v1.txt
+Documento
+ele fez tudo certo mas quando compra a bomba, ele buga e só usa a mao para pegar a palha, queria que ele usasse o item para conseguir pegar mais palha, e ignorar a bomba, n upar, n comprar, quero que use o garfo e depois o aspirador quando comprar
+[PELICAN] Atualizei o kaitun. Ele não compra, melhora nem usa a TNT. Agora prioriza o garfo e, quando comprar o aspirador, passa a usá-lo; a mão fica como coleta extra. Se o aspirador superaquecer, tenta usar o garfo.
+
+Cole o arquivo inteiro no executor, mesmo que a versão anterior esteja aberta. O relatório agora separa as tentativas com garfo e aspirador. A sintaxe passou na verificação; o uso dos itens ainda precisa ser confirmado no jogo.
+
+
+NeedleKaitun_v1.txt
+Documento
+coloca para quando achar a agulha, pegar e entregar ao npc, e depois repetir a partida
+[PELICAN] Atualizei o kaitun para pegar a agulha, equipá-la e entregá-la ao Farmer. Ele espera o jogo confirmar o fim da rodada, volta ao lobby e inicia outra partida. Se o retorno ao lobby falhar repetidamente, tenta a revanche direta.
+
+Cole o TXT inteiro no executor, substituindo a versão anterior. Validei a sintaxe e a sequência de reinício; a coleta e a entrega ainda precisam ser confirmadas dentro do jogo.
+
+
+NeedleKaitun_v1.txt
+Documento
+chat, tá tudo certo, vamos focar agora no kaitun do blox fruits, quero um kaitun de raça v4 full
+pode usar algumas coisas do script como teleport e locais e etc, mas o kaitun da v4 eu quero só as funções de v4
+[PELICAN] Criei o 
+Floquitave_Kaitun_RaceV4_1_0.txt
+ separado do hub, usando os locais e teleports que já tínhamos. Ele contém apenas o fluxo V4: Mirage e Blue Gear, Templo, portas raciais, trials das seis raças tradicionais, relógio e treino. O painel permite pausar, minimizar e copiar um relatório.
+
+A sintaxe passou na verificação local; ainda não consegui executar o script dentro do Roblox. A rota Draco está sinalizada no painel, mas sua sequência própria ainda não foi automatizada. Para iniciar as trials tradicionais, o jogo também exige outros jogadores de raças diferentes no Templo. 
+
+
+Floquitave_Kaitun_RaceV4_1_0.txt
+Documento
+-- FLOQUITAVE | Race V4 Kaitun 1.0 | Blox Fruits / Third Sea
+-- Script independente: somente etapas diretamente ligadas a Race V4.
+-- O painel inicia em modo automatico. Botao Pausar interrompe movimento e acoes.
+-- O jogo precisa estar aberto no Third Sea (PlaceId 7449423635).
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local CollectionService = game:GetService("CollectionService")
-local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local UIS = game:GetService("UserInputService")
+local VIM = game:GetService("VirtualInputManager")
 local CoreGui = game:GetService("CoreGui")
 local VirtualUser = game:GetService("VirtualUser")
-local HttpService = game:GetService("HttpService")
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 local player = Players.LocalPlayer
-while not player do task.wait(0.1); player = Players.LocalPlayer end
-if game.GameId ~= 10756011174 then
-    warn("[Needle Kaitun] Este jogo nao e Search For The Needle")
+while not player do task.wait(0.2); player = Players.LocalPlayer end
+if game.PlaceId ~= 7449423635 then
+    warn("[Floquitave V4] Entre no Third Sea para iniciar o kaitun.")
     return
 end
 
-local global = (type(getgenv) == "function" and getgenv()) or _G
-if global.__NeedleKaitunSession and type(global.__NeedleKaitunSession.stop) == "function" then
-    pcall(global.__NeedleKaitunSession.stop, false)
+local env = type(getgenv) == "function" and getgenv() or _G
+if env.__FloquitaveV4 and type(env.__FloquitaveV4.stop) == "function" then
+    pcall(env.__FloquitaveV4.stop)
 end
-if global.__NeedleFinder and type(global.__NeedleFinder.stop) == "function" then
-    pcall(global.__NeedleFinder.stop)
-end
-
 local S = {
-    alive = true, auto = true, phase = "iniciando", detail = "", started = os.clock(),
-    picks = 0, forks = 0, vacuums = 0, needleAttempts = 0, deliveryAttempts = 0,
-    sells = 0, upgrades = 0, gems = 0, wins = 0, rounds = 0,
-    lastBuy = 0, lastGemBuy = 0, lastHandIn = 0, lastNeedlePick = 0,
-    lastRoundAction = 0, roundReturnAttempts = 0,
-    lastState = 0, lastCache = 0, hay = {}, cursor = 1, recent = {},
-    lastObjectiveScan = 0, objectiveCache = nil, roundHandled = false,
-    needleId = nil, needlePos = nil, needleAnchor = nil,
-    lastNeedleLookup = 0, vacuumFocus = nil, deliveredAt = nil, roundEvent = false,
-    connections = {}, events = {}, maxEvents = 120,
+    alive=true, auto=true, phase="Iniciando", detail="", started=os.clock(),
+    history={}, connections={}, nonce=0, busy=false,
+    cache={}, cacheAt={}, lastAction={},
+    trialSeen=false, trialStarted=0, trialEndedAt=0, trialRace=nil,
+    gearTouched=false, v3At=0, attackAt=0, skillAt=0, hopAt=0,
+    sailDirection=-1, sailLastPos=nil, sailLastAt=0, sailStalls=0,
+    boatKeys={}, race=nil, objective=nil, objectiveAt=0,
+    attempts={quest=0,mirage=0,lever=0,trial=0,pvp=0,gear=0,train=0,buy=0},
+    path="Alpha", reportMax=150,
 }
-global.__NeedleKaitunSession = S
+env.__FloquitaveV4 = S
 
-local settings = {
-    map = "FARMHOUSE", difficulty = "NORMAL", sellPercent = 100,
-    buyTools = true, buyUpgrades = true, buyGemUpgrades = true,
-    useFork = true, useVacuum = true,
-    collectGems = true, antiAfk = true,
+local POS = {
+    temple=Vector3.new(28286.355,14895.302,102.625),
+    lever=Vector3.new(28575.182,14936.628,72.316),
+    clock=Vector3.new(29553.781,15066.613,-88.275),
+    ancient=Vector3.new(28981.553,14888.427,-120.246),
+    arena=Vector3.new(28766.682,14967.146,-164.133),
+    tiki=Vector3.new(-16927.451,9.086,433.864),
+    bones=Vector3.new(-9515.372,164.006,5786.061),
+    dojo=Vector3.new(5657.886,1013.079,-335.5),
+    cyborgSafe=Vector3.new(28654,14898.783,-30),
 }
-local settingsPath = "NeedleKaitun_settings.json"
-if type(readfile) == "function" then
-    pcall(function()
-        local saved = HttpService:JSONDecode(readfile(settingsPath))
-        if type(saved) == "table" then
-            for key, value in pairs(settings) do
-                if type(saved[key]) == type(value) then settings[key] = saved[key] end
-            end
-        end
-    end)
-end
-local function saveSettings()
-    if type(writefile) == "function" then
-        pcall(writefile, settingsPath, HttpService:JSONEncode(settings))
-    end
-end
-local isLobby = game.PlaceId == 77108422251420
-local NH = RS:FindFirstChild("NeedleHaystack")
-if not isLobby and not NH then NH = RS:WaitForChild("NeedleHaystack", 15) end
-local Config = {}
-if NH then
-    local module = NH:WaitForChild("Config", 10)
-    if module then
-        local ok, result = pcall(require, module)
-        if ok and type(result) == "table" then Config = result end
-    end
-end
+local DOOR = {
+    Human=Vector3.new(29221.822,14890.976,-205.991),
+    Angel=Vector3.new(28960.158,14919.624,235.039),
+    Shark=Vector3.new(28231.176,14890.976,-211.642),
+    Cyborg=Vector3.new(28502.682,14895.976,-423.728),
+    Ghoul=Vector3.new(28674.244,14890.677,445.431),
+    Rabbit=Vector3.new(29012.342,14890.976,-380.149),
+}
 
-local function attr(name, fallback)
-    local value = player:GetAttribute(name)
-    if value == nil then return fallback end
-    return value
+local function log(message)
+    S.detail=tostring(message):sub(1,230)
+    S.history[#S.history+1]=string.format("+%.1fs %s",os.clock()-S.started,S.detail)
+    if #S.history>S.reportMax then table.remove(S.history,1) end
 end
-local function num(name, fallback)
-    return tonumber(attr(name, fallback)) or fallback or 0
+local function status(name, message)
+    S.phase=name
+    if message and S.detail~=message then log(message) end
+end
+local function once(key, seconds)
+    local now=os.clock()
+    if now-(S.lastAction[key] or -math.huge)<seconds then return false end
+    S.lastAction[key]=now
+    return true
 end
 local function root()
     return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 end
-local function cash()
-    local stats = player:FindFirstChild("leaderstats")
-    local value = stats and stats:FindFirstChild("Cash")
-    return value and tonumber(value.Value) or 0
+local function humanoid()
+    return player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 end
-local function wins()
-    local stats = player:FindFirstChild("leaderstats")
-    local value = stats and stats:FindFirstChild("Wins")
-    return value and tonumber(value.Value) or 0
+local function raceName(ofPlayer)
+    local data=ofPlayer and ofPlayer:FindFirstChild("Data")
+    local value=data and data:FindFirstChild("Race")
+    local name=value and tostring(value.Value) or ""
+    return ({Skypiea="Angel",Fishman="Shark",Mink="Rabbit"})[name] or name
 end
-local function log(message)
-    S.detail = tostring(message):sub(1, 220)
-    table.insert(S.events, string.format("+%.1fs %s", os.clock() - S.started, S.detail))
-    if #S.events > S.maxEvents then table.remove(S.events, 1) end
+local function part(obj)
+    if not obj then return nil end
+    if obj:IsA("BasePart") then return obj end
+    return obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+        or obj:FindFirstChildWhichIsA("BasePart",true)
 end
-local function phase(name, detail)
-    S.phase = name
-    if detail and S.detail ~= detail then log(detail) end
+local function invoke(...)
+    local folder=RS:FindFirstChild("Remotes")
+    local remote=folder and folder:FindFirstChild("CommF_")
+    if not remote then return false,"CommF_ ausente" end
+    local args=table.pack(...)
+    return pcall(function() return remote:InvokeServer(table.unpack(args,1,args.n)) end)
 end
-local function connect(signal, fn)
-    local c = signal:Connect(fn)
-    table.insert(S.connections, c)
-    return c
-end
-local function remote(name)
-    return NH and NH:FindFirstChild(name)
-end
-local function fire(name, ...)
-    local r = remote(name)
-    if not r or not r:IsA("RemoteEvent") then
-        log("Remote ausente: " .. name)
-        return false
+local function sendAbility()
+    local folder=RS:FindFirstChild("Remotes")
+    local event=folder and folder:FindFirstChild("CommE")
+    if event and event:IsA("RemoteEvent") then
+        return pcall(function() event:FireServer("ActivateAbility") end)
     end
-    local args = table.pack(...)
-    local ok, err = pcall(function() r:FireServer(table.unpack(args, 1, args.n)) end)
-    if not ok then log(name .. ": " .. tostring(err)) end
-    return ok
+    return false
+end
+local function cached(key, seconds, fn)
+    if S.cacheAt[key] and os.clock()-S.cacheAt[key]<seconds then return S.cache[key] end
+    local ok,result=pcall(fn)
+    if ok then S.cache[key]=result;S.cacheAt[key]=os.clock();return result end
+    if once("cacheErr:"..key,15) then log(key..": "..tostring(result)) end
+    return nil
+end
+local function inventory()
+    return cached("inventory",15,function()
+        local ok,result=invoke("getInventory")
+        return ok and type(result)=="table" and result or {}
+    end)
+end
+local function hasItem(name)
+    local low=name:lower()
+    local char=player.Character
+    local backpack=player:FindFirstChildOfClass("Backpack")
+    if (char and char:FindFirstChild(name)) or (backpack and backpack:FindFirstChild(name)) then return true end
+    for _,item in pairs(inventory() or {}) do
+        if type(item)=="table" and tostring(item.Name or ""):lower()==low
+            and (tonumber(item.Count) or 1)>0 then return true end
+    end
+    return false
+end
+local function raceV3()
+    if player.Character and player.Character:FindFirstChild("RaceTransformed") then return true end
+    return cached("v3",20,function()
+        local ok,result=invoke("Wenlocktoad","info")
+        return ok and result==-2
+    end)==true
+end
+local function leverOpen()
+    return cached("lever",8,function()
+        local ok,result=invoke("CheckTempleDoor")
+        return ok and result==true
+    end)==true
+end
+local function clockState(force)
+    if force then S.cacheAt.clock=nil end
+    return cached("clock",5,function()
+        local ok,result=invoke("TempleClock","Check")
+        return ok and type(result)=="table" and result or nil
+    end)
+end
+local function upgradeState(force)
+    if force then S.cacheAt.upgrade=nil end
+    return cached("upgrade",7,function()
+        local ok,a,b,c=invoke("UpgradeRace","Check")
+        return ok and {code=a,level=b,cost=c} or nil
+    end)
+end
+local function trialTimer()
+    local gui=player:FindFirstChildOfClass("PlayerGui")
+    local main=gui and gui:FindFirstChild("Main")
+    local timer=main and main:FindFirstChild("Timer")
+    return timer and timer.Visible==true or false
+end
+local function fullMoon()
+    local sky=Lighting:FindFirstChildOfClass("Sky")
+    local id=sky and tostring(sky.MoonTextureId or "") or ""
+    return id:find("9709149431",1,true)~=nil
+end
+local function night()
+    return Lighting.ClockTime>=18 or Lighting.ClockTime<=5
+end
+local function templeTeam()
+    local names={}
+    local count=0
+    for _,candidate in ipairs(Players:GetPlayers()) do
+        local rp=candidate.Character and candidate.Character:FindFirstChild("HumanoidRootPart")
+        local race=raceName(candidate)
+        if rp and (rp.Position-POS.temple).Magnitude<1350 and race~=""
+            and not names[race] then
+            count=count+1;names[race]=true
+        end
+    end
+    return count
 end
 
-local function hold(cframe, seconds)
-    local r = root()
-    if not r or not S.alive or not S.auto then return false end
-    local limit = os.clock() + math.max(0.04, seconds or 0.12)
-    repeat
-        if not S.alive or not S.auto or r ~= root() then return false end
-        r.CFrame = cframe
-        pcall(function() r.AssemblyLinearVelocity = Vector3.zero end)
-        RunService.Heartbeat:Wait()
-    until os.clock() >= limit
+-- Movimento unico, com controle de cancelamento e restauracao da colisao.
+local activeTween
+local function stopMove()
+    S.nonce=S.nonce+1
+    if activeTween then pcall(function() activeTween:Cancel() end);activeTween=nil end
+end
+local function go(position,label,reach)
+    local rp=root()
+    local hum=humanoid()
+    if not rp or not hum or hum.Health<=0 or not S.alive
+        or (not S.auto and not S.manual) then return false end
+    local distance=(rp.Position-position).Magnitude
+    if distance<=(reach or 10) then return true end
+    status("Movimento",label)
+    S.nonce=S.nonce+1
+    local nonce=S.nonce
+    hum.Sit=false
+    local target=position+Vector3.new(0,3,2)
+    local delta=target-rp.Position
+    local limited=delta.Magnitude>4200 and rp.Position+delta.Unit*4200 or target
+    local duration=math.clamp((limited-rp.Position).Magnitude/325,0.1,15)
+    local original={}
+    for _,obj in ipairs(player.Character:GetDescendants()) do
+        if obj:IsA("BasePart") then original[obj]=obj.CanCollide;obj.CanCollide=false end
+    end
+    local collision=RunService.Stepped:Connect(function()
+        for obj in pairs(original) do if obj.Parent then obj.CanCollide=false end end
+    end)
+    local tween=TweenService:Create(rp,TweenInfo.new(duration,Enum.EasingStyle.Linear),
+        {CFrame=CFrame.new(limited)})
+    activeTween=tween
+    tween:Play()
+    local deadline=os.clock()+duration+2
+    while S.alive and (S.auto or S.manual) and nonce==S.nonce and rp==root()
+        and os.clock()<deadline and tween.PlaybackState==Enum.PlaybackState.Playing do
+        pcall(function() rp.AssemblyLinearVelocity=Vector3.zero end)
+        task.wait(0.05)
+    end
+    local success=nonce==S.nonce and rp==root()
+    if tween.PlaybackState==Enum.PlaybackState.Playing then pcall(function() tween:Cancel() end) end
+    collision:Disconnect()
+    for obj,value in pairs(original) do if obj.Parent then pcall(function() obj.CanCollide=value end) end end
+    if activeTween==tween then activeTween=nil end
+    return success and root() and (root().Position-position).Magnitude<=(reach or 10)
+end
+local function touch(target)
+    local rp=root()
+    if not rp or not target or not target.Parent then return false end
+    if (rp.Position-target.Position).Magnitude>12 then return false end
+    if type(firetouchinterest)=="function" then
+        pcall(firetouchinterest,rp,target,0)
+        pcall(firetouchinterest,rp,target,1)
+    end
     return true
 end
-local function moveNear(pos, distance)
-    local r = root()
-    if not r then return false end
-    if (r.Position - pos).Magnitude <= (distance or 16) then return true end
-    local stand = pos + Vector3.new(0, 4, 3)
-    return hold(CFrame.lookAt(stand, Vector3.new(pos.X, stand.Y, pos.Z)), 0.28)
-end
-
-local path = "NeedleKaitun_AutoLoad.lua"
-do
-    local q = queue_on_teleport or (syn and syn.queue_on_teleport)
-    local source = global.__NeedleKaitunSource
-    local hasFile = type(readfile) == "function"
-        and (type(isfile) ~= "function" or isfile(path))
-    local possible = type(q) == "function" and (hasFile or type(source) == "string")
-    S.canContinue = possible
-    if possible then
-        local loadCode = hasFile
-            and "local ok,s=pcall(readfile,'NeedleKaitun_AutoLoad.lua'); if not ok then s=nil end"
-            or "local s=" .. string.format("%q", source)
-        local code = "if not game:IsLoaded() then game.Loaded:Wait() end "
-            .. "if game.GameId == 10756011174 then " .. loadCode
-            .. "; if s then local f=loadstring(s); if f then f() end end end"
-        local ok, err = pcall(q, code)
-        if not ok then S.canContinue = false; log("Fila de teleporte: " .. tostring(err)) end
-    else
-        log("Sem queue_on_teleport: reexecute o TXT depois do teleporte")
-    end
-end
-
-local hotbar
-pcall(function()
-    local scripts = player:WaitForChild("PlayerScripts", 10)
-    local module = scripts and scripts:WaitForChild("HotbarSlots", 10)
-    if module then hotbar = require(module) end
-end)
-local lastEquipError = 0
-local function equip(slot)
-    if not hotbar or type(hotbar.select) ~= "function" then
-        if os.clock() - lastEquipError >= 10 then
-            lastEquipError = os.clock()
-            log("HotbarSlots indisponivel: ferramenta nao equipada")
+local function promptNear(center,radius,nameFilter)
+    local rp=root()
+    if not rp or (rp.Position-center).Magnitude>(radius or 20) then return false end
+    local best,dist
+    local map=workspace:FindFirstChild("Map")
+    local temple=map and (map:FindFirstChild("Temple of Time") or map:FindFirstChild("TempleOfTime"))
+    if not temple then return false end
+    local parent=temple
+    for _,obj in ipairs(parent:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled then
+            local holder=part(obj.Parent)
+            if holder and (not nameFilter
+                or tostring(obj.Parent.Name):lower():find(nameFilter,1,true)) then
+                local d=(holder.Position-center).Magnitude
+                if d<35 and (not dist or d<dist) then best,dist=obj,d end
+            end
         end
-        return false
     end
-    if type(hotbar.getEquipped) == "function" then
-        local ok, current = pcall(hotbar.getEquipped)
-        if ok and current == slot then return true end
-    end
-    local ok = pcall(hotbar.select, slot)
-    if not ok then return false end
-    if type(hotbar.getEquipped) ~= "function" then return true end
-    for _ = 1, 3 do
-        local confirmed, current = pcall(hotbar.getEquipped)
-        if confirmed and current == slot then return true end
-        RunService.Heartbeat:Wait()
-    end
-    if os.clock() - lastEquipError >= 10 then
-        lastEquipError = os.clock()
-        log("Nao confirmou equipamento do slot " .. tostring(slot))
+    if best and type(fireproximityprompt)=="function" then
+        return pcall(fireproximityprompt,best)
     end
     return false
 end
 
-local function refreshHay(force)
-    if not NH then return end
-    if not force and #S.hay > 0 and os.clock() - S.lastCache < 8 then return end
-    local folder = workspace:FindFirstChild("HaystackClient")
-    S.hay = folder and folder:GetChildren() or {}
-    if S.cursor > #S.hay then S.cursor = 1 end
-    S.lastCache = os.clock()
-end
-local function objective()
-    refreshHay(false)
-    if S.objectiveCache and S.objectiveCache.Parent
-        and S.objectiveCache:GetAttribute("IsNeedleObjective") then
-        return S.objectiveCache
+local function enterTemple()
+    local rp=root()
+    if not rp then return false end
+    if (rp.Position-POS.temple).Magnitude<1600 then return true end
+    if once("entrance",7) then
+        local ok,response=invoke("requestEntrance",POS.temple)
+        log("Entrada no Templo: "..tostring(ok and response or "remoto indisponivel"))
     end
-    if os.clock() - S.lastObjectiveScan < (S.needleId and 2 or 6) then return nil end
-    S.lastObjectiveScan = os.clock()
-    for _, part in ipairs(S.hay) do
-        if part.Parent and part:GetAttribute("IsNeedleObjective") then
-            S.objectiveCache = part
-            return part
-        end
-    end
-    S.objectiveCache = nil
-    return nil
+    task.wait(0.3)
+    rp=root()
+    if rp and (rp.Position-POS.temple).Magnitude<1600 then return true end
+    return go(POS.temple,"Indo ao Templo do Tempo",50)
 end
-local function pieceById(id)
-    if not id then return nil end
-    refreshHay(false)
-    for _, part in ipairs(S.hay) do
-        if part.Parent and part:GetAttribute("HayId") == id then return part end
-    end
-    return nil
-end
-local function chooseHay(focus, radius)
-    refreshHay(false)
-    local r = root()
-    local n = #S.hay
-    if not r or n == 0 then return nil end
-    local chosen, score
-    local budget = math.min(n, focus and 1800 or 750)
-    for _ = 1, budget do
-        if S.cursor > n then S.cursor = 1 end
-        local part = S.hay[S.cursor]
-        S.cursor = S.cursor + 1
-        if part and part.Parent and part:IsA("BasePart") then
-            local id = part:GetAttribute("HayId")
-            local recent = id and S.recent[id]
-            local nearby = not focus or (part.Position - focus).Magnitude <= radius
-            if id and nearby and (not recent or os.clock() - recent >= 2.5) then
-                local d = (r.Position - part.Position).Magnitude
-                local value = d + (d > 17 and 40 or 0)
-                local mutation = tostring(part:GetAttribute("HayMutation") or "")
-                if mutation ~= "" and mutation ~= "Normal" then value = value - 12 end
-                if not score or value < score then chosen, score = part, value end
-            end
-        end
-    end
-    return chosen
-end
-local function grabNeighbors(piece)
-    local count = math.max(1, math.floor(num("HayGrabCount", 1)))
-    local radius = num("HayGrabRadius", 0)
-    if count <= 1 or radius <= 0 then return {} end
-    local folder = workspace:FindFirstChild("HaystackClient")
-    if not folder then return {} end
-    local params = OverlapParams.new()
-    params.FilterType = Enum.RaycastFilterType.Include
-    params.FilterDescendantsInstances = {folder}
-    params.MaxParts = math.min(60, count * 6)
-    local ok, found = pcall(function()
-        return workspace:GetPartBoundsInRadius(piece.Position, radius, params)
+local function progressQuest()
+    local stage=cached("progress",10,function()
+        local ok,result=invoke("RaceV4Progress","Check")
+        return ok and result or nil
     end)
-    if not ok then return {} end
-    local ids, used = {}, {[piece:GetAttribute("HayId")] = true}
-    for _, part in ipairs(found) do
-        local id = part:GetAttribute("HayId")
-        if id and not used[id] then
-            used[id] = true
-            ids[#ids + 1] = id
-            if #ids >= count - 1 then break end
+    if type(stage)~="number" then return false end
+    if stage==1 and once("begin",15) then
+        S.attempts.quest=S.attempts.quest+1
+        local ok,response=invoke("RaceV4Progress","Begin")
+        log("Sealed King: Begin="..tostring(ok and response))
+        S.cacheAt.progress=nil
+        return true
+    elseif stage==2 then
+        if enterTemple() and once("questTemple",15) then
+            S.attempts.quest=S.attempts.quest+1
+            local ok,response=invoke("RaceV4Progress","TeleportBack")
+            log("Visita ao Templo: "..tostring(ok and response))
+            S.cacheAt.progress=nil
         end
+        return true
+    elseif stage==3 and once("continue",15) then
+        S.attempts.quest=S.attempts.quest+1
+        local ok,response=invoke("RaceV4Progress","Continue")
+        log("Sealed King: Continue="..tostring(ok and response))
+        S.cacheAt.progress=nil
+        return true
     end
-    return ids
+    return stage==1 or stage==2 or stage==3
 end
 
-local handAt, forkAt, vacAt = 0, 0, 0
-local function pick(part)
-    if not part or not part.Parent then return false end
-    local id = part:GetAttribute("HayId")
-    if not id then return false end
-    if not moveNear(part.Position, math.max(7, (tonumber(Config.INTERACT_DISTANCE) or 20) - 3)) then return false end
-    S.recent[id] = os.clock()
-    local ok = fire("PickHay", id, grabNeighbors(part))
-    if ok then S.picks = S.picks + 1 end
-    handAt = os.clock() + math.max(0.16, num("HayPickCooldown", tonumber(Config.PICK_COOLDOWN) or 0.55)) + 0.04
+local function mirage()
+    local map=workspace:FindFirstChild("Map")
+    return map and (map:FindFirstChild("MysticIsland")
+        or map:FindFirstChild("Mirage Island") or map:FindFirstChild("MirageIsland"))
+end
+local function blueGear(island)
+    if not island then return nil end
+    for _,obj in ipairs(island:GetDescendants()) do
+        if obj:IsA("MeshPart") and
+            (tostring(obj.MeshId):find("10153114969",1,true)
+                or obj.Name:lower():find("bluegear",1,true)) then return obj end
+    end
+    return nil
+end
+local function highestPoint(island)
+    local selected,highest
+    for _,obj in ipairs(island:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.CanCollide and obj.Size.X>=4 then
+            local y=obj.Position.Y+obj.Size.Y/2
+            if not highest or y>highest then selected,highest=obj,y end
+        end
+    end
+    return selected and selected.Position+Vector3.new(0,selected.Size.Y/2+4,0)
+end
+
+local function releaseBoatKeys()
+    for key,down in pairs(S.boatKeys) do
+        if down then
+            pcall(function() VIM:SendKeyEvent(false,Enum.KeyCode[key],false,game) end)
+            S.boatKeys[key]=false
+        end
+    end
+end
+local function boatKey(key,down)
+    if S.boatKeys[key]==down then return true end
+    local ok=pcall(function() VIM:SendKeyEvent(down,Enum.KeyCode[key],false,game) end)
+    if ok then S.boatKeys[key]=down end
     return ok
 end
-local function fork(part)
-    if not settings.useFork or not attr("PitchforkOwned", false)
-        or os.clock() < forkAt or not part or not part.Parent then return false end
-    local r = root()
-    if not r or (r.Position-part.Position).Magnitude > (tonumber(Config.INTERACT_DISTANCE) or 20)-2 then return false end
-    if not equip(tonumber(Config.PITCHFORK_SLOT_INDEX) or 3) then return false end
-    local id = part:GetAttribute("HayId")
-    if id and fire("PitchforkDig", id) then
-        S.recent[id] = os.clock()
-        forkAt = os.clock() + num("PitchforkCooldown", tonumber(Config.PITCHFORK_COOLDOWN) or 0.85) + 0.05
-        S.forks = S.forks + 1
-        return true
-    end
-    return false
-end
-local function vacuum(part)
-    if not settings.useVacuum or not attr("VacuumOwned", false)
-        or attr("VacuumState", "Ready") == "Overheated"
-        or attr("VacuumOverheated", false) or os.clock() < vacAt
-        or not part or not part.Parent then return false end
-    local r = root()
-    if not r or (r.Position - part.Position).Magnitude > (tonumber(Config.VACUUM_RANGE) or 11) - 1 then
-        return false
-    end
-    if not equip(tonumber(Config.VACUUM_SLOT_INDEX) or 5) then return false end
-    if not fire("VacuumAction", "Start") then return false end
-    RunService.Heartbeat:Wait()
-    local ids, seen = {}, {}
-    local folder = workspace:FindFirstChild("HaystackClient")
-    if folder then
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Include
-        params.FilterDescendantsInstances = {folder}
-        params.MaxParts = 36
-        local ok, parts = pcall(function()
-            return workspace:GetPartBoundsInRadius(part.Position, 3.5, params)
-        end)
-        if ok then
-            for _, hay in ipairs(parts) do
-                local id = hay:GetAttribute("HayId")
-                if id and not seen[id] then
-                    ids[#ids + 1], seen[id] = id, true
-                    S.recent[id] = os.clock()
-                    if #ids >= (tonumber(Config.VACUUM_GRAB_COUNT) or 5) then break end
-                end
-            end
+local function ownedBoat()
+    local boats=workspace:FindFirstChild("Boats")
+    if not boats then return nil,nil end
+    local rp=root()
+    local best,seat,distance
+    for _,boat in ipairs(boats:GetChildren()) do
+        local owner=boat:FindFirstChild("Owner")
+        local value=owner and owner.Value
+        local mine=value==player or tostring(value)==player.Name
+            or tonumber(value)==player.UserId
+        local candidate=boat:FindFirstChildWhichIsA("VehicleSeat",true)
+        if mine and candidate then
+            local d=rp and (candidate.Position-rp.Position).Magnitude or math.huge
+            if not distance or d<distance then best,seat,distance=boat,candidate,d end
         end
     end
-    local used = #ids > 0 and fire("VacuumAction", "Tick", part.Position, r.Position, ids)
-    fire("VacuumAction", "Stop")
-    vacAt = os.clock() + math.max(0.12, tonumber(Config.VACUUM_TICK) or 0.16)
-    if used then S.vacuums = S.vacuums + 1 end
-    return used
+    return best,seat
 end
-
-local function sellPart()
-    local model = workspace:FindFirstChild("SellModel")
-    local part = model and model:FindFirstChild("SellPart")
-    if part and part:IsA("BasePart") then return part end
-    for _, tagged in ipairs(CollectionService:GetTagged(Config.SELL_PART_NAME or "SellPart")) do
-        if tagged:IsA("BasePart") and tagged:IsDescendantOf(workspace) then return tagged end
+local function seaDanger()
+    local gui=player:FindFirstChildOfClass("PlayerGui")
+    local main=gui and gui:FindFirstChild("Main")
+    local compass=main and (main:FindFirstChild("SeaDanger",true)
+        or main:FindFirstChild("Compass",true))
+    if compass then
+        for _,label in ipairs(compass:GetDescendants()) do
+            if label:IsA("TextLabel") then
+                local text=label.Text:lower()
+                if text:find("level 6",1,true) or text:find("danger 6",1,true)
+                    or text:find("????",1,true) then return 6 end
+            end
+        end
     end
     return nil
 end
-local function sell()
-    local before = num("HayHeld", 0)
-    if before <= 0 then return true end
-    local part = sellPart()
-    if not part then phase("venda", "SellPart nao carregado"); return false end
-    phase("venda")
-    for _ = 1, 3 do
-        if not hold(CFrame.new(part.Position + Vector3.new(0, 3, 0)), 0.4) then return false end
-        fire("SellHay")
-        local deadline = os.clock() + 1.3
-        while S.alive and S.auto and num("HayHeld", 0) >= before and os.clock() < deadline do
-            hold(CFrame.new(part.Position + Vector3.new(0, 3, 0)), 0.12)
+local function seekMirage(targetFn,label)
+    targetFn=targetFn or mirage
+    label=label or "Mirage"
+    if targetFn() then releaseBoatKeys();return true end
+    local boat,seat=ownedBoat()
+    if not boat then
+        releaseBoatKeys()
+        if go(POS.tiki,"Indo ao vendedor de barco em Tiki",20)
+            and once("boatBuy",15) then
+            local ok,response=invoke("BuyBoat","Guardian")
+            log("Barco Guardian: "..tostring(ok and response))
         end
-        if num("HayHeld", 0) < before then
-            S.sells = S.sells + 1
-            log("venda confirmada: " .. before .. " -> " .. num("HayHeld", 0))
-            return true
-        end
+        status(label,"Aguardando barco próprio")
+        return false
     end
-    log("venda nao confirmada; mochila=" .. num("HayHeld", 0))
-    return false
-end
-
-local toolOrder = {
-    {name="Pitchfork", attr="PitchforkOwned", cost=8},
-    {name="Vacuum", attr="VacuumOwned", cost=69.99},
-}
-local baseTracks = {"Speed", "Grab", "Capacity", "Value"}
-local toolTracks = {
-    PitchforkOwned={"Pitchfork", "PitchforkCooldown", "PitchforkHold"},
-    VacuumOwned={"VacuumPower", "VacuumCooling", "VacuumRuntime"},
-    DroneOwned={"DroneSpeed", "DroneGrab", "DroneCapacity"},
-}
-local function costOf(track)
-    local config = type(Config.UPGRADE_TRACKS) == "table" and Config.UPGRADE_TRACKS[track]
-    local levels = config and config.Levels
-    local nextLevel = levels and levels[num("HayUpgrade" .. track, 1) + 1]
-    return nextLevel and (tonumber(nextLevel.Cost) or math.huge)
-        * (tonumber(Config.UPGRADE_COST_MULTIPLIER) or 1) or nil
-end
-local function shop()
-    if not NH or os.clock() - S.lastBuy < 6 then return end
-    S.lastBuy = os.clock()
-    local pending
-    if settings.buyTools then
-        for _, tool in ipairs(toolOrder) do
-            if not attr(tool.attr, false) then pending = tool; break end
+    local hum=humanoid()
+    if not hum then return false end
+    if seat.Occupant~=hum then
+        releaseBoatKeys()
+        if seat.Occupant then status(label,"Barco ocupado por outro jogador");return false end
+        if go(seat.Position+Vector3.new(0,2,0),"Entrando no barco",9) then
+            pcall(function() seat:Sit(hum) end)
         end
-        if pending and cash() >= pending.cost then
-            local before = attr(pending.attr, false)
-            fire("BuyShopItem", pending.name)
-            task.wait(0.4)
-            if not before and attr(pending.attr, false) then
-                log("comprou " .. pending.name)
-                pending = nil
-                for _, tool in ipairs(toolOrder) do
-                    if not attr(tool.attr, false) then pending = tool; break end
-                end
-            end
-        end
-        if not attr("DroneOwned", false) and num("Gems", 0) >= 40 then
-            fire("BuyShopItem", "Drone")
-        end
-        if attr("DroneOwned", false) and not attr("DroneDeployed", false) then
-            fire("DeployDrone")
-        end
+        return false
     end
-    if not settings.buyUpgrades or not remote("BuyUpgrade") then return end
-    local tracks = {}
-    for _, name in ipairs(baseTracks) do tracks[#tracks + 1] = name end
-    for flag, names in pairs(toolTracks) do
-        if attr(flag, false) then
-            for _, name in ipairs(names) do tracks[#tracks + 1] = name end
-        end
+    local x=seat.Position.X
+    if x< -60000 then S.sailDirection=1 end
+    if x> -29000 then S.sailDirection=-1 end
+    local desired=Vector3.new(S.sailDirection,0,0)
+    local heading=seat.CFrame.LookVector
+    local flat=Vector3.new(heading.X,0,heading.Z)
+    if flat.Magnitude<0.1 then releaseBoatKeys();return false end
+    flat=flat.Unit
+    local angle=flat:Cross(desired).Y
+    local alignment=flat:Dot(desired)
+    if alignment< -0.95 then angle=-1 end
+    if not boatKey("A",angle>0.08) or not boatKey("D",angle< -0.08)
+        or not boatKey("W",true) then
+        releaseBoatKeys();status(label,"Executor sem entrada de barco")
+        return false
     end
-    local blocked = {}
-    for _ = 1, 12 do
-        if not S.alive or not S.auto then return end
-        local selected, price
-        for _, name in ipairs(tracks) do
-            local cost = not blocked[name] and costOf(name)
-            local reserve = pending and name ~= "Speed" and name ~= "Grab"
-                and name ~= "Capacity" and pending.cost or 0
-            if cost and cost + reserve <= cash()
-                and (not price or cost < price) then selected, price = name, cost end
-        end
-        if not selected then return end
-        local key = "HayUpgrade" .. selected
-        local level = num(key, 1)
-        fire("BuyUpgrade", selected)
-        local deadline = os.clock() + 1
-        while S.alive and num(key, 1) <= level and os.clock() < deadline do task.wait(0.06) end
-        if num(key, 1) > level then
-            S.upgrades = S.upgrades + 1
-            log("melhoria " .. selected .. " " .. num(key, 1))
+    if not S.sailLastPos or os.clock()-S.sailLastAt>12 then
+        if S.sailLastPos and (seat.Position-S.sailLastPos).Magnitude<30 then
+            S.sailStalls=S.sailStalls+1
+            S.sailDirection=-S.sailDirection
+            releaseBoatKeys()
+            log("Barco parado; invertendo rota ("..S.sailStalls..")")
         else
-            blocked[selected] = true
+            S.sailStalls=0
         end
+        S.sailLastPos,S.sailLastAt=seat.Position,os.clock()
     end
-end
-
-local function collectGem()
-    if not settings.collectGems or not remote("CollectGem") then return false end
-    local folder = workspace:FindFirstChild("GemsClient")
-    if not folder then return false end
-    for _, gem in ipairs(folder:GetChildren()) do
-        local part = gem:IsA("BasePart") and gem or gem:FindFirstChildWhichIsA("BasePart", true)
-        local id = part and (part:GetAttribute("GemId") or gem:GetAttribute("GemId"))
-        if id and not S.recent["g" .. tostring(id)] then
-            S.recent["g" .. tostring(id)] = os.clock()
-            if hold(CFrame.new(part.Position + Vector3.new(0, 3, 0)), 0.15)
-                and fire("CollectGem", id) then S.gems = S.gems + 1 end
-            return true
-        end
-    end
+    status("Procurando "..label,(seaDanger()==6 and "Danger 6" or "Rumo ao Danger 6")
+        .." | X="..math.floor(x))
     return false
 end
-
-local function claimNeedle()
-    local obj = objective()
-    if obj then
-        phase("coletando agulha")
-        if os.clock() - S.lastNeedlePick < 1 then return true end
-        S.lastNeedlePick = os.clock()
-        if hold(CFrame.new(obj.Position + Vector3.new(0, 4, 2)), 0.2) then
-            if fire("PickHay", "Objective") then S.needleAttempts = S.needleAttempts + 1 end
-            local deadline = os.clock() + 1
-            while S.alive and S.auto and not attr("NeedleOwned", false)
-                and os.clock() < deadline do task.wait(0.08) end
-            if attr("NeedleOwned", false) then
-                log("agulha coletada; indo entregar ao Farmer")
-            elseif S.needleAttempts > 0 and S.needleAttempts % 5 == 0 then
-                log("coleta da agulha sem confirmacao; tentativas=" .. S.needleAttempts)
-            end
-        end
-        return true
-    end
-    local anchor = S.needleAnchor
-    if (not anchor or not anchor.Parent) and os.clock() - S.lastNeedleLookup >= 8 then
-        S.lastNeedleLookup = os.clock()
-        anchor = pieceById(S.needleId)
-        S.needleAnchor = anchor
-    end
-    if anchor then S.needlePos = anchor.Position end
-    if not S.needlePos then return false end
-    phase("escavando em torno da agulha")
-    local part = chooseHay(S.needlePos, tonumber(Config.NEEDLE_DIG_RADIUS) or 5.5)
-    if part then return pick(part) end
-    return false
-end
-local function handIn()
-    if os.clock() - S.lastHandIn < 2 then return end
-    S.lastHandIn = os.clock()
-    local npc = workspace:FindFirstChild("NPC")
-    local farmer = npc and npc:FindFirstChild("Farmer_NPC")
-    if not farmer then phase("entrega", "Farmer_NPC nao carregado"); return end
-    phase("entregando agulha")
-    if not equip(tonumber(Config.NEEDLE_SLOT_INDEX) or 4) then
-        log("nao conseguiu equipar a agulha para entrega")
+local function mirageStep()
+    local island=mirage()
+    if not island then
+        S.attempts.mirage=S.attempts.mirage+1
+        seekMirage()
         return
     end
-    local pos = farmer:GetPivot().Position
-    if hold(CFrame.lookAt(pos + farmer:GetPivot().LookVector * 5 + Vector3.new(0, 2, 0), pos), 0.35) then
-        if fire("NeedleHandIn") then S.deliveryAttempts = S.deliveryAttempts + 1 end
-        local deadline = os.clock() + 1.2
-        while S.alive and S.auto and attr("NeedleOwned", false)
-            and os.clock() < deadline do task.wait(0.08) end
-        if not attr("NeedleOwned", false) then
-            S.deliveredAt = os.clock()
-            log("agulha entregue; aguardando fim da rodada")
-        elseif S.deliveryAttempts > 0 and S.deliveryAttempts % 3 == 0 then
-            log("entrega sem confirmacao; tentativas=" .. S.deliveryAttempts)
-        end
-    end
-end
-local function afterWin()
-    phase("rodada concluida")
-    if not S.roundHandled then
-        S.roundHandled = true
-        S.completedAt = os.clock()
-        S.wins = S.wins + 1
-        log("vitoria confirmada")
-    end
-    if os.clock() - S.completedAt < 4 then return end
-    if os.clock() - S.lastRoundAction < 10 then return end
-    S.lastRoundAction = os.clock()
-    S.roundReturnAttempts = S.roundReturnAttempts + 1
-    -- O lobby permite comprar melhorias permanentes antes da proxima rodada.
-    if S.roundReturnAttempts <= 3 and remote("ReturnToLobby") then
-        if fire("ReturnToLobby") then
-            log("volta ao lobby solicitada; tentativa " .. S.roundReturnAttempts)
-        end
-    elseif remote("ReplayVote") then
-        if fire("ReplayVote", true) then
-            log("revanche solicitada porque o lobby nao abriu")
-        end
-    else
-        log("sem remoto de retorno ou revanche")
-    end
-end
-
-local function mapStep()
-    if not NH then phase("aguardando", "NeedleHaystack nao carregado"); return 2 end
-    if S.roundEvent or attr("NeedleRoundComplete", false) then afterWin(); return 1 end
-    if attr("NeedleInputLocked", false) then phase("cutscene"); return 0.6 end
-    if attr("NeedleOwned", false) then handIn(); return 0.5 end
-    if S.deliveredAt then
-        phase("aguardando resultado da entrega")
-        if os.clock() - S.deliveredAt < 25 then return 0.8 end
-        log("entrega confirmada, mas rodada nao finalizou; retomando coleta")
-        S.deliveredAt = nil
-    end
-    local held = num("HayHeld", 0)
-    local capacity = attr("InfiniteBagOwned", false) and 200 or num("HayCapacity", 25)
-    if held >= math.max(1, math.floor(capacity * settings.sellPercent / 100)) then
-        if sell() then shop() end
-        return 0.4
-    end
-    if S.needleId or objective() then
-        if claimNeedle() then return 0.55 end
-    end
-    if collectGem() then return 0.1 end
-    shop()
-    local vacReady = settings.useVacuum and attr("VacuumOwned",false)
-        and not attr("VacuumOverheated",false)
-        and attr("VacuumState","Ready") ~= "Overheated"
-    local part = (vacReady and S.vacuumFocus and chooseHay(S.vacuumFocus, 7)) or chooseHay()
-    if not part then phase("aguardando feno", "HaystackClient sem objetos carregados"); return 1 end
-    phase(vacReady and "aspirando feno" or
-        (attr("PitchforkOwned", false) and "colhendo com garfo" or "coletando feno"))
-    local reach = vacReady and math.max(5, (tonumber(Config.VACUUM_RANGE) or 11)-3)
-        or math.max(7, (tonumber(Config.INTERACT_DISTANCE) or 20)-3)
-    if not moveNear(part.Position, reach) then return 0.4 end
-    local usedTool = false
-    if vacReady then
-        S.vacuumFocus = part.Position
-        if os.clock() >= vacAt then
-            usedTool = vacuum(part)
-            if not usedTool then usedTool = fork(part) end
-        end
-    else
-        S.vacuumFocus = nil
-        if os.clock() >= forkAt then usedTool = fork(part) end
-    end
-    if os.clock() >= handAt then
-        local handTarget = usedTool and chooseHay(part.Position, 5) or part
-        if handTarget then pick(handTarget) end
-    end
-    if vacReady then return math.clamp(vacAt - os.clock(), 0.07, 0.25) end
-    local nextAt = handAt
-    if settings.useFork and attr("PitchforkOwned", false) then
-        nextAt = math.min(nextAt, forkAt)
-    end
-    return math.clamp(nextAt - os.clock(), 0.12, 0.7)
-end
-
-local function lobbyRemote(service, class)
-    local packages = RS:FindFirstChild("Packages")
-    local networker = packages and packages:FindFirstChild("Networker")
-    local services = networker and networker:FindFirstChild("_remotes")
-    local folder = services and services:FindFirstChild(service)
-    local value = folder and folder:FindFirstChild(class)
-    return value
-end
-local function gemUpgrades()
-    if not settings.buyGemUpgrades or os.clock() - S.lastGemBuy < 12 then return end
-    S.lastGemBuy = os.clock()
-    local shopRemote = lobbyRemote("ShopUI", "RemoteFunction")
-    local shared = RS:FindFirstChild("Shared")
-    local configs = shared and shared:FindFirstChild("Configs")
-    local module = configs and configs:FindFirstChild("UpgradeConfig")
-    if not shopRemote or not module then log("loja de Gems indisponivel"); return end
-    local ok, data = pcall(require, module)
-    if not ok or type(data) ~= "table" or type(data.Upgrades) ~= "table" then return end
-    for _ = 1, 20 do
-        if not S.alive or not S.auto then return end
-        local best, cost, key
-        for _, upgrade in ipairs(data.Upgrades) do
-            local attribute = "Upgrade" .. tostring(upgrade.DataKey or upgrade.Id)
-            local level = num(attribute, 0)
-            local price = upgrade.Prices and tonumber(upgrade.Prices[level + 1])
-            if price and price <= num("Gems", 0)
-                and (not cost or price < cost) then
-                best, cost, key = upgrade, price, attribute
+    releaseBoatKeys()
+    local gear=blueGear(island)
+    if gear and gear.Transparency<0.95 then
+        if go(gear.Position,"Pegando Blue Gear",8) then
+            touch(gear)
+            if once("gearTouch",6) then
+                S.gearTouched=true
+                log("Blue Gear tocada; verificando Templo")
             end
         end
-        if not best then return end
-        local before = num(key, 0)
-        local invoked, response = pcall(function()
-            return shopRemote:InvokeServer("BuyUpgrade", best.Id)
+        return
+    end
+    if not night() then status("Mirage","Esperando a noite na ilha");return end
+    local peak=highestPoint(island)
+    if not peak then status("Mirage","Pico da ilha ainda não carregado");return end
+    if not go(peak,"Subindo Mirage para olhar a lua",10) then return end
+    local rp=root()
+    local direction=Lighting:GetMoonDirection()
+    if rp and direction.Magnitude>0 then
+        local camera=workspace.CurrentCamera
+        if camera then camera.CFrame=CFrame.lookAt(camera.CFrame.Position,
+            camera.CFrame.Position+direction) end
+        rp.CFrame=CFrame.lookAt(rp.Position,rp.Position+direction)
+    end
+    if once("mirageV3",8) then
+        sendAbility()
+        status("Mirage","V3 ativada olhando para a lua; esperando Blue Gear")
+    end
+end
+local function leverStep()
+    if not enterTemple() then return end
+    if not go(POS.lever,"Indo à alavanca do Templo",9) then return end
+    if once("leverPrompt",8) then
+        S.attempts.lever=S.attempts.lever+1
+        local activated=promptNear(POS.lever,18)
+        log(activated and "Alavanca acionada; confirmando CheckTempleDoor"
+            or "Perto da alavanca; prompt não encontrado")
+        S.cacheAt.lever=nil
+    end
+end
+
+local function equipCombat()
+    local character=player.Character
+    local hum=humanoid()
+    if not character or not hum then return nil end
+    local current=character:FindFirstChildOfClass("Tool")
+    if current then return current end
+    local bag=player:FindFirstChildOfClass("Backpack")
+    if not bag then return nil end
+    local selected
+    for _,tool in ipairs(bag:GetChildren()) do
+        if tool:IsA("Tool") and (tool.ToolTip=="Melee" or tool.ToolTip=="Sword") then
+            selected=tool;break
+        end
+    end
+    selected=selected or bag:FindFirstChildOfClass("Tool")
+    if not selected then return nil end
+    pcall(function() hum:EquipTool(selected) end)
+    return character:FindFirstChildOfClass("Tool")
+end
+local skillKeys={Enum.KeyCode.Z,Enum.KeyCode.X,Enum.KeyCode.C,Enum.KeyCode.V}
+local function attack(target)
+    local rp=root()
+    local hitPart=part(target)
+    if not rp or not hitPart then return false end
+    if not go(hitPart.Position,target.Name,35) then return false end
+    local tool=equipCombat()
+    if not tool then status("Combate","Equipe uma arma de combate");return false end
+    if os.clock()-S.attackAt<0.38 then return true end
+    S.attackAt=os.clock()
+    rp=root()
+    if not rp then return false end
+    pcall(function() rp.CFrame=CFrame.lookAt(rp.Position,hitPart.Position) end)
+    pcall(function() tool:Activate() end)
+    local modules=RS:FindFirstChild("Modules")
+    local net=modules and modules:FindFirstChild("Net")
+    local reg=net and net:FindFirstChild("RE/RegisterAttack")
+    local hit=net and net:FindFirstChild("RE/RegisterHit")
+    if reg and hit and reg:IsA("RemoteEvent") and hit:IsA("RemoteEvent") then
+        pcall(function()
+            reg:FireServer(0.1)
+            hit:FireServer(target:FindFirstChild("Head") or hitPart,{})
         end)
-        local deadline = os.clock() + 1
-        while S.alive and num(key, 0) <= before and os.clock() < deadline do task.wait(0.06) end
-        if num(key, 0) > before then
-            S.upgrades = S.upgrades + 1
-            log("melhoria permanente " .. tostring(best.Name or best.Id))
-        else
-            log("compra de Gems recusada: " .. tostring(invoked and response or "erro"))
-            return
+    end
+    if os.clock()-S.skillAt>=2.5 then
+        S.skillAt=os.clock()
+        local key=skillKeys[(math.floor(S.skillAt/2.5)%#skillKeys)+1]
+        pcall(function()
+            VIM:SendKeyEvent(true,key,false,game)
+            task.wait(0.12)
+            VIM:SendKeyEvent(false,key,false,game)
+        end)
+    end
+    return true
+end
+local function closestEnemy(filter,limit)
+    local folder=workspace:FindFirstChild("Enemies")
+    local rp=root()
+    if not folder or not rp then return nil end
+    local selected,distance
+    for _,model in ipairs(folder:GetChildren()) do
+        local hp=model:FindFirstChildOfClass("Humanoid")
+        local location=part(model)
+        local d=location and (location.Position-rp.Position).Magnitude
+        if hp and hp.Health>0 and d and d<(limit or 1100)
+            and (not filter or filter(model)) and (not distance or d<distance) then
+            selected,distance=model,d
         end
     end
+    return selected
 end
-
-local function startRun()
-    local event = lobbyRemote("PartyService", "RemoteEvent")
-    local r = root()
-    if not event or not r then phase("lobby", "PartyService/personagem indisponivel"); return end
-    local pad, distance
-    for _, model in ipairs(workspace:GetChildren()) do
-        if model.Name == "Teleporter" and model:GetAttribute("PartyStatus") == "Idle" then
-            local ok, pivot = pcall(function() return model:GetPivot().Position end)
-            if ok then
-                local d = (pivot-r.Position).Magnitude
-                if not distance or d < distance then pad, distance = model, d end
+local function trialEndpoint(kind)
+    local map=workspace:FindFirstChild("Map")
+    local parent=map and (map:FindFirstChild(kind=="Angel" and "SkyTrial" or "MinkTrial")
+        or map:FindFirstChild(kind=="Angel" and "AngelTrial" or "RabbitTrial"))
+    if not parent then return nil end
+    if S.objective and S.objective.Parent and os.clock()-S.objectiveAt<3 then
+        return S.objective
+    end
+    S.objectiveAt=os.clock()
+    local selected,distance
+    local rp=root()
+    for _,obj in ipairs(parent:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local low=obj.Name:lower()
+            if low:find("endpoint",1,true) or low:find("finish",1,true)
+                or low:find("goal",1,true) or low:find("touchpoint",1,true)
+                or (kind=="Angel" and low:find("snowisland_cylinder.081",1,true)) then
+                local d=rp and (obj.Position-rp.Position).Magnitude or math.huge
+                if d<1800 and (not distance or d<distance) then selected,distance=obj,d end
             end
         end
     end
-    if not pad then phase("lobby", "aguardando teleporter livre"); return end
-    local pos = pad:GetPivot().Position
-    phase("lobby", "entrando no teleporter")
-    local deadline = os.clock() + 9
-    while S.alive and S.auto and os.clock() < deadline
-        and pad:GetAttribute("PartyStatus") ~= "Setup" do
-        hold(CFrame.new(pos + Vector3.new(0, 3, 0)), 0.12)
+    S.objective=selected
+    return selected
+end
+local function trialStep(name)
+    if not S.trialSeen then
+        S.trialSeen=true;S.trialStarted=os.clock();S.trialRace=name
+        S.attempts.trial=S.attempts.trial+1
+        log("Timer da trial "..name.." visível; executando objetivo")
     end
-    if pad:GetAttribute("PartyStatus") ~= "Setup" then log("teleporter nao abriu Setup"); return end
-    task.wait(0.7)
-    local selected = settings.map
-    if (selected == "BASEMENT" and wins() < 1)
-        or (selected == "RANCH" and wins() < 2) then selected = "FARMHOUSE" end
-    local difficulty = settings.difficulty
-    local minHardWins = ({FARMHOUSE=1, BASEMENT=2, RANCH=3, GRAVEYARD=1})[selected] or 1
-    if difficulty == "HARD" and wins() < minHardWins then difficulty = "NORMAL" end
-    local ok, err = pcall(function()
-        event:FireServer("CreateParty", selected, 1, difficulty)
-    end)
-    if not ok then log("CreateParty: " .. tostring(err)); return end
-    S.rounds = S.rounds + 1
-    phase("lobby", "partida " .. selected .. " solicitada")
-    local untilTime = os.clock() + 20
-    while S.alive and S.auto and os.clock() < untilTime do
-        if pad.Parent == nil then break end
-        hold(CFrame.new(pos + Vector3.new(0, 3, 0)), 0.2)
+    if os.clock()-S.trialStarted>480 then
+        status("Trial","Tempo excessivo; aguardando resultado do jogo")
+        return
+    end
+    if name=="Human" or name=="Ghoul" then
+        local enemy=closestEnemy(nil,1000)
+        if enemy then
+            status("Trial "..name,"Atacando "..enemy.Name)
+            attack(enemy)
+        else status("Trial "..name,"Aguardando onda de inimigos") end
+    elseif name=="Shark" then
+        local selected
+        local beasts=workspace:FindFirstChild("SeaBeasts")
+        if beasts then
+            for _,model in ipairs(beasts:GetChildren()) do
+                if part(model) then selected=model;break end
+            end
+        end
+        selected=selected or closestEnemy(function(m)
+            local low=m.Name:lower()
+            return low:find("shark",1,true) or low:find("piranha",1,true)
+        end,1800)
+        if selected then status("Trial Shark","Atacando "..selected.Name);attack(selected)
+        else status("Trial Shark","Aguardando Sea Beast") end
+    elseif name=="Angel" or name=="Rabbit" then
+        local target=trialEndpoint(name)
+        if target then
+            if go(target.Position,"Trial "..name..": fim do percurso",8) then
+                touch(target)
+                status("Trial "..name,"Chegou ao fim; aguardando servidor")
+            end
+        else status("Trial "..name,"Percurso ou final ainda não carregou") end
+    elseif name=="Cyborg" then
+        if go(POS.cyborgSafe,"Trial Cyborg: área segura",12) then
+            status("Trial Cyborg","Aguardando bombas e cronômetro")
+        end
     end
 end
-local function lobbyStep()
-    gemUpgrades()
-    startRun()
-    return 2
-end
-
-if NH then
-    local changed = remote("NeedleTargetChanged")
-    if changed and changed:IsA("RemoteEvent") then
-        connect(changed.OnClientEvent, function(...)
-            for _, value in ipairs({...}) do
-                if type(value) == "number" and value % 1 == 0 then
-                    S.needleId = value
-                    local anchor = pieceById(value)
-                    S.needleAnchor = anchor
-                    S.lastNeedleLookup = os.clock()
-                    S.needlePos = anchor and anchor.Position or nil
-                    log("alvo da agulha revelado: " .. value)
-                    break
+local function pvpStep()
+    if os.clock()-S.trialEndedAt>100 then
+        status("Pós-trial","Sem ponto confirmado; aguardando próxima trial")
+        S.trialEndedAt=0
+        return
+    end
+    if not go(POS.arena,"Indo à arena pós-trial",90) then return end
+    local rp=root()
+    if not rp then return end
+    local selected,distance
+    for _,candidate in ipairs(Players:GetPlayers()) do
+        if candidate~=player and candidate.Character then
+            local hp=candidate.Character:FindFirstChildOfClass("Humanoid")
+            local target=part(candidate.Character)
+            local d=target and (target.Position-POS.arena).Magnitude
+            if hp and hp.Health>0 and d and d<330 then
+                local from=(target.Position-rp.Position).Magnitude
+                if not distance or from<distance then
+                    selected,distance=candidate.Character,from
                 end
             end
-        end)
-    end
-    local completed = remote("NeedleRoundCompleted")
-    if completed and completed:IsA("RemoteEvent") then
-        connect(completed.OnClientEvent, function()
-            S.roundEvent = true
-            log("fim da rodada recebido do servidor")
-        end)
-    end
-end
-
-connect(player.Idled, function()
-    if not S.alive or not settings.antiAfk then return end
-    pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
-end)
-
-local guiParent = CoreGui
-pcall(function() if type(gethui) == "function" then guiParent = gethui() end end)
-local function create(class, props, parent)
-    local obj = Instance.new(class)
-    for key, value in pairs(props) do obj[key] = value end
-    obj.Parent = parent
-    return obj
-end
-local gui = create("ScreenGui", {Name="NeedleKaitun_1", ResetOnSpawn=false}, guiParent)
-local panel = create("Frame", {Size=UDim2.fromOffset(370, 358),
-    Position=UDim2.new(0.5,-185,0.5,-179), BackgroundColor3=Color3.fromRGB(24,22,33),
-    Active=true, BorderSizePixel=0}, gui)
-create("UICorner", {CornerRadius=UDim.new(0,12)}, panel)
-create("UIStroke", {Color=Color3.fromRGB(152,111,222), Thickness=1.2}, panel)
-local title = create("TextLabel", {Text="NEEDLE KAITUN  1.2", Size=UDim2.new(1,-60,0,35),
-    Position=UDim2.fromOffset(12,4), BackgroundTransparency=1,
-    TextColor3=Color3.fromRGB(236,220,255), TextSize=17,
-    TextXAlignment=Enum.TextXAlignment.Left, Font=Enum.Font.GothamBold}, panel)
-local phaseText = create("TextLabel", {Text="Iniciando", Size=UDim2.new(1,-24,0,29),
-    Position=UDim2.fromOffset(12,48), BackgroundTransparency=1,
-    TextColor3=Color3.fromRGB(250,220,113), TextSize=14,
-    TextXAlignment=Enum.TextXAlignment.Left, Font=Enum.Font.GothamBold}, panel)
-local info = create("TextLabel", {Text="", Size=UDim2.new(1,-24,0,114),
-    Position=UDim2.fromOffset(12,80), BackgroundTransparency=1,
-    TextColor3=Color3.fromRGB(220,214,230), TextSize=12,
-    TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top,
-    TextWrapped=true, Font=Enum.Font.Code}, panel)
-local function button(label, x, y, w, callback)
-    local b = create("TextButton", {Text=label, Size=UDim2.fromOffset(w,36),
-        Position=UDim2.fromOffset(x,y), BackgroundColor3=Color3.fromRGB(78,55,116),
-        TextColor3=Color3.new(1,1,1), TextSize=12,
-        Font=Enum.Font.GothamBold, BorderSizePixel=0}, panel)
-    create("UICorner", {CornerRadius=UDim.new(0,7)}, b)
-    connect(b.MouseButton1Click, callback)
-    return b
-end
-local toggle
-local maps = {"FARMHOUSE", "BASEMENT", "RANCH", "GRAVEYARD"}
-local mapButton, diffButton
-mapButton = button("Mapa: " .. settings.map, 12,198,169,function()
-    local index = table.find(maps, settings.map) or 1
-    settings.map = maps[index % #maps + 1]
-    mapButton.Text = "Mapa: " .. settings.map
-    saveSettings()
-end)
-diffButton = button("Dificuldade: " .. settings.difficulty, 190,198,169,function()
-    settings.difficulty = settings.difficulty == "NORMAL" and "HARD" or "NORMAL"
-    diffButton.Text = "Dificuldade: " .. settings.difficulty
-    saveSettings()
-end)
-toggle = button("Pausar kaitun", 12,244,169,function()
-    S.auto = not S.auto
-    toggle.Text = S.auto and "Pausar kaitun" or "Continuar kaitun"
-    log(S.auto and "kaitun retomado" or "kaitun pausado")
-end)
-button("Copiar relatorio", 190,244,169,function()
-    local lines = {
-        "Needle Kaitun 1.2 | PlaceId=" .. game.PlaceId .. " | GameId=" .. game.GameId,
-        "Fase=" .. S.phase .. " | detalhe=" .. S.detail,
-        "Ativo=" .. tostring(S.auto) .. " | continuidade=" .. tostring(S.canContinue),
-        "Feno=" .. num("HayHeld",0) .. "/" .. num("HayCapacity",25)
-            .. " | Cash=" .. cash() .. " | Gems=" .. num("Gems",0),
-        "Agulha=" .. tostring(attr("NeedleOwned",false)) .. " | alvo=" .. tostring(S.needleId)
-            .. " | rodada concluida=" .. tostring(attr("NeedleRoundComplete",false)),
-        "Tentativas agulha=" .. S.needleAttempts .. " | entrega=" .. S.deliveryAttempts
-            .. " | retorno=" .. S.roundReturnAttempts,
-        "Mao=" .. S.picks .. " | disparos garfo=" .. S.forks
-            .. " | pulsos aspirador=" .. S.vacuums
-            .. " | vendas=" .. S.sells .. " | melhorias=" .. S.upgrades
-            .. " | vitorias=" .. S.wins .. " | partidas=" .. S.rounds,
-        "Remotes=" .. tostring(NH and NH:GetFullName() or "ausente"), "Historico:",
-    }
-    for _, entry in ipairs(S.events) do lines[#lines + 1] = entry end
-    local clip = (type(setclipboard)=="function" and setclipboard)
-        or (type(toclipboard)=="function" and toclipboard)
-    if clip then
-        local ok = pcall(clip, table.concat(lines,"\n"))
-        log(ok and "relatorio copiado" or "falha ao copiar")
-    else log("executor sem clipboard") end
-end)
-button("Encerrar", 12,294,347,function() S.stop(true) end)
-local minimize = button("−", 327,5,31,function() panel.Visible=false end)
-minimize.Size = UDim2.fromOffset(31,29)
-local floating = create("TextButton", {Text="N", Size=UDim2.fromOffset(46,46),
-    Position=UDim2.fromOffset(17,165), Visible=false,
-    BackgroundColor3=Color3.fromRGB(78,55,116),
-    TextColor3=Color3.new(1,1,1), Font=Enum.Font.GothamBlack,
-    TextSize=20, BorderSizePixel=0}, gui)
-create("UICorner", {CornerRadius=UDim.new(1,0)}, floating)
-connect(floating.MouseButton1Click,function() panel.Visible=true end)
-connect(panel:GetPropertyChangedSignal("Visible"),function() floating.Visible=not panel.Visible end)
-connect(UserInputService.InputBegan,function(input, processed)
-    if not processed and input.KeyCode==Enum.KeyCode.RightControl then
-        panel.Visible=not panel.Visible
-    end
-end)
-local dragging, dragStart, startPos = false, nil, nil
-connect(title.InputBegan,function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1
-        or input.UserInputType==Enum.UserInputType.Touch then
-        dragging, dragStart, startPos=true,input.Position,panel.Position
-    end
-end)
-connect(UserInputService.InputChanged,function(input)
-    if not dragging or (input.UserInputType~=Enum.UserInputType.MouseMovement
-        and input.UserInputType~=Enum.UserInputType.Touch) then return end
-    local offset=input.Position-dragStart
-    panel.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+offset.X,
-        startPos.Y.Scale,startPos.Y.Offset+offset.Y)
-end)
-connect(UserInputService.InputEnded,function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1
-        or input.UserInputType==Enum.UserInputType.Touch then dragging=false end
-end)
-
-S.stop = function(disableQueue)
-    if not S.alive then return end
-    S.alive, S.auto = false, false
-    if disableQueue and type(writefile) == "function" then pcall(writefile, path, "return") end
-    pcall(function() if NH and NH:FindFirstChild("VacuumAction") then NH.VacuumAction:FireServer("Stop") end end)
-    for _, connection in ipairs(S.connections) do pcall(function() connection:Disconnect() end) end
-    gui:Destroy()
-    if global.__NeedleKaitunSession==S then global.__NeedleKaitunSession=nil end
-end
-
-task.spawn(function()
-    while S.alive do
-        phaseText.Text = (S.auto and "▶  " or "Ⅱ  ") .. S.phase
-        info.Text = "Local: " .. (isLobby and "Lobby" or "Mapa")
-            .. "  |  Feno: " .. num("HayHeld",0) .. "/" .. num("HayCapacity",25)
-            .. "\nCash: " .. cash() .. "  |  Gems: " .. num("Gems",0)
-            .. "  |  Vitorias: " .. wins()
-            .. "\nMao: " .. S.picks .. "  Garfo: " .. S.forks
-            .. "  Aspirador: " .. S.vacuums .. "  Vendas: " .. S.sells
-            .. "  Melhorias: " .. S.upgrades
-            .. "\nAgulha: " .. (attr("NeedleOwned",false) and "na mochila"
-                or (S.needleId and "revelada" or "ainda escondida"))
-            .. "\n" .. S.detail:sub(1,105)
-        task.wait(0.5)
-    end
-end)
-
-task.spawn(function()
-    task.wait(2)
-    while S.alive do
-        if not S.auto then
-            phase("pausado")
-            task.wait(0.5)
-        else
-            local ok, delayOrError = pcall(isLobby and lobbyStep or mapStep)
-            if not ok then
-                log("ERRO " .. tostring(delayOrError):sub(1,160))
-                task.wait(1)
-            else
-                task.wait(math.max(0.05, tonumber(delayOrError) or 0.5))
-            end
         end
     end
+    if selected then
+        S.attempts.pvp=S.attempts.pvp+1
+        status("PVP pós-trial","Atacando "..selected.Name)
+        attack(selected)
+    else status("PVP pós-trial","Aguardando adversários/resultado") end
+end
+local function chooseGear(state)
+    local map=workspace:FindFirstChild("Map")
+    local temple=map and map:FindFirstChild("Temple of Time")
+    local inner=temple and temple:FindFirstChild("InnerClock",true)
+    local selected,number
+    if inner then
+        for _,child in ipairs(inner:GetChildren()) do
+            local n=tonumber(child.Name:match("Gear(%d+)"))
+            if n and child:FindFirstChild("Highlight",true)
+                and (not number or n<number) then selected,number=child.Name,n end
+        end
+    end
+    if not selected and type(state)=="table" then
+        local a,b=tonumber(state.A) or 0,tonumber(state.B) or 0
+        if a+b==0 then selected="Gear1" end
+    end
+    return selected
+end
+local function gearStep(clock)
+    releaseBoatKeys()
+    if not enterTemple() then return end
+    if not go(POS.clock,"Indo ao Relógio Ancestral",12) then return end
+    status("Relógio","Ponto V4 disponível; escolhendo engrenagem")
+    if not once("gearSpend",8) then return end
+    local selected=chooseGear(clock)
+    if not selected then
+        log("Ponto disponível, mas engrenagem destacada não carregou")
+        promptNear(POS.clock,20,"clock")
+        return
+    end
+    promptNear(POS.clock,20,"clock")
+    local ok,response
+    if selected=="Gear1" then
+        ok,response=invoke("TempleClock","SpendPoint")
+    elseif selected=="Gear5" then
+        ok,response=invoke("TempleClock","SpendPoint",selected,"Default")
+    else
+        ok,response=invoke("TempleClock","SpendPoint",selected,S.path)
+    end
+    S.attempts.gear=S.attempts.gear+1
+    log("Relógio "..selected.."/"..S.path..": "..tostring(ok and response))
+    S.cacheAt.clock=nil;S.cacheAt.upgrade=nil
+    task.wait(0.5)
+    local latest=clockState(true)
+    if type(latest)=="table" and not latest.HadPoint then
+        log("Ponto do relógio gasto e confirmado")
+    end
+end
+local function buyStep(upgrade)
+    local cost=tonumber(upgrade.cost)
+    local data=player:FindFirstChild("Data")
+    local fragments=data and data:FindFirstChild("Fragments")
+    local available=fragments and tonumber(fragments.Value) or 0
+    if cost and available<cost then
+        status("Upgrade V4","Faltam Fragments: "..math.floor(cost-available))
+        return
+    end
+    if not once("upgradeBuy",12) then return end
+    local before=upgrade.code
+    local ok,response=invoke("UpgradeRace","Buy")
+    S.attempts.buy=S.attempts.buy+1
+    log("Ancient One compra: "..tostring(ok and response))
+    task.wait(0.6)
+    local after=upgradeState(true)
+    if after and after.code~=before then log("Upgrade V4 confirmado: "..tostring(after.code)) end
+end
+local function trainingStep(upgrade)
+    status("Treino V4","Ativando V4 e eliminando inimigos")
+    if once("v4Ability",10) then
+        pcall(function()
+            VIM:SendKeyEvent(true,Enum.KeyCode.Y,false,game)
+            task.wait(0.08)
+            VIM:SendKeyEvent(false,Enum.KeyCode.Y,false,game)
+        end)
+    end
+    local enemy=closestEnemy(function(model)
+        local low=model.Name:lower()
+        return low:find("skeleton",1,true) or low:find("zombie",1,true)
+            or low:find("demonic soul",1,true) or low:find("mummy",1,true)
+    end,900)
+    if enemy then
+        S.attempts.train=S.attempts.train+1
+        attack(enemy)
+    else
+        go(POS.bones,"Procurando inimigos para treinar V4",60)
+    end
+    if once("trainingCheck",10) then
+        local nextStatus=upgradeState(true)
+        if nextStatus and nextStatus.code~=upgrade.code then
+            log("Treino mudou de estado: "..tostring(upgrade.code).." -> "..tostring(nextStatus.code))
+        end
+    end
+end
+
+local function report()
+    local lines={
+        "FLOQUITAVE | KAITUN RACE V4 1.0",
+        "PlaceId="..tostring(game.PlaceId).." | Race="..tostring(raceName(player)),
+        "Auto="..tostring(S.auto).." | Fase="..S.phase.." | Detalhe="..S.detail,
+        "FullMoon="..tostring(fullMoon()).." | Noite="..tostring(night())
+            .." | EquipeTemplo="..tostring(templeTeam()),
+        "Porta="..tostring(leverOpen()).." | PontoRelogio="
+            ..tostring((clockState() or {}).HadPoint),
+    }
+    local u=upgradeState()
+    lines[#lines+1]="UpgradeRace="..tostring(u and u.code)
+        .." | Nivel="..tostring(u and u.level).." | Custo="..tostring(u and u.cost)
+    for key,value in pairs(S.attempts) do
+        lines[#lines+1]="Tentativas "..key.."="..tostring(value)
+    end
+    lines[#lines+1]="HISTORICO"
+    for _,entry in ipairs(S.history) do lines[#lines+1]=entry end
+    return table.concat(lines,"\n")
+end
+
+local function v4Step()
+    local name=raceName(player)
+    S.race=name
+    if S.manualTarget then
+        local target=S.manualTarget
+        S.manualTarget=nil
+        S.manual=true
+        if target=="temple" then
+            enterTemple()
+        elseif target=="door" and DOOR[name] and enterTemple() then
+            go(DOOR[name],"Indo à porta V4",9)
+        end
+        S.manual=false
+        return
+    end
+    if name=="" then status("Aguardando","Data.Race ainda não carregou");return end
+    if name=="Draco" then
+        status("Draco V4","Rota Draco exige relics de Prehistoric Island; sem protocolo seguro para concluir")
+        return
+    end
+    if not DOOR[name] then
+        status("Raça sem rota","Raça detectada: "..name)
+        return
+    end
+    if not raceV3() then
+        status("Pré-requisito","Raça "..name.." V3 necessária antes da V4")
+        return
+    end
+    local upgrade=upgradeState()
+    local clock=clockState()
+    if upgrade and tonumber(upgrade.code)==5 and not (clock and clock.HadPoint) then
+        status("V4 concluída","UpgradeRace confirmou estado final")
+        S.auto=false;releaseBoatKeys();stopMove()
+        return
+    end
+    if clock and clock.HadPoint then gearStep(clock);return end
+    if upgrade and (upgrade.code==2 or upgrade.code==4 or upgrade.code==7) then
+        buyStep(upgrade);return
+    end
+    if upgrade and (upgrade.code==1 or upgrade.code==3
+        or upgrade.code==6 or upgrade.code==8) then
+        trainingStep(upgrade);return
+    end
+    if not leverOpen() then
+        if progressQuest() then
+            status("Missão V4","Avançando com o Sealed King e o Templo")
+            return
+        end
+        if not hasItem("Mirror Fractal") then
+            status("Pré-requisito","Mirror Fractal necessário para a Blue Gear")
+            return
+        end
+        -- Verifica a alavanca uma vez por sessão antes de iniciar uma viagem longa.
+        -- Se já houver Blue Gear, tenta novamente após retornar de Mirage.
+        if S.attempts.lever==0 or (S.gearTouched and S.attempts.lever<3) then
+            leverStep()
+        else
+            mirageStep()
+        end
+        return
+    end
+    releaseBoatKeys()
+    if trialTimer() then
+        S.trialEndedAt=0
+        trialStep(name)
+        return
+    end
+    if S.trialSeen then
+        S.trialSeen=false;S.trialEndedAt=os.clock()
+        log("Timer da trial sumiu; verificando ponto e PVP")
+        S.cacheAt.clock=nil;S.cacheAt.upgrade=nil
+        return
+    end
+    if S.trialEndedAt>0 then
+        pvpStep();return
+    end
+    if not enterTemple() then return end
+    if not go(DOOR[name],"Indo à porta "..name,9) then return end
+    if not fullMoon() then
+        status("Porta "..name,"Aguardando lua cheia para iniciar trial")
+        return
+    end
+    local count=templeTeam()
+    if count<3 then
+        status("Porta "..name,"Aguardando 3 raças diferentes no Templo ("..count.."/3)")
+        return
+    end
+    if once("trialActivate",7) then
+        sendAbility()
+        promptNear(DOOR[name],18)
+        log("Porta "..name..": habilidade acionada para iniciar trial")
+    end
+end
+
+-- Um único worker impede múltiplos tweens e remotes concorrendo entre si.
+task.spawn(function()
+    while S.alive do
+        if (S.auto or S.manualTarget) and not S.busy then
+            S.busy=true
+            local ok,err=xpcall(v4Step,debug.traceback)
+            S.busy=false
+            if not ok then
+                status("Erro na etapa",tostring(err):sub(1,200))
+                task.wait(3)
+            end
+        end
+        task.wait(0.75)
+    end
 end)
 
-log("Kaitun 1.2 iniciado. Agulha -> Farmer -> lobby -> nova partida.")
-print("[Needle Kaitun] 1.2 carregado | PlaceId=" .. game.PlaceId)
+local gui=Instance.new("ScreenGui")
+gui.Name="Floquitave_Kaitun_RaceV4"
+gui.ResetOnSpawn=false
+gui.IgnoreGuiInset=true
+local okParent=pcall(function() gui.Parent=CoreGui end)
+if not okParent then gui.Parent=player:WaitForChild("PlayerGui") end
+local function box(class,parent,properties)
+    local obj=Instance.new(class)
+    for key,value in pairs(properties) do obj[key]=value end
+    obj.Parent=parent
+    return obj
+end
+local panel=box("Frame",gui,{
+    Name="Panel",Size=UDim2.fromOffset(355,258),Position=UDim2.new(0,16,0.5,-129),
+    BackgroundColor3=Color3.fromRGB(24,28,39),BorderSizePixel=0,
+})
+box("UICorner",panel,{CornerRadius=UDim.new(0,12)})
+local title=box("TextLabel",panel,{
+    Size=UDim2.new(1,-16,0,35),Position=UDim2.fromOffset(8,5),
+    BackgroundTransparency=1,Font=Enum.Font.GothamBold,TextSize=17,
+    TextColor3=Color3.fromRGB(225,236,252),TextXAlignment=Enum.TextXAlignment.Left,
+    Text="FLOQUITAVE  |  RACE V4",
+})
+local detail=box("TextLabel",panel,{
+    Size=UDim2.new(1,-24,0,94),Position=UDim2.fromOffset(12,42),
+    BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=14,
+    TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top,
+    TextXAlignment=Enum.TextXAlignment.Left,
+    TextColor3=Color3.fromRGB(206,215,232),Text="Iniciando...",
+})
+local function button(label,x,y,w,callback)
+    local b=box("TextButton",panel,{
+        Size=UDim2.fromOffset(w,34),Position=UDim2.fromOffset(x,y),
+        BackgroundColor3=Color3.fromRGB(49,69,108),BorderSizePixel=0,
+        Font=Enum.Font.GothamSemibold,TextSize=13,TextColor3=Color3.new(1,1,1),Text=label,
+    })
+    box("UICorner",b,{CornerRadius=UDim.new(0,7)})
+    S.connections[#S.connections+1]=b.MouseButton1Click:Connect(callback)
+    return b
+end
+local pauseButton=button("Pausar",12,142,106,function()
+    S.auto=not S.auto
+    if not S.auto then S.manual=false;releaseBoatKeys();stopMove();status("Pausado","Aguardando botão Retomar") end
+end)
+button("Alpha / Omega",124,142,133,function()
+    S.path=S.path=="Alpha" and "Omega" or "Alpha"
+    log("Caminho da próxima engrenagem: "..S.path)
+end)
+button("Minimizar",263,142,80,function()
+    panel.Visible=false
+end)
+button("Templo",12,185,106,function()
+    S.manualTarget="temple"
+    stopMove()
+end)
+button("Porta",124,185,106,function()
+    S.manualTarget="door"
+    stopMove()
+end)
+button("Copiar relatório",236,185,107,function()
+    if type(setclipboard)=="function" then
+        pcall(setclipboard,report())
+        log("Relatório copiado")
+    else log("Executor sem setclipboard; relatório exibido no console")
+        print(report()) end
+end)
+local footer=box("TextLabel",panel,{
+    Size=UDim2.new(1,-24,0,28),Position=UDim2.fromOffset(12,223),
+    BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=12,
+    TextColor3=Color3.fromRGB(161,175,200),TextXAlignment=Enum.TextXAlignment.Left,
+    Text="Caminho: Alpha  |  Third Sea",
+})
+local opener=box("TextButton",gui,{
+    Size=UDim2.fromOffset(104,38),Position=UDim2.new(0,16,0.5,-129),
+    BackgroundColor3=Color3.fromRGB(43,78,130),BorderSizePixel=0,
+    Font=Enum.Font.GothamBold,TextSize=13,Text="ABRIR V4",
+    TextColor3=Color3.new(1,1,1),Visible=false,
+})
+box("UICorner",opener,{CornerRadius=UDim.new(0,8)})
+S.connections[#S.connections+1]=opener.MouseButton1Click:Connect(function()
+    panel.Visible=true;opener.Visible=false
+end)
+S.connections[#S.connections+1]=panel:GetPropertyChangedSignal("Visible"):Connect(function()
+    opener.Visible=not panel.Visible
+end)
+S.connections[#S.connections+1]=RunService.Heartbeat:Connect(function()
+    if not S.alive or not gui.Parent then return end
+    if not S.uiAt or os.clock()-S.uiAt>0.8 then
+        S.uiAt=os.clock()
+        detail.Text=S.phase.."\n"..S.detail.."\nRaça: "..tostring(S.race or "...")
+            .."  |  Lua cheia: "..(fullMoon() and "sim" or "não")
+        pauseButton.Text=S.auto and "Pausar" or "Retomar"
+        footer.Text="Caminho: "..S.path.."  |  Third Sea"
+    end
+end)
 
-]====]
-local env = (type(getgenv) == "function" and getgenv()) or _G
-env.__NeedleKaitunSource = source
-if type(writefile) == "function" then
-    pcall(writefile, "NeedleKaitun_AutoLoad.lua", source)
+S.report=report
+S.stop=function()
+    S.alive=false;S.auto=false
+    stopMove();releaseBoatKeys()
+    for _,connection in ipairs(S.connections) do pcall(function() connection:Disconnect() end) end
+    pcall(function() gui:Destroy() end)
 end
-local chunk, err = loadstring(source)
-if not chunk then
-    warn("[Needle Kaitun] Erro ao compilar: " .. tostring(err))
-else
-    local ok, problem = pcall(chunk)
-    if not ok then warn("[Needle Kaitun] Erro ao iniciar: " .. tostring(problem)) end
-end
+S.connections[#S.connections+1]=player.Idled:Connect(function()
+    if not S.alive then return end
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+end)
+log("Race V4 iniciado; somente funções de despertar e upgrades V4")
+
+
+
+
+
