@@ -1,32 +1,36 @@
--- FLOQUITAVE | Race V4 Kaitun 1.0 | Blox Fruits / Third Sea
+-- FLOQUITAVE | Race V4 Kaitun 1.1 | Blox Fruits / Third Sea
 -- Script independente: somente etapas diretamente ligadas a Race V4.
 -- O painel inicia em modo automatico. Botao Pausar interrompe movimento e acoes.
 -- O jogo precisa estar aberto no Third Sea (PlaceId 7449423635).
 
+local function main()
+print("[Floquitave V4 1.1] Iniciando | PlaceId="..tostring(game.PlaceId))
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
-local UIS = game:GetService("UserInputService")
-local VIM = game:GetService("VirtualInputManager")
-local CoreGui = game:GetService("CoreGui")
-local VirtualUser = game:GetService("VirtualUser")
+local vimOk,VIM=pcall(function() return game:GetService("VirtualInputManager") end)
+if not vimOk then VIM=nil end
+local vuOk,VirtualUser=pcall(function() return game:GetService("VirtualUser") end)
+if not vuOk then VirtualUser=nil end
 
-if not game:IsLoaded() then game.Loaded:Wait() end
 local player = Players.LocalPlayer
-while not player do task.wait(0.2); player = Players.LocalPlayer end
-if game.PlaceId ~= 7449423635 then
-    warn("[Floquitave V4] Entre no Third Sea para iniciar o kaitun.")
-    return
-end
+local playerDeadline=os.clock()+25
+while not player and os.clock()<playerDeadline do task.wait(0.2); player=Players.LocalPlayer end
+assert(player,"LocalPlayer não carregou após 25 segundos")
+local IS_THIRD_SEA=game.PlaceId==7449423635
 
-local env = type(getgenv) == "function" and getgenv() or _G
+local env=_G
+if type(getgenv)=="function" then
+    local ok,result=pcall(getgenv)
+    if ok and type(result)=="table" then env=result end
+end
 if env.__FloquitaveV4 and type(env.__FloquitaveV4.stop) == "function" then
     pcall(env.__FloquitaveV4.stop)
 end
 local S = {
-    alive=true, auto=true, phase="Iniciando", detail="", started=os.clock(),
+    alive=true, auto=IS_THIRD_SEA, phase="Iniciando", detail="", started=os.clock(),
     history={}, connections={}, nonce=0, busy=false,
     cache={}, cacheAt={}, lastAction={},
     trialSeen=false, trialStarted=0, trialEndedAt=0, trialRace=nil,
@@ -332,17 +336,28 @@ local function highestPoint(island)
     return selected and selected.Position+Vector3.new(0,selected.Size.Y/2+4,0)
 end
 
+local function sendKey(down,key)
+    if VIM then
+        local ok=pcall(function() VIM:SendKeyEvent(down,key,false,game) end)
+        if ok then return true end
+    end
+    local fallback=down and keypress or keyrelease
+    if type(fallback)=="function" then
+        return pcall(fallback,key.Value)
+    end
+    return false
+end
 local function releaseBoatKeys()
     for key,down in pairs(S.boatKeys) do
         if down then
-            pcall(function() VIM:SendKeyEvent(false,Enum.KeyCode[key],false,game) end)
+            sendKey(false,Enum.KeyCode[key])
             S.boatKeys[key]=false
         end
     end
 end
 local function boatKey(key,down)
     if S.boatKeys[key]==down then return true end
-    local ok=pcall(function() VIM:SendKeyEvent(down,Enum.KeyCode[key],false,game) end)
+    local ok=sendKey(down,Enum.KeyCode[key])
     if ok then S.boatKeys[key]=down end
     return ok
 end
@@ -530,11 +545,9 @@ local function attack(target)
     if os.clock()-S.skillAt>=2.5 then
         S.skillAt=os.clock()
         local key=skillKeys[(math.floor(S.skillAt/2.5)%#skillKeys)+1]
-        pcall(function()
-            VIM:SendKeyEvent(true,key,false,game)
-            task.wait(0.12)
-            VIM:SendKeyEvent(false,key,false,game)
-        end)
+        sendKey(true,key)
+        task.wait(0.12)
+        sendKey(false,key)
     end
     return true
 end
@@ -721,11 +734,9 @@ end
 local function trainingStep(upgrade)
     status("Treino V4","Ativando V4 e eliminando inimigos")
     if once("v4Ability",10) then
-        pcall(function()
-            VIM:SendKeyEvent(true,Enum.KeyCode.Y,false,game)
-            task.wait(0.08)
-            VIM:SendKeyEvent(false,Enum.KeyCode.Y,false,game)
-        end)
+        sendKey(true,Enum.KeyCode.Y)
+        task.wait(0.08)
+        sendKey(false,Enum.KeyCode.Y)
     end
     local enemy=closestEnemy(function(model)
         local low=model.Name:lower()
@@ -768,6 +779,10 @@ local function report()
 end
 
 local function v4Step()
+    if not IS_THIRD_SEA then
+        status("Mar incorreto","Entre no Third Sea; PlaceId atual: "..tostring(game.PlaceId))
+        return
+    end
     local name=raceName(player)
     S.race=name
     if S.manualTarget then
@@ -861,28 +876,18 @@ local function v4Step()
     end
 end
 
--- Um único worker impede múltiplos tweens e remotes concorrendo entre si.
-task.spawn(function()
-    while S.alive do
-        if (S.auto or S.manualTarget) and not S.busy then
-            S.busy=true
-            local ok,err=xpcall(v4Step,debug.traceback)
-            S.busy=false
-            if not ok then
-                status("Erro na etapa",tostring(err):sub(1,200))
-                task.wait(3)
-            end
-        end
-        task.wait(0.75)
-    end
-end)
-
 local gui=Instance.new("ScreenGui")
 gui.Name="Floquitave_Kaitun_RaceV4"
 gui.ResetOnSpawn=false
 gui.IgnoreGuiInset=true
-local okParent=pcall(function() gui.Parent=CoreGui end)
-if not okParent then gui.Parent=player:WaitForChild("PlayerGui") end
+gui.DisplayOrder=100
+local playerGui=player:WaitForChild("PlayerGui",15)
+assert(playerGui,"PlayerGui não carregou após 15 segundos")
+local okParent=pcall(function() gui.Parent=playerGui end)
+if not okParent then
+    local core=game:GetService("CoreGui")
+    gui.Parent=core
+end
 local function box(class,parent,properties)
     local obj=Instance.new(class)
     for key,value in pairs(properties) do obj[key]=value end
@@ -981,13 +986,71 @@ S.stop=function()
     pcall(function() gui:Destroy() end)
 end
 S.connections[#S.connections+1]=player.Idled:Connect(function()
-    if not S.alive then return end
+    if not S.alive or not VirtualUser then return end
     pcall(function()
         VirtualUser:CaptureController()
         VirtualUser:ClickButton2(Vector2.new())
     end)
 end)
-log("Race V4 iniciado; somente funções de despertar e upgrades V4")
+if not IS_THIRD_SEA then
+    status("Mar incorreto","Entre no Third Sea; PlaceId atual: "..tostring(game.PlaceId))
+else
+    log("Race V4 iniciado; somente funções de despertar e upgrades V4")
+end
+print("[Floquitave V4 1.1] Painel criado em "..gui.Parent:GetFullName())
+
+-- O worker inicia depois que o painel já está visível.
+task.spawn(function()
+    while S.alive do
+        if (S.auto or S.manualTarget) and not S.busy then
+            S.busy=true
+            local ok,err=xpcall(v4Step,function(message)
+                if debug and type(debug.traceback)=="function" then
+                    return debug.traceback(tostring(message))
+                end
+                return tostring(message)
+            end)
+            S.busy=false
+            if not ok then
+                status("Erro na etapa",tostring(err):sub(1,200))
+                warn("[Floquitave V4 1.1] "..tostring(err))
+                task.wait(3)
+            end
+        end
+        task.wait(0.75)
+    end
+end)
+end
+
+local ok,err=xpcall(main,function(message)
+    if debug and type(debug.traceback)=="function" then
+        return debug.traceback(tostring(message))
+    end
+    return tostring(message)
+end)
+if not ok then
+    warn("[Floquitave V4 1.1] Falha ao iniciar: "..tostring(err))
+    pcall(function()
+        local players=game:GetService("Players")
+        local localPlayer=players.LocalPlayer
+        local pg=localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pg then return end
+        local fail=Instance.new("ScreenGui")
+        fail.Name="Floquitave_V4_Erro"
+        fail.ResetOnSpawn=false
+        fail.DisplayOrder=999
+        local label=Instance.new("TextLabel")
+        label.Size=UDim2.fromOffset(480,110)
+        label.Position=UDim2.new(0.5,-240,0,70)
+        label.BackgroundColor3=Color3.fromRGB(96,20,30)
+        label.TextColor3=Color3.new(1,1,1)
+        label.TextWrapped=true
+        label.TextSize=17
+        label.Text="Floquitave V4: falha ao iniciar\n"..tostring(err):sub(1,320)
+        label.Parent=fail
+        fail.Parent=pg
+    end)
+end
 
 
 
