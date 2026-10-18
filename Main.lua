@@ -1,10 +1,11 @@
--- FLOQUITAVE | Race V4 Kaitun 1.3 | Blox Fruits / Third Sea
+-- FLOQUITAVE | Race V4 Kaitun 1.4 | Blox Fruits / Third Sea
 -- Script independente: somente etapas diretamente ligadas a Race V4.
 -- O painel inicia em modo automatico. Botao Pausar interrompe movimento e acoes.
--- O jogo precisa estar aberto no Third Sea (PlaceId 7449423635).
+-- Aceita os PlaceIds do Third Sea e reconhece novas instancias no universo oficial.
 
 local function main()
-print("[Floquitave V4 1.3] Iniciando | PlaceId="..tostring(game.PlaceId))
+print("[Floquitave V4 1.4] Iniciando | PlaceId="..tostring(game.PlaceId)
+    .." | GameId="..tostring(game.GameId))
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -20,7 +21,27 @@ local player = Players.LocalPlayer
 local playerDeadline=os.clock()+25
 while not player and os.clock()<playerDeadline do task.wait(0.2); player=Players.LocalPlayer end
 assert(player,"LocalPlayer não carregou após 25 segundos")
-local IS_THIRD_SEA=game.PlaceId==7449423635
+local THIRD_SEA_IDS={
+    [7449423635]=true,
+    [100117331123089]=true,
+}
+local function isThirdSea()
+    local place=tonumber(game.PlaceId)
+    local universe=tonumber(game.GameId)
+    if THIRD_SEA_IDS[place] then return true,"PlaceId do Sea 3" end
+    if place==2753915549 then return false,"Sea 1" end
+    if place==4442272183 then return false,"Sea 2" end
+    if universe==994732206 then
+        return true,"Universo Blox Fruits; novo PlaceId "..tostring(place)
+    end
+    local map=workspace:FindFirstChild("Map")
+    if map and (map:FindFirstChild("Temple of Time")
+        or map:FindFirstChild("Tiki Outpost")
+        or map:FindFirstChild("Haunted Castle")) then
+        return true,"Locais do Sea 3 detectados"
+    end
+    return false,"GameId="..tostring(game.GameId).." | PlaceId="..tostring(place)
+end
 
 local env=_G
 if type(getgenv)=="function" then
@@ -31,7 +52,7 @@ if env.__FloquitaveV4 and type(env.__FloquitaveV4.stop) == "function" then
     pcall(env.__FloquitaveV4.stop)
 end
 local S = {
-    alive=true, auto=IS_THIRD_SEA, phase="Iniciando", detail="", started=os.clock(),
+    alive=true, auto=true, phase="Iniciando", detail="", started=os.clock(),
     history={}, connections={}, nonce=0, busy=false,
     cache={}, cacheAt={}, lastAction={},
     trialSeen=false, trialStarted=0, trialEndedAt=0, trialRace=nil,
@@ -854,8 +875,9 @@ end
 
 local function report()
     local lines={
-        "FLOQUITAVE | KAITUN RACE V4 1.3",
-        "PlaceId="..tostring(game.PlaceId).." | Race="..tostring(raceName(player)),
+        "FLOQUITAVE | KAITUN RACE V4 1.4",
+        "GameId="..tostring(game.GameId).." | PlaceId="..tostring(game.PlaceId)
+            .." | Race="..tostring(raceName(player)),
         "Auto="..tostring(S.auto).." | Fase="..S.phase.." | Detalhe="..S.detail,
         "FullMoon="..tostring(fullMoon()).." | Noite="..tostring(night())
             .." | EquipeTemplo="..tostring(templeTeam()),
@@ -887,8 +909,9 @@ local function report()
 end
 
 local function v4Step()
-    if not IS_THIRD_SEA then
-        status("Mar incorreto","Entre no Third Sea; PlaceId atual: "..tostring(game.PlaceId))
+    local seaOk,seaReason=isThirdSea()
+    if not seaOk then
+        status("Mar não identificado",seaReason)
         return
     end
     local name=raceName(player)
@@ -1364,12 +1387,13 @@ S.connections[#S.connections+1]=player.Idled:Connect(function()
         VirtualUser:ClickButton2(Vector2.new())
     end)
 end)
-if not IS_THIRD_SEA then
-    status("Mar incorreto","Entre no Third Sea; PlaceId atual: "..tostring(game.PlaceId))
+local seaOk,seaReason=isThirdSea()
+if not seaOk then
+    status("Mar não identificado",seaReason)
 else
-    log("Race V4 iniciado; somente funções de despertar e upgrades V4")
+    log("Race V4 iniciado | Sea 3: "..seaReason)
 end
-print("[Floquitave V4 1.3] Painel criado em "..gui.Parent:GetFullName())
+print("[Floquitave V4 1.4] Painel criado em "..gui.Parent:GetFullName())
 
 -- O worker inicia depois que o painel já está visível.
 task.spawn(function()
@@ -1386,7 +1410,7 @@ task.spawn(function()
             S.manual=false
             if not ok then
                 status("Erro na etapa",tostring(err):sub(1,200))
-                warn("[Floquitave V4 1.3] "..tostring(err))
+                warn("[Floquitave V4 1.4] "..tostring(err))
                 task.wait(3)
             end
         end
@@ -1402,7 +1426,7 @@ local ok,err=xpcall(main,function(message)
     return tostring(message)
 end)
 if not ok then
-    warn("[Floquitave V4 1.3] Falha ao iniciar: "..tostring(err))
+    warn("[Floquitave V4 1.4] Falha ao iniciar: "..tostring(err))
     pcall(function()
         local players=game:GetService("Players")
         local localPlayer=players.LocalPlayer
