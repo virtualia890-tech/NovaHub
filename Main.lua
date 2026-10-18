@@ -1,15 +1,16 @@
--- FLOQUITAVE | Race V4 Kaitun 1.1 | Blox Fruits / Third Sea
+-- FLOQUITAVE | Race V4 Kaitun 1.2 | Blox Fruits / Third Sea
 -- Script independente: somente etapas diretamente ligadas a Race V4.
 -- O painel inicia em modo automatico. Botao Pausar interrompe movimento e acoes.
 -- O jogo precisa estar aberto no Third Sea (PlaceId 7449423635).
 
 local function main()
-print("[Floquitave V4 1.1] Iniciando | PlaceId="..tostring(game.PlaceId))
+print("[Floquitave V4 1.2] Iniciando | PlaceId="..tostring(game.PlaceId))
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
+local UIS=game:GetService("UserInputService")
 local vimOk,VIM=pcall(function() return game:GetService("VirtualInputManager") end)
 if not vimOk then VIM=nil end
 local vuOk,VirtualUser=pcall(function() return game:GetService("VirtualUser") end)
@@ -894,87 +895,246 @@ local function box(class,parent,properties)
     obj.Parent=parent
     return obj
 end
-local panel=box("Frame",gui,{
-    Name="Panel",Size=UDim2.fromOffset(355,258),Position=UDim2.new(0,16,0.5,-129),
-    BackgroundColor3=Color3.fromRGB(24,28,39),BorderSizePixel=0,
-})
-box("UICorner",panel,{CornerRadius=UDim.new(0,12)})
-local title=box("TextLabel",panel,{
-    Size=UDim2.new(1,-16,0,35),Position=UDim2.fromOffset(8,5),
-    BackgroundTransparency=1,Font=Enum.Font.GothamBold,TextSize=17,
-    TextColor3=Color3.fromRGB(225,236,252),TextXAlignment=Enum.TextXAlignment.Left,
-    Text="FLOQUITAVE  |  RACE V4",
-})
-local detail=box("TextLabel",panel,{
-    Size=UDim2.new(1,-24,0,94),Position=UDim2.fromOffset(12,42),
-    BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=14,
-    TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top,
-    TextXAlignment=Enum.TextXAlignment.Left,
-    TextColor3=Color3.fromRGB(206,215,232),Text="Iniciando...",
-})
-local function button(label,x,y,w,callback)
-    local b=box("TextButton",panel,{
-        Size=UDim2.fromOffset(w,34),Position=UDim2.fromOffset(x,y),
-        BackgroundColor3=Color3.fromRGB(49,69,108),BorderSizePixel=0,
-        Font=Enum.Font.GothamSemibold,TextSize=13,TextColor3=Color3.new(1,1,1),Text=label,
+local Theme={
+    Main=Color3.fromRGB(12,10,18),
+    Header=Color3.fromRGB(19,16,28),
+    Sidebar=Color3.fromRGB(14,12,21),
+    Panel=Color3.fromRGB(10,9,15),
+    Row=Color3.fromRGB(27,24,35),
+    Accent=Color3.fromRGB(151,92,255),
+    AccentDark=Color3.fromRGB(94,53,178),
+    Text=Color3.fromRGB(246,245,249),
+    Muted=Color3.fromRGB(174,170,184),
+    Outline=Color3.fromRGB(73,57,103),
+}
+local function corner(parent,radius)
+    box("UICorner",parent,{CornerRadius=UDim.new(0,radius or 7)})
+end
+local function stroke(parent,color,transparency)
+    box("UIStroke",parent,{Color=color or Theme.Outline,Thickness=1,
+        Transparency=transparency or 0.42})
+end
+local function textLabel(parent,text,x,y,w,h,size,color,bold)
+    return box("TextLabel",parent,{
+        Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,h),
+        BackgroundTransparency=1,Text=text,TextSize=size or 14,
+        TextColor3=color or Theme.Text,
+        Font=bold and Enum.Font.GothamBold or Enum.Font.Gotham,
+        TextXAlignment=Enum.TextXAlignment.Left,
     })
-    box("UICorner",b,{CornerRadius=UDim.new(0,7)})
+end
+local panel=box("Frame",gui,{
+    Name="Panel",AnchorPoint=Vector2.new(0.5,0.5),
+    Position=UDim2.fromScale(0.5,0.5),
+    Size=UDim2.fromOffset(680,432),
+    BackgroundColor3=Theme.Main,BorderSizePixel=0,ClipsDescendants=true,
+})
+corner(panel,10);stroke(panel,Theme.AccentDark,0.22)
+local scale=box("UIScale",panel,{Scale=0.94})
+local function fit()
+    local cam=workspace.CurrentCamera
+    local view=cam and cam.ViewportSize
+    if view then
+        scale.Scale=math.max(0.38,math.min(0.94,
+            view.X*0.95/680,view.Y*0.90/432))
+    else
+        scale.Scale=UIS.TouchEnabled and 0.6 or 0.94
+    end
+end
+fit()
+if workspace.CurrentCamera then
+    S.connections[#S.connections+1]=workspace.CurrentCamera
+        :GetPropertyChangedSignal("ViewportSize"):Connect(fit)
+end
+local header=box("Frame",panel,{
+    Name="Header",Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,0,0,47),
+    BackgroundColor3=Theme.Header,BorderSizePixel=0,
+})
+box("Frame",header,{Position=UDim2.fromOffset(0,45),
+    Size=UDim2.new(1,0,0,2),BackgroundColor3=Theme.AccentDark,BorderSizePixel=0})
+textLabel(header,"FLOQUITAVE",18,10,170,28,19,Theme.Accent,true)
+textLabel(header,"/  Race V4 Kaitun",170,11,210,26,14,Theme.Text)
+local minimize=box("TextButton",header,{
+    Position=UDim2.new(1,-45,0,9),Size=UDim2.fromOffset(30,28),
+    BackgroundColor3=Theme.Row,BorderSizePixel=0,Text="—",
+    TextColor3=Theme.Text,Font=Enum.Font.GothamBold,TextSize=18,
+})
+corner(minimize,6);stroke(minimize,Theme.Outline,0.6)
+
+local sidebar=box("Frame",panel,{
+    Position=UDim2.fromOffset(0,47),Size=UDim2.fromOffset(155,385),
+    BackgroundColor3=Theme.Sidebar,BorderSizePixel=0,
+})
+textLabel(sidebar,"NAVEGAÇÃO",16,20,125,20,11,Theme.Muted,true)
+local function nav(label,y)
+    local b=box("TextButton",sidebar,{
+        Position=UDim2.fromOffset(10,y),Size=UDim2.fromOffset(135,38),
+        BackgroundColor3=Theme.Sidebar,BorderSizePixel=0,
+        Text="   "..label,TextColor3=Theme.Muted,
+        TextSize=14,Font=Enum.Font.GothamSemibold,
+        TextXAlignment=Enum.TextXAlignment.Left,
+    })
+    corner(b,7)
+    return b
+end
+local raceTab=nav("Race V4",50)
+local logTab=nav("Relatório",95)
+textLabel(sidebar,"TERCEIRO MAR",16,331,124,19,11,Theme.Muted,true)
+
+local racePage=box("Frame",panel,{
+    Position=UDim2.fromOffset(155,47),Size=UDim2.fromOffset(525,385),
+    BackgroundColor3=Theme.Panel,BorderSizePixel=0,
+})
+local logPage=box("Frame",panel,{
+    Position=UDim2.fromOffset(155,47),Size=UDim2.fromOffset(525,385),
+    BackgroundColor3=Theme.Panel,BorderSizePixel=0,Visible=false,
+})
+local function switchPage(which)
+    racePage.Visible=which=="race"
+    logPage.Visible=which=="log"
+    raceTab.BackgroundColor3=which=="race" and Theme.Row or Theme.Sidebar
+    logTab.BackgroundColor3=which=="log" and Theme.Row or Theme.Sidebar
+    raceTab.TextColor3=which=="race" and Theme.Accent or Theme.Muted
+    logTab.TextColor3=which=="log" and Theme.Accent or Theme.Muted
+end
+switchPage("race")
+S.connections[#S.connections+1]=raceTab.MouseButton1Click:Connect(function()
+    switchPage("race")
+end)
+S.connections[#S.connections+1]=logTab.MouseButton1Click:Connect(function()
+    switchPage("log")
+end)
+textLabel(racePage,"RACE V4",20,15,210,29,19,Theme.Text,true)
+textLabel(racePage,"Progresso e controles da raça",20,43,360,19,12,Theme.Muted)
+local statusCard=box("Frame",racePage,{
+    Position=UDim2.fromOffset(18,75),Size=UDim2.fromOffset(489,96),
+    BackgroundColor3=Theme.Row,BorderSizePixel=0,
+})
+corner(statusCard,8);stroke(statusCard,Theme.Outline,0.48)
+box("Frame",statusCard,{Position=UDim2.fromOffset(0,0),
+    Size=UDim2.fromOffset(4,96),BackgroundColor3=Theme.Accent,BorderSizePixel=0})
+textLabel(statusCard,"ETAPA ATUAL",16,11,300,16,11,Theme.Muted,true)
+local phase=textLabel(statusCard,"Iniciando...",16,31,450,25,17,Theme.Accent,true)
+local detail=textLabel(statusCard,"Aguardando dados do jogo",16,59,455,30,13,Theme.Text)
+detail.TextWrapped=true;detail.TextYAlignment=Enum.TextYAlignment.Top
+local function statCard(label,x)
+    local card=box("Frame",racePage,{
+        Position=UDim2.fromOffset(x,182),Size=UDim2.fromOffset(155,62),
+        BackgroundColor3=Theme.Row,BorderSizePixel=0,
+    })
+    corner(card,7)
+    textLabel(card,label,12,6,132,17,10,Theme.Muted,true)
+    return textLabel(card,"...",12,26,135,25,15,Theme.Text,true)
+end
+local raceValue=statCard("RAÇA",18)
+local moonValue=statCard("LUA CHEIA",185)
+local teamValue=statCard("EQUIPE NO TEMPLO",352)
+textLabel(racePage,"CONTROLES",20,259,220,19,11,Theme.Muted,true)
+local function button(parent,label,x,y,w,callback,primary)
+    local b=box("TextButton",parent,{
+        Size=UDim2.fromOffset(w,35),Position=UDim2.fromOffset(x,y),
+        BackgroundColor3=primary and Theme.AccentDark or Theme.Row,
+        BorderSizePixel=0,Font=Enum.Font.GothamSemibold,TextSize=13,
+        TextColor3=Theme.Text,Text=label,
+    })
+    corner(b,7)
+    if not primary then stroke(b,Theme.Outline,0.62) end
     S.connections[#S.connections+1]=b.MouseButton1Click:Connect(callback)
     return b
 end
-local pauseButton=button("Pausar",12,142,106,function()
+local pauseButton=button(racePage,"Pausar",18,286,155,function()
     S.auto=not S.auto
-    if not S.auto then S.manual=false;releaseBoatKeys();stopMove();status("Pausado","Aguardando botão Retomar") end
-end)
-button("Alpha / Omega",124,142,133,function()
+    if not S.auto then
+        S.manual=false;releaseBoatKeys();stopMove()
+        status("Pausado","Aguardando botão Retomar")
+    end
+end,true)
+local pathButton=button(racePage,"Caminho: Alpha",185,286,155,function()
     S.path=S.path=="Alpha" and "Omega" or "Alpha"
     log("Caminho da próxima engrenagem: "..S.path)
 end)
-button("Minimizar",263,142,80,function()
-    panel.Visible=false
+button(racePage,"Ir ao Templo",352,286,155,function()
+    S.manualTarget="temple";stopMove()
 end)
-button("Templo",12,185,106,function()
-    S.manualTarget="temple"
-    stopMove()
+button(racePage,"Ir à Porta",18,330,155,function()
+    S.manualTarget="door";stopMove()
 end)
-button("Porta",124,185,106,function()
-    S.manualTarget="door"
-    stopMove()
-end)
-button("Copiar relatório",236,185,107,function()
+local function copyReport()
     if type(setclipboard)=="function" then
-        pcall(setclipboard,report())
-        log("Relatório copiado")
-    else log("Executor sem setclipboard; relatório exibido no console")
-        print(report()) end
-end)
-local footer=box("TextLabel",panel,{
-    Size=UDim2.new(1,-24,0,28),Position=UDim2.fromOffset(12,223),
-    BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=12,
-    TextColor3=Color3.fromRGB(161,175,200),TextXAlignment=Enum.TextXAlignment.Left,
-    Text="Caminho: Alpha  |  Third Sea",
+        local okCopy=pcall(setclipboard,report())
+        log(okCopy and "Relatório copiado" or "Falha ao copiar relatório")
+    else
+        log("Executor sem setclipboard; relatório no console")
+        print(report())
+    end
+end
+button(racePage,"Copiar relatório",185,330,322,copyReport)
+
+textLabel(logPage,"RELATÓRIO V4",20,17,250,28,19,Theme.Text,true)
+textLabel(logPage,"Últimas atividades do kaitun",20,45,350,18,12,Theme.Muted)
+local logFrame=box("Frame",logPage,{
+    Position=UDim2.fromOffset(18,76),Size=UDim2.fromOffset(489,243),
+    BackgroundColor3=Theme.Row,BorderSizePixel=0,ClipsDescendants=true,
 })
+corner(logFrame,7);stroke(logFrame,Theme.Outline,0.55)
+local history=textLabel(logFrame,"Iniciando...",12,10,462,224,12,Theme.Text)
+history.TextWrapped=true
+history.TextYAlignment=Enum.TextYAlignment.Top
+button(logPage,"Copiar relatório completo",18,330,489,copyReport,true)
+
 local opener=box("TextButton",gui,{
-    Size=UDim2.fromOffset(104,38),Position=UDim2.new(0,16,0.5,-129),
-    BackgroundColor3=Color3.fromRGB(43,78,130),BorderSizePixel=0,
-    Font=Enum.Font.GothamBold,TextSize=13,Text="ABRIR V4",
-    TextColor3=Color3.new(1,1,1),Visible=false,
+    Name="AbrirHub",Position=UDim2.fromOffset(20,180),
+    Size=UDim2.fromOffset(112,42),BackgroundColor3=Theme.Header,
+    BorderSizePixel=0,Font=Enum.Font.GothamBold,TextSize=14,
+    Text="F  ABRIR V4",TextColor3=Theme.Accent,Visible=false,
 })
-box("UICorner",opener,{CornerRadius=UDim.new(0,8)})
-S.connections[#S.connections+1]=opener.MouseButton1Click:Connect(function()
-    panel.Visible=true;opener.Visible=false
+corner(opener,11);stroke(opener,Theme.Accent,0.1)
+S.connections[#S.connections+1]=minimize.MouseButton1Click:Connect(function()
+    panel.Visible=false
+    opener.Visible=true
 end)
-S.connections[#S.connections+1]=panel:GetPropertyChangedSignal("Visible"):Connect(function()
-    opener.Visible=not panel.Visible
+S.connections[#S.connections+1]=opener.MouseButton1Click:Connect(function()
+    panel.Visible=true
+    opener.Visible=false
+end)
+
+-- Arrasta pelo cabeçalho, como no Floquitave.
+local dragging,startInput,startPosition
+S.connections[#S.connections+1]=header.InputBegan:Connect(function(input)
+    if input.UserInputType==Enum.UserInputType.MouseButton1
+        or input.UserInputType==Enum.UserInputType.Touch then
+        dragging=true;startInput=input.Position;startPosition=panel.Position
+    end
+end)
+S.connections[#S.connections+1]=UIS.InputEnded:Connect(function(input)
+    if input.UserInputType==Enum.UserInputType.MouseButton1
+        or input.UserInputType==Enum.UserInputType.Touch then dragging=false end
+end)
+S.connections[#S.connections+1]=UIS.InputChanged:Connect(function(input)
+    if not dragging or (input.UserInputType~=Enum.UserInputType.MouseMovement
+        and input.UserInputType~=Enum.UserInputType.Touch) then return end
+    local delta=input.Position-startInput
+    panel.Position=UDim2.new(startPosition.X.Scale,startPosition.X.Offset+delta.X,
+        startPosition.Y.Scale,startPosition.Y.Offset+delta.Y)
 end)
 S.connections[#S.connections+1]=RunService.Heartbeat:Connect(function()
     if not S.alive or not gui.Parent then return end
     if not S.uiAt or os.clock()-S.uiAt>0.8 then
         S.uiAt=os.clock()
-        detail.Text=S.phase.."\n"..S.detail.."\nRaça: "..tostring(S.race or "...")
-            .."  |  Lua cheia: "..(fullMoon() and "sim" or "não")
+        phase.Text=S.phase
+        detail.Text=S.detail
+        raceValue.Text=tostring(S.race or "...")
+        moonValue.Text=fullMoon() and "Sim" or "Não"
+        teamValue.Text=tostring(templeTeam()).." / 3"
         pauseButton.Text=S.auto and "Pausar" or "Retomar"
-        footer.Text="Caminho: "..S.path.."  |  Third Sea"
+        pathButton.Text="Caminho: "..S.path
+        if logPage.Visible then
+            local last={}
+            for i=math.max(1,#S.history-9),#S.history do
+                last[#last+1]=S.history[i]
+            end
+            history.Text=table.concat(last,"\n")
+        end
     end
 end)
 
@@ -997,7 +1157,7 @@ if not IS_THIRD_SEA then
 else
     log("Race V4 iniciado; somente funções de despertar e upgrades V4")
 end
-print("[Floquitave V4 1.1] Painel criado em "..gui.Parent:GetFullName())
+print("[Floquitave V4 1.2] Painel criado em "..gui.Parent:GetFullName())
 
 -- O worker inicia depois que o painel já está visível.
 task.spawn(function()
@@ -1013,7 +1173,7 @@ task.spawn(function()
             S.busy=false
             if not ok then
                 status("Erro na etapa",tostring(err):sub(1,200))
-                warn("[Floquitave V4 1.1] "..tostring(err))
+                warn("[Floquitave V4 1.2] "..tostring(err))
                 task.wait(3)
             end
         end
@@ -1029,7 +1189,7 @@ local ok,err=xpcall(main,function(message)
     return tostring(message)
 end)
 if not ok then
-    warn("[Floquitave V4 1.1] Falha ao iniciar: "..tostring(err))
+    warn("[Floquitave V4 1.2] Falha ao iniciar: "..tostring(err))
     pcall(function()
         local players=game:GetService("Players")
         local localPlayer=players.LocalPlayer
