@@ -1,10 +1,10 @@
--- FLOQUITAVE | Race V4 Kaitun 1.2 | Blox Fruits / Third Sea
+-- FLOQUITAVE | Race V4 Kaitun 1.3 | Blox Fruits / Third Sea
 -- Script independente: somente etapas diretamente ligadas a Race V4.
 -- O painel inicia em modo automatico. Botao Pausar interrompe movimento e acoes.
 -- O jogo precisa estar aberto no Third Sea (PlaceId 7449423635).
 
 local function main()
-print("[Floquitave V4 1.2] Iniciando | PlaceId="..tostring(game.PlaceId))
+print("[Floquitave V4 1.3] Iniciando | PlaceId="..tostring(game.PlaceId))
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -38,8 +38,8 @@ local S = {
     gearTouched=false, v3At=0, attackAt=0, skillAt=0, hopAt=0,
     sailDirection=-1, sailLastPos=nil, sailLastAt=0, sailStalls=0,
     boatKeys={}, race=nil, objective=nil, objectiveAt=0,
-    attempts={quest=0,mirage=0,lever=0,trial=0,pvp=0,gear=0,train=0,buy=0},
-    path="Alpha", reportMax=150,
+    attempts={enter=0,quest=0,mirage=0,lever=0,trial=0,pvp=0,gear=0,train=0,buy=0},
+    path="Alpha", reportMax=150, remoteStates={},
 }
 env.__FloquitaveV4 = S
 
@@ -93,7 +93,9 @@ end
 local function part(obj)
     if not obj then return nil end
     if obj:IsA("BasePart") then return obj end
-    return obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+    if obj:IsA("Attachment") then return part(obj.Parent) end
+    local primary=obj:IsA("Model") and obj.PrimaryPart or nil
+    return obj:FindFirstChild("HumanoidRootPart") or primary
         or obj:FindFirstChildWhichIsA("BasePart",true)
 end
 local function invoke(...)
@@ -101,7 +103,28 @@ local function invoke(...)
     local remote=folder and folder:FindFirstChild("CommF_")
     if not remote then return false,"CommF_ ausente" end
     local args=table.pack(...)
-    return pcall(function() return remote:InvokeServer(table.unpack(args,1,args.n)) end)
+    local key={}
+    for i=1,args.n do key[i]=tostring(args[i]) end
+    key=table.concat(key,"|")
+    local slot=S.remoteStates[key]
+    if not slot then
+        slot={done=false,started=os.clock()}
+        S.remoteStates[key]=slot
+        task.spawn(function()
+            slot.result=table.pack(pcall(function()
+                return remote:InvokeServer(table.unpack(args,1,args.n))
+            end))
+            slot.done=true
+        end)
+    end
+    local deadline=os.clock()+4
+    while S.alive and not slot.done and os.clock()<deadline do task.wait(0.05) end
+    if not slot.done then
+        if once("timeout:"..key,12) then log("Sem resposta do servidor: "..key) end
+        return false,"Sem resposta do servidor: "..key
+    end
+    S.remoteStates[key]=nil
+    return table.unpack(slot.result,1,slot.result.n)
 end
 local function sendAbility()
     local folder=RS:FindFirstChild("Remotes")
@@ -145,7 +168,7 @@ end
 local function leverOpen()
     return cached("lever",8,function()
         local ok,result=invoke("CheckTempleDoor")
-        return ok and result==true
+        return ok and (result==true or result==1)
     end)==true
 end
 local function clockState(force)
@@ -200,10 +223,14 @@ local function go(position,label,reach)
     local rp=root()
     local hum=humanoid()
     if not rp or not hum or hum.Health<=0 or not S.alive
-        or (not S.auto and not S.manual) then return false end
+        or (not S.auto and not S.manual) then
+        status("Movimento bloqueado","Personagem ausente, morto ou kaitun pausado")
+        return false
+    end
     local distance=(rp.Position-position).Magnitude
     if distance<=(reach or 10) then return true end
-    status("Movimento",label)
+    status("Movimento",label.." | faltam "..math.floor(distance).." studs")
+    local startPosition=rp.Position
     S.nonce=S.nonce+1
     local nonce=S.nonce
     hum.Sit=false
@@ -218,8 +245,18 @@ local function go(position,label,reach)
     local collision=RunService.Stepped:Connect(function()
         for obj in pairs(original) do if obj.Parent then obj.CanCollide=false end end
     end)
-    local tween=TweenService:Create(rp,TweenInfo.new(duration,Enum.EasingStyle.Linear),
-        {CFrame=CFrame.new(limited)})
+    local okTween,tween=pcall(function()
+        return TweenService:Create(rp,TweenInfo.new(duration,Enum.EasingStyle.Linear),
+            {CFrame=CFrame.new(limited)})
+    end)
+    if not okTween then
+        collision:Disconnect()
+        for obj,value in pairs(original) do
+            if obj.Parent then pcall(function() obj.CanCollide=value end) end
+        end
+        status("Movimento bloqueado","Tween indisponível: "..tostring(tween))
+        return false
+    end
     activeTween=tween
     tween:Play()
     local deadline=os.clock()+duration+2
@@ -233,24 +270,37 @@ local function go(position,label,reach)
     collision:Disconnect()
     for obj,value in pairs(original) do if obj.Parent then pcall(function() obj.CanCollide=value end) end end
     if activeTween==tween then activeTween=nil end
-    return success and root() and (root().Position-position).Magnitude<=(reach or 10)
+    local now=root()
+    local travelled=now and (now.Position-startPosition).Magnitude or 0
+    local left=now and (now.Position-position).Magnitude or distance
+    S.lastMove=string.format("%s | antes=%.0f | andou=%.0f | falta=%.0f",
+        label,distance,travelled,left)
+    if travelled<3 and distance>20 and success then
+        status("Movimento bloqueado",S.lastMove)
+    end
+    return success and now and left<=(reach or 10)
 end
 local function touch(target)
     local rp=root()
     if not rp or not target or not target.Parent then return false end
     if (rp.Position-target.Position).Magnitude>12 then return false end
     if type(firetouchinterest)=="function" then
-        pcall(firetouchinterest,rp,target,0)
-        pcall(firetouchinterest,rp,target,1)
+        local okDown=pcall(firetouchinterest,rp,target,0)
+        local okUp=pcall(firetouchinterest,rp,target,1)
+        return okDown and okUp
     end
-    return true
+    return pcall(function()
+        rp.CFrame=CFrame.new(target.Position)
+    end)
 end
 local function promptNear(center,radius,nameFilter)
     local rp=root()
     if not rp or (rp.Position-center).Magnitude>(radius or 20) then return false end
     local best,dist
     local map=workspace:FindFirstChild("Map")
-    local temple=map and (map:FindFirstChild("Temple of Time") or map:FindFirstChild("TempleOfTime"))
+    local temple=(map and (map:FindFirstChild("Temple of Time")
+        or map:FindFirstChild("TempleOfTime")))
+        or workspace:FindFirstChild("Temple of Time")
     if not temple then return false end
     local parent=temple
     for _,obj in ipairs(parent:GetDescendants()) do
@@ -268,18 +318,60 @@ local function promptNear(center,radius,nameFilter)
     end
     return false
 end
+local function interactNear(center,radius)
+    if promptNear(center,radius) then return true end
+    local rp=root()
+    if not rp or (rp.Position-center).Magnitude>(radius or 20) then return false end
+    local map=workspace:FindFirstChild("Map")
+    local temple=(map and (map:FindFirstChild("Temple of Time")
+        or map:FindFirstChild("TempleOfTime")))
+        or workspace:FindFirstChild("Temple of Time")
+    if not temple then return false end
+    if type(fireclickdetector)=="function" then
+        for _,obj in ipairs(temple:GetDescendants()) do
+            if obj:IsA("ClickDetector") then
+                local holder=part(obj.Parent)
+                if holder and (holder.Position-center).Magnitude<28 then
+                    local ok=pcall(fireclickdetector,obj)
+                    if ok then return true end
+                end
+            end
+        end
+    end
+    return false
+end
 
 local function enterTemple()
     local rp=root()
-    if not rp then return false end
+    if not rp then status("Templo","Aguardando personagem");return false end
+    if not S.alive or (not S.auto and not S.manual) then return false end
     if (rp.Position-POS.temple).Magnitude<1600 then return true end
     if once("entrance",7) then
+        S.attempts.enter=S.attempts.enter+1
         local ok,response=invoke("requestEntrance",POS.temple)
-        log("Entrada no Templo: "..tostring(ok and response or "remoto indisponivel"))
+        log("Entrada no Templo: "..tostring(response).." | remoto="..tostring(ok))
     end
-    task.wait(0.3)
+    task.wait(0.5)
+    if not S.alive or (not S.auto and not S.manual) then return false end
     rp=root()
-    if rp and (rp.Position-POS.temple).Magnitude<1600 then return true end
+    if rp and (rp.Position-POS.temple).Magnitude<1600 then
+        S.lastMove="Entrada remota confirmada | posição="..tostring(rp.Position)
+        log("Entrada no Templo confirmada pela posição")
+        return true
+    end
+    if rp and once("templeDirect",15) then
+        local before=rp.Position
+        local ok=pcall(function() rp.CFrame=CFrame.new(POS.temple+Vector3.new(0,4,0)) end)
+        task.wait(0.5)
+        rp=root()
+        if rp and (rp.Position-POS.temple).Magnitude<1600 then
+            S.lastMove="Teleporte direto confirmado | posição="..tostring(rp.Position)
+            log("Entrada no Templo confirmada após teleporte direto")
+            return true
+        end
+        log("Teleporte direto "..(ok and "recusado pelo jogo" or "falhou")
+            .." | origem="..math.floor((before-POS.temple).Magnitude))
+    end
     return go(POS.temple,"Indo ao Templo do Tempo",50)
 end
 local function progressQuest()
@@ -463,10 +555,12 @@ local function mirageStep()
     local gear=blueGear(island)
     if gear and gear.Transparency<0.95 then
         if go(gear.Position,"Pegando Blue Gear",8) then
-            touch(gear)
-            if once("gearTouch",6) then
+            local interacted=touch(gear)
+            if interacted and once("gearTouch",6) then
                 S.gearTouched=true
-                log("Blue Gear tocada; verificando Templo")
+                log("Blue Gear: tentativa de toque; verificando alavanca")
+            elseif not interacted then
+                status("Blue Gear","Não foi possível tocar a peça")
             end
         end
         return
@@ -493,7 +587,7 @@ local function leverStep()
     if not go(POS.lever,"Indo à alavanca do Templo",9) then return end
     if once("leverPrompt",8) then
         S.attempts.lever=S.attempts.lever+1
-        local activated=promptNear(POS.lever,18)
+        local activated=interactNear(POS.lever,18)
         log(activated and "Alavanca acionada; confirmando CheckTempleDoor"
             or "Perto da alavanca; prompt não encontrado")
         S.cacheAt.lever=nil
@@ -760,7 +854,7 @@ end
 
 local function report()
     local lines={
-        "FLOQUITAVE | KAITUN RACE V4 1.0",
+        "FLOQUITAVE | KAITUN RACE V4 1.3",
         "PlaceId="..tostring(game.PlaceId).." | Race="..tostring(raceName(player)),
         "Auto="..tostring(S.auto).." | Fase="..S.phase.." | Detalhe="..S.detail,
         "FullMoon="..tostring(fullMoon()).." | Noite="..tostring(night())
@@ -771,6 +865,19 @@ local function report()
     local u=upgradeState()
     lines[#lines+1]="UpgradeRace="..tostring(u and u.code)
         .." | Nivel="..tostring(u and u.level).." | Custo="..tostring(u and u.cost)
+    local rp=root()
+    lines[#lines+1]="Posição="..tostring(rp and rp.Position)
+    lines[#lines+1]="Último movimento="..tostring(S.lastMove or "nenhum")
+    lines[#lines+1]="Mirror Fractal="..tostring(hasItem("Mirror Fractal"))
+    local progress=cached("progress",10,function()
+        local ok,result=invoke("RaceV4Progress","Check")
+        return ok and result or nil
+    end)
+    lines[#lines+1]="RaceV4Progress="..tostring(progress)
+    for key,slot in pairs(S.remoteStates) do
+        lines[#lines+1]="Remote pendente="..key.." | "
+            ..math.floor(os.clock()-slot.started).."s"
+    end
     for key,value in pairs(S.attempts) do
         lines[#lines+1]="Tentativas "..key.."="..tostring(value)
     end
@@ -791,14 +898,48 @@ local function v4Step()
         S.manualTarget=nil
         S.manual=true
         if target=="temple" then
+            status("Ação V4","Tentando entrar no Templo")
             enterTemple()
         elseif target=="door" and DOOR[name] and enterTemple() then
             go(DOOR[name],"Indo à porta V4",9)
+        elseif target=="lever" then
+            leverStep()
+        elseif target=="clock" and enterTemple() then
+            go(POS.clock,"Indo ao relógio V4",12)
+        elseif target=="gear" then
+            local clock=clockState(true)
+            if clock and clock.HadPoint then
+                gearStep(clock)
+            else status("Relógio","Nenhum ponto V4 disponível para gastar") end
+        elseif target=="train" then
+            trainingStep(upgradeState(true) or {})
+        elseif target=="trial" and DOOR[name] and enterTemple()
+            and go(DOOR[name],"Indo à porta da trial",9) then
+            local ok=sendAbility()
+            promptNear(DOOR[name],18)
+            status("Iniciar trial",ok and "Habilidade acionada; aguardando timer"
+                or "Habilidade não acionada; confira a lua cheia e a equipe")
+        elseif target=="refresh" then
+            S.cacheAt={}
+            local u=upgradeState(true)
+            local clock=clockState(true)
+            status("Progresso V4","Upgrade="..tostring(u and u.code)
+                .." | Clock="..tostring(clock and clock.HadPoint)
+                .." | Porta="..tostring(leverOpen()))
         end
         S.manual=false
         return
     end
     if name=="" then status("Aguardando","Data.Race ainda não carregou");return end
+    if S.forceMode=="mirage" then
+        if S.gearTouched or leverOpen() then
+            S.forceMode=nil
+            log("Busca da Mirage encerrada; verificando Templo")
+        else
+            mirageStep()
+            return
+        end
+    end
     if name=="Draco" then
         status("Draco V4","Rota Draco exige relics de Prehistoric Island; sem protocolo seguro para concluir")
         return
@@ -807,12 +948,18 @@ local function v4Step()
         status("Raça sem rota","Raça detectada: "..name)
         return
     end
-    if not raceV3() then
-        status("Pré-requisito","Raça "..name.." V3 necessária antes da V4")
+    if not S.initialTempleProbe then
+        S.initialTempleProbe=true
+        status("Entrada V4","Testando entrada no Templo antes da progressão")
+        enterTemple()
         return
     end
     local upgrade=upgradeState()
     local clock=clockState()
+    if not raceV3() and not (upgrade and type(upgrade.code)=="number") then
+        status("Pré-requisito","Raça V3 não confirmada; veja o relatório")
+        return
+    end
     if upgrade and tonumber(upgrade.code)==5 and not (clock and clock.HadPoint) then
         status("V4 concluída","UpgradeRace confirmou estado final")
         S.auto=false;releaseBoatKeys();stopMove()
@@ -845,7 +992,8 @@ local function v4Step()
         return
     end
     releaseBoatKeys()
-    if trialTimer() then
+    local rp=root()
+    if trialTimer() and rp and (rp.Position-POS.temple).Magnitude<2200 then
         S.trialEndedAt=0
         trialStep(name)
         return
@@ -861,19 +1009,15 @@ local function v4Step()
     end
     if not enterTemple() then return end
     if not go(DOOR[name],"Indo à porta "..name,9) then return end
-    if not fullMoon() then
-        status("Porta "..name,"Aguardando lua cheia para iniciar trial")
-        return
-    end
+    local moon=fullMoon()
     local count=templeTeam()
-    if count<3 then
-        status("Porta "..name,"Aguardando 3 raças diferentes no Templo ("..count.."/3)")
-        return
-    end
+    status("Porta "..name,"Lua cheia="..tostring(moon)
+        .." | raças detectadas="..count.."/3 | aguardando timer")
     if once("trialActivate",7) then
-        sendAbility()
+        local ok=sendAbility()
         promptNear(DOOR[name],18)
-        log("Porta "..name..": habilidade acionada para iniciar trial")
+        log("Porta "..name..": tentativa="..tostring(ok)
+            .." | lua cheia="..tostring(moon).." | equipe="..count)
     end
 end
 
@@ -978,7 +1122,8 @@ local function nav(label,y)
     return b
 end
 local raceTab=nav("Race V4",50)
-local logTab=nav("Relatório",95)
+local actionsTab=nav("Ações V4",95)
+local logTab=nav("Relatório",140)
 textLabel(sidebar,"TERCEIRO MAR",16,331,124,19,11,Theme.Muted,true)
 
 local racePage=box("Frame",panel,{
@@ -989,12 +1134,19 @@ local logPage=box("Frame",panel,{
     Position=UDim2.fromOffset(155,47),Size=UDim2.fromOffset(525,385),
     BackgroundColor3=Theme.Panel,BorderSizePixel=0,Visible=false,
 })
+local actionsPage=box("Frame",panel,{
+    Position=UDim2.fromOffset(155,47),Size=UDim2.fromOffset(525,385),
+    BackgroundColor3=Theme.Panel,BorderSizePixel=0,Visible=false,
+})
 local function switchPage(which)
     racePage.Visible=which=="race"
     logPage.Visible=which=="log"
+    actionsPage.Visible=which=="actions"
     raceTab.BackgroundColor3=which=="race" and Theme.Row or Theme.Sidebar
+    actionsTab.BackgroundColor3=which=="actions" and Theme.Row or Theme.Sidebar
     logTab.BackgroundColor3=which=="log" and Theme.Row or Theme.Sidebar
     raceTab.TextColor3=which=="race" and Theme.Accent or Theme.Muted
+    actionsTab.TextColor3=which=="actions" and Theme.Accent or Theme.Muted
     logTab.TextColor3=which=="log" and Theme.Accent or Theme.Muted
 end
 switchPage("race")
@@ -1003,6 +1155,9 @@ S.connections[#S.connections+1]=raceTab.MouseButton1Click:Connect(function()
 end)
 S.connections[#S.connections+1]=logTab.MouseButton1Click:Connect(function()
     switchPage("log")
+end)
+S.connections[#S.connections+1]=actionsTab.MouseButton1Click:Connect(function()
+    switchPage("actions")
 end)
 textLabel(racePage,"RACE V4",20,15,210,29,19,Theme.Text,true)
 textLabel(racePage,"Progresso e controles da raça",20,43,360,19,12,Theme.Muted)
@@ -1053,11 +1208,16 @@ local pathButton=button(racePage,"Caminho: Alpha",185,286,155,function()
     S.path=S.path=="Alpha" and "Omega" or "Alpha"
     log("Caminho da próxima engrenagem: "..S.path)
 end)
+local function queueAction(target,label)
+    S.manualTarget=target
+    status("Ação V4 solicitada",label)
+    stopMove()
+end
 button(racePage,"Ir ao Templo",352,286,155,function()
-    S.manualTarget="temple";stopMove()
+    queueAction("temple","Entrar no Templo")
 end)
 button(racePage,"Ir à Porta",18,330,155,function()
-    S.manualTarget="door";stopMove()
+    queueAction("door","Ir à porta racial")
 end)
 local function copyReport()
     if type(setclipboard)=="function" then
@@ -1069,6 +1229,54 @@ local function copyReport()
     end
 end
 button(racePage,"Copiar relatório",185,330,322,copyReport)
+
+textLabel(actionsPage,"AÇÕES V4",20,17,230,27,19,Theme.Text,true)
+textLabel(actionsPage,"Use uma ação por vez; o relatório mostra o resultado",20,47,470,19,
+    12,Theme.Muted)
+local actionCard=box("Frame",actionsPage,{
+    Position=UDim2.fromOffset(18,80),Size=UDim2.fromOffset(489,281),
+    BackgroundColor3=Theme.Row,BorderSizePixel=0,
+})
+corner(actionCard,8);stroke(actionCard,Theme.Outline,0.5)
+button(actionCard,"Entrar no Templo",12,16,228,function()
+    queueAction("temple","Entrar no Templo")
+end,true)
+button(actionCard,"Ir à Alavanca",250,16,227,function()
+    queueAction("lever","Ir à alavanca")
+end)
+button(actionCard,"Ir à Porta",12,61,228,function()
+    queueAction("door","Ir à porta racial")
+end)
+button(actionCard,"Ir ao Relógio",250,61,227,function()
+    queueAction("clock","Ir ao relógio")
+end)
+button(actionCard,"Tentar iniciar Trial",12,106,228,function()
+    queueAction("trial","Acionar habilidade na porta")
+end)
+button(actionCard,"Verificar progresso",250,106,227,function()
+    queueAction("refresh","Ler estados V4 do servidor")
+end)
+button(actionCard,"Buscar Mirage / Blue Gear",12,162,228,function()
+    if not DOOR[raceName(player)] then
+        status("Busca Mirage","Raça atual sem rota tradicional de Mirage")
+        return
+    end
+    S.forceMode="mirage";S.auto=true
+    queueAction("refresh","Iniciando busca da Mirage")
+end,true)
+button(actionCard,"Parar busca da Mirage",250,162,227,function()
+    S.forceMode=nil;releaseBoatKeys();stopMove()
+    status("Busca Mirage","Busca interrompida")
+end)
+button(actionCard,"Gastar ponto V4",12,207,228,function()
+    queueAction("gear","Usar ponto do relógio")
+end)
+button(actionCard,"Treinar V4",250,207,227,function()
+    queueAction("train","Ativar V4 e treinar")
+end)
+local actionInfo=textLabel(actionCard,"",12,248,465,28,12,Theme.Muted)
+actionInfo.TextWrapped=true
+actionInfo.Text="O botão Verificar progresso também registra o retorno dos remotes no relatório."
 
 textLabel(logPage,"RELATÓRIO V4",20,17,250,28,19,Theme.Text,true)
 textLabel(logPage,"Últimas atividades do kaitun",20,45,350,18,12,Theme.Muted)
@@ -1128,6 +1336,10 @@ S.connections[#S.connections+1]=RunService.Heartbeat:Connect(function()
         teamValue.Text=tostring(templeTeam()).." / 3"
         pauseButton.Text=S.auto and "Pausar" or "Retomar"
         pathButton.Text="Caminho: "..S.path
+        if actionsPage.Visible then
+            actionInfo.Text=S.lastMove or
+                "Selecione uma ação. Distância percorrida aparecerá aqui."
+        end
         if logPage.Visible then
             local last={}
             for i=math.max(1,#S.history-9),#S.history do
@@ -1157,7 +1369,7 @@ if not IS_THIRD_SEA then
 else
     log("Race V4 iniciado; somente funções de despertar e upgrades V4")
 end
-print("[Floquitave V4 1.2] Painel criado em "..gui.Parent:GetFullName())
+print("[Floquitave V4 1.3] Painel criado em "..gui.Parent:GetFullName())
 
 -- O worker inicia depois que o painel já está visível.
 task.spawn(function()
@@ -1171,9 +1383,10 @@ task.spawn(function()
                 return tostring(message)
             end)
             S.busy=false
+            S.manual=false
             if not ok then
                 status("Erro na etapa",tostring(err):sub(1,200))
-                warn("[Floquitave V4 1.2] "..tostring(err))
+                warn("[Floquitave V4 1.3] "..tostring(err))
                 task.wait(3)
             end
         end
@@ -1189,7 +1402,7 @@ local ok,err=xpcall(main,function(message)
     return tostring(message)
 end)
 if not ok then
-    warn("[Floquitave V4 1.2] Falha ao iniciar: "..tostring(err))
+    warn("[Floquitave V4 1.3] Falha ao iniciar: "..tostring(err))
     pcall(function()
         local players=game:GetService("Players")
         local localPlayer=players.LocalPlayer
